@@ -171,21 +171,16 @@ namespace
 
 namespace navmesh::skyrim::offline
 {
-    std::optional<core::Cell> LoadCell(
-        const std::filesystem::path& pluginPath,
-        const std::string& targetCell,
-        const std::string& targetWorldspace,
-        const std::optional<std::int32_t>& cellX,
-        const std::optional<std::int32_t>& cellY)
+    std::vector<core::Cell> ListCells(const std::filesystem::path& pluginPath)
     {
         if (!std::filesystem::exists(pluginPath)) {
-            return std::nullopt;
+            return {};
         }
 
         std::ifstream input(pluginPath, std::ios::binary);
         std::vector<std::uint8_t> buffer((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
         if (buffer.size() < 24) {
-            return std::nullopt;
+            return {};
         }
 
         const auto fileStart = buffer.size() >= 8 && ReadAscii(buffer, 0, 4) == "TES4" ? 24 + ReadU32LE(buffer, 4) : 0;
@@ -197,9 +192,6 @@ namespace navmesh::skyrim::offline
             while (current + 24 <= end) {
                 const auto type = ReadAscii(buffer, current, 4);
                 if (type == "GRUP") {
-                    if (current + 24 > end) {
-                        return;
-                    }
                     const auto groupSize = ReadU32LE(buffer, current + 4);
                     const auto groupEnd = current + groupSize;
                     if (groupSize < 24 || groupEnd > end) {
@@ -221,26 +213,36 @@ namespace navmesh::skyrim::offline
                 }
 
                 if (type == "CELL") {
+                    const auto payload = DecompressNavMesh(buffer, dataStart, dataEnd, header->flags);
+                    if (!payload) {
+                        current = dataEnd;
+                        continue;
+                    }
                     core::Cell cell{};
                     cell.id = header->formId;
-                    cell.name = targetWorldspace.empty() ? "Tamriel" : targetWorldspace;
-                    std::size_t subOffset = dataStart;
-                    while (subOffset + 6 <= dataEnd) {
-                        const auto subSize = ReadU16LE(buffer, subOffset);
-                        const auto subType = ReadAscii(buffer, subOffset + 2, 4);
+                    cell.name = "Tamriel";
+                    std::size_t subOffset = 0;
+                    while (subOffset + 6 <= payload->size()) {
+                        const auto subType = ReadAscii(*payload, subOffset, 4);
+                        const auto subSize = ReadU16LE(*payload, subOffset + 4);
                         const auto subDataStart = subOffset + 6;
                         const auto subDataEnd = subDataStart + subSize;
-                        if (subDataEnd > dataEnd) {
+                        if (subDataEnd > payload->size()) {
                             break;
                         }
                         if (subType == "EDID") {
-                            cell.editorId = TrimNulls(ReadAscii(buffer, subDataStart, subSize));
+                            cell.editorId = TrimNulls(ReadAscii(*payload, subDataStart, subSize));
                         } else if (subType == "FULL") {
-                            cell.name = TrimNulls(ReadAscii(buffer, subDataStart, subSize));
+                            auto name = TrimNulls(ReadAscii(*payload, subDataStart, subSize));
+                            if (!name.empty() && std::all_of(name.begin(), name.end(), [](unsigned char value) { return std::isprint(value) != 0; })) {
+                                cell.name = std::move(name);
+                            }
+                        } else if (subType == "XCLL") {
+                            cell.isInterior = true;
                         } else if (subType == "XCLC" && subSize >= 12) {
-                            cell.isInterior = ReadU32LE(buffer, subDataStart + 8) != 0;
+                            cell.isInterior = ReadU32LE(*payload, subDataStart + 8) != 0;
                             if (!cell.isInterior) {
-                                cell.exteriorCoordinates = { ReadI32LE(buffer, subDataStart), ReadI32LE(buffer, subDataStart + 4) };
+                                cell.exteriorCoordinates = { ReadI32LE(*payload, subDataStart), ReadI32LE(*payload, subDataStart + 4) };
                             }
                         }
                         subOffset = subDataEnd;
@@ -260,31 +262,37 @@ namespace navmesh::skyrim::offline
         };
 
         walk(walk, fileStart, buffer.size(), 0);
-
-        std::optional<core::Cell> firstCell;
         for (auto& cell : cells) {
-            if (!firstCell) {
-                firstCell = cell;
+            const auto meshes = navMeshesByGroup.find(cell.id);
+            if (meshes != navMeshesByGroup.end()) {
+                cell.navMeshes = meshes->second;
             }
-            const bool matchesByCellName = MatchesTargetCell(targetCell, cell.editorId, cell.name);
+        }
+        return cells;
+    }
+
+    std::optional<core::Cell> LoadCell(
+        const std::filesystem::path& pluginPath,
+        const std::string& targetCell,
+        const std::string& targetWorldspace,
+        const std::optional<std::int32_t>& cellX,
+        const std::optional<std::int32_t>& cellY,
+        const std::optional<std::uint32_t>& cellFormId,
+        const std::string& targetEditorId)
+    {
+        static_cast<void>(targetWorldspace);
+        for (auto& cell : ListCells(pluginPath)) {
+            const bool matchesByFormId = cellFormId && cell.id == *cellFormId;
+            const bool matchesByEditorId = !targetEditorId.empty() && ToLower(cell.editorId) == ToLower(targetEditorId);
+            const bool matchesByCellName = !targetCell.empty() && MatchesTargetCell(targetCell, cell.editorId, cell.name);
             const bool matchesByCoords = cell.exteriorCoordinates && cellX && cellY &&
                 (*cell.exteriorCoordinates)[0] == *cellX && (*cell.exteriorCoordinates)[1] == *cellY;
-            const bool selected = (targetCell.empty() && targetWorldspace.empty() && !cellX && !cellY) || matchesByCellName || matchesByCoords;
+            const bool hasSelector = !targetCell.empty() || !targetEditorId.empty() || cellFormId || cellX || cellY;
+            const bool selected = !hasSelector || matchesByFormId || matchesByEditorId || matchesByCellName || matchesByCoords;
             if (selected) {
-                const auto meshes = navMeshesByGroup.find(cell.id);
-                if (meshes != navMeshesByGroup.end()) {
-                    cell.navMeshes = meshes->second;
-                }
                 return cell;
             }
         }
-
-        if (firstCell) {
-            const auto meshes = navMeshesByGroup.find(firstCell->id);
-            if (meshes != navMeshesByGroup.end()) {
-                firstCell->navMeshes = meshes->second;
-            }
-        }
-        return firstCell;
+        return std::nullopt;
     }
 }

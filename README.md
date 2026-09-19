@@ -19,13 +19,23 @@ This project is an offline, read-only prototype for inspecting Skyrim plugin dat
 
 ```powershell
 xmake build navmesh-offline
-./build/windows/x64/releasedbg/navmesh-offline.exe --plugin "D:/Games/Skyrim Special Edition/Data/Skyrim.esm" --cell "00012345" --output ./output
+./build/windows/x64/releasedbg/navmesh-offline.exe --plugin "D:/Games/Skyrim Special Edition/Data/Skyrim.esm" --cell-formid 00027D1C --output ./output
 ```
 
-The tool also accepts a worldspace/cell coordinate pair when available:
+The tool prints the resolved cell and also accepts an editor ID or exterior cell coordinate pair:
 
 ```powershell
-./build/windows/x64/releasedbg/navmesh-offline.exe --plugin "D:/Games/Skyrim Special Edition/Data/Skyrim.esm" --worldspace Tamriel --cell-x 10 --cell-y -5 --output ./output
+./build/windows/x64/releasedbg/navmesh-offline.exe --plugin "D:/Games/Skyrim Special Edition/Data/Skyrim.esm" --editor-id KilkreathRuins03 --output ./output
+```
+
+```powershell
+./build/windows/x64/releasedbg/navmesh-offline.exe --plugin "D:/Games/Skyrim Special Edition/Data/Skyrim.esm" --cell-x 10 --cell-y -5 --output ./output
+```
+
+Use `--list-cells` to discover available form IDs, editor IDs, and exterior coordinates:
+
+```powershell
+./build/windows/x64/releasedbg/navmesh-offline.exe --plugin "D:/Games/Skyrim Special Edition/Data/Skyrim.esm" --list-cells
 ```
 
 ## Output
