@@ -1,55 +1,57 @@
-# CommonLibSSE Plugin Template
+# Navmesh Generator
 
-This is a basic plugin template using CommonLibSSE.
+Offline experimental Skyrim navmesh analysis tooling.
 
-### Requirements
-* [XMake](https://xmake.io) [3.0.0+]
-* C++23 Compiler (MSVC, Clang-CL)
+## What this is
 
-## Getting Started
-```bat
-git clone --recurse-submodules https://github.com/libxse/commonlibsse-template
-cd commonlibsse-template
+This project is an offline, read-only prototype for inspecting Skyrim plugin data without requiring an active Skyrim runtime or SKSE. The focus is on parsing plugin records directly, extracting cell and navmesh information from a plugin file, and turning that into a neutral geometry + navmesh model that can be analyzed and exported for inspection.
+
+## What it currently does
+
+- Builds a neutral, CommonLib-free C++ core for geometry and navmesh data.
+- Extracts basic cell and reference information from Skyrim plugin records in a direct offline pass.
+- Parses a subset of `CELL`, `REFR`/`ACHR`, and `NAVM` record payloads when present.
+- Produces JSON diagnostics and OBJ exports for navmesh polygon inspection.
+- Computes basic navmesh statistics such as vertex counts, polygon area range, connected components, and degenerate polygons.
+- Includes automated tests for neutral geometry and navmesh analysis.
+
+## Example
+
+```powershell
+xmake build navmesh-offline
+./build/windows/x64/releasedbg/navmesh-offline.exe --plugin "D:/Games/Skyrim Special Edition/Data/Skyrim.esm" --cell "00012345" --output ./output
 ```
 
-### Build
-To build the project, run the following command:
-```bat
-xmake build
+The tool also accepts a worldspace/cell coordinate pair when available:
+
+```powershell
+./build/windows/x64/releasedbg/navmesh-offline.exe --plugin "D:/Games/Skyrim Special Edition/Data/Skyrim.esm" --worldspace Tamriel --cell-x 10 --cell-y -5 --output ./output
 ```
 
-> ***Note:*** *This will generate a `build/windows/` directory in the **project's root directory** with the build output.*
+## Output
 
-### Build Output (Optional)
-If you want to redirect the build output, set one of the following environment variables:
+The CLI writes files into the target output directory:
 
-- Path to a Mod Manager mods folder: `XSE_TES5_MODS_PATH`
+- `report.json` — cell metadata, references, navmesh summaries, and validation findings.
+- `navmesh.obj` — exported navmesh polygon geometry for inspection in Blender or MeshLab.
+- `geometry.obj` — exported neutral mesh/geometry derived from the parsed records.
 
-  or
+## Current limitations
 
-- Path to a Skyrim install folder: `XSE_TES5_GAME_PATH`
+- This is not an SKSE runtime plugin and does not inspect a running game session.
+- The direct parser is intentionally small and targets the common Bethesda plugin structure, not the entire plugin ecosystem.
+- Collision/NIF/Havok extraction is not implemented yet; geometry export is limited to what can be directly extracted from plugin records.
+- Terrain extraction is not implemented beyond any simple geometry that is explicitly included in the parsed records.
+- Some Skyrim record variants and non-standard modded data layouts may still be rejected or reported as unsupported.
 
-### Project Generation (Optional)
-If you use Visual Studio, run the following command:
-```bat
-xmake project -k vsxmake
+## Next milestone
+
+The next milestone after this POC is:
+
+```text
+geometry -> walkability analysis -> candidate navmesh
 ```
 
-> ***Note:*** *This will generate a `vsxmakeXXXX/` directory in the **project's root directory** using the latest version of Visual Studio installed on the system.*
+not runtime integration.
 
-**Alternatively**, if you do not use Visual Studio, you can generate a `compile_commands.json` file for use with a laguage server like clangd in any code editor that supports it, like vscode:
-```bat
-xmake project -k compile_commands
-```
-
-> ***Note:*** *You must have a language server extension installed to make use of this file. I recommend `clangd`. Do not have more than one installed at a time as they will conflict with each other. I also recommend installing the `xmake` extension if available to make building the project easier.*
-
-### Upgrading Packages (Optional)
-If you want to upgrade the project's dependencies, run the following commands:
-```bat
-xmake repo --update
-xmake require --upgrade
-```
-
-## Documentation
-Please refer to the [Wiki](../../wiki/Home) for more advanced topics.
+See [docs/architecture.md](docs/architecture.md) for the intended pipeline and separation between parsing, extraction, neutral model, analysis, and future NAVM serialization.

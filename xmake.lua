@@ -1,27 +1,45 @@
--- include subprojects
 includes("lib/commonlibsse")
 
 -- set project constants
-set_project("commonlibsse-template")
-set_version("0.0.0")
-set_license("GPL-3.0")
+set_project("navmesh-generator")
+set_version("0.1.0")
+set_license("GPL-3.0-or-later")
 set_languages("c++23")
 set_warnings("allextra")
+add_requires("zlib")
 
 -- add common rules
 add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
--- define targets
-target("commonlibsse-template")
-    add_rules("commonlibsse.plugin", {
-        name = "commonlibsse-template",
-        author = "libxse",
-        description = "SKSE64 plugin template using CommonLibSSE"
-    })
+target("navmesh-core")
+    set_kind("static")
+    set_default(false)
+    add_files("src/core/**.cpp", "src/validation/**.cpp", "src/analysis/**.cpp")
+    add_headerfiles("src/core/**.h", "src/validation/**.h", "src/analysis/**.h")
+    add_includedirs("src", {public = true})
 
-    -- add src files
-    add_files("src/**.cpp")
-    add_headerfiles("src/**.h")
+target("navmesh-offline")
+    set_kind("binary")
+    set_default(true)
+    add_deps("navmesh-core")
+    add_files("src/app/**.cpp", "src/cli/**.cpp", "src/skyrim/parser/**.cpp")
+    add_headerfiles("src/app/**.h", "src/cli/**.h", "src/skyrim/parser/**.h")
+    add_includedirs("src")
+    add_packages("zlib")
+
+target("navmesh-generator")
+    set_kind("binary")
+    set_default(false)
+    add_deps("navmesh-core")
+    add_files("src/plugin/**.cpp")
+    add_headerfiles("src/plugin/**.h")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
+
+target("navmesh-tests")
+    set_kind("binary")
+    set_default(false)
+    add_deps("navmesh-core")
+    add_files("tests/**.cpp")
+    add_includedirs("src")
