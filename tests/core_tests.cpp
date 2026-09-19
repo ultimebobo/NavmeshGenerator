@@ -3,6 +3,8 @@
 #include "skyrim/extraction/geometry_extractor.h"
 #include "validation/validation.h"
 
+#include <array>
+
 #include <NifFile.hpp>
 
 #include <cassert>
@@ -59,5 +61,43 @@ int main()
     assert(analysis.isolatedPolygonCount == 0u);
     assert(analysis.degeneratePolygonCount == 0u);
     assert(analysis.averagePolygonArea > 0.0F);
+
+    const auto box = navmesh::core::AABB{ .min = { -1.0F, -2.0F, -3.0F }, .max = { 3.0F, 4.0F, 5.0F } };
+    const auto center = box.Center();
+    const auto extent = box.Extent();
+    assert(center.x == 1.0F && center.y == 1.0F && center.z == 1.0F);
+    assert(extent.x == 4.0F && extent.y == 6.0F && extent.z == 8.0F);
+
+    navmesh::analysis::SpatialIndex spatial;
+    spatial.Build({ navmesh::core::Triangle{ { 0u, 1u, 2u } } }, {
+        { 0.0F, 0.0F, 0.0F },
+        { 1.0F, 0.0F, 0.0F },
+        { 0.0F, 1.0F, 0.0F }
+    });
+    const auto nearest = spatial.NearestSurface({ 0.5F, 0.5F, -1.0F }, 5.0F);
+    assert(nearest.has_value());
+    assert(fabs(nearest->point.z) < 1.0e-4F);
+    assert(nearest->distance >= 0.0F);
+    const auto overlap = spatial.QueryAABB({ .min = { -0.1F, -0.1F, -0.1F }, .max = { 0.5F, 0.5F, 0.5F } });
+    assert(!overlap.empty());
+
+    const auto horizontalNormal = navmesh::core::Vec3{ 0.0F, 0.0F, 1.0F };
+    assert(navmesh::analysis::SurfaceSlopeDegrees(horizontalNormal) < 1.0e-3F);
+
+    const auto slopedNormal = navmesh::core::Vec3{ 0.0F, 0.5F, 0.8660254F };
+    const auto slopeDegrees = navmesh::analysis::SurfaceSlopeDegrees(slopedNormal);
+    assert(slopeDegrees > 29.0F && slopeDegrees < 31.0F);
+
+    assert(navmesh::analysis::ClassifySupport(-3.0F, 10.0F, 2.0F, 45.0F) == "buried");
+    assert(navmesh::analysis::ClassifySupport(3.0F, 10.0F, 2.0F, 45.0F) == "floating");
+    assert(navmesh::analysis::ClassifySupport(1.0F, 50.0F, 2.0F, 45.0F) == "too_steep");
+    assert(navmesh::analysis::ClassifySupport(1.0F, 10.0F, 2.0F, 45.0F) == "supported");
+
+    navmesh::core::NavMesh syntheticMesh{ .vertices = { { 0.0F, 0.0F, 3.0F }, { 1.0F, 0.0F, 3.0F }, { 0.0F, 1.0F, 3.0F } }, .polygons = { { .vertices = { 0, 1, 2 }, .neighbors = { 0, 0, 0 }, .flags = 1 } } };
+    navmesh::core::Mesh syntheticGeometry{ .vertices = { { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 1.0F } }, .triangles = { { { 0u, 1u, 2u } } } };
+    const auto polygonReport = navmesh::analysis::AnalyzeNavMeshPolygons(syntheticMesh, syntheticGeometry, { .surfaceSearchRadius = 64.0F, .maxSupportDistance = 2.0F, .maxSlope = 45.0F });
+    assert(polygonReport.summary.polygonsAnalyzed == 1u);
+    assert(polygonReport.polygons.front().support.found);
+    assert(polygonReport.polygons.front().classification == "supported");
     return 0;
 }
