@@ -7,7 +7,7 @@ namespace
 {
     std::string Escape(const std::string& value) {
         std::string result; result.reserve(value.size());
-        for (const char c : value) switch (c) { case '\\': result += "\\\\"; break; case '"': result += "\\\""; break; case '\n': result += "\\n"; break; case '\r': result += "\\r"; break; case '\t': result += "\\t"; break; default: result += c; break; }
+        for (const char c : value) switch (c) { case '\\': result += "\\\\"; break; case '"': result += "\\\""; break; case '\n': result += "\\n"; break; case '\r': result += "\\r"; break; case '\t': result += "\\t"; break; default: if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) >= 0x80) result += std::format("\\u00{:02X}", static_cast<unsigned char>(c)); else result += c; break; }
         return result;
     }
     void WriteVec3(std::ostream& output, const navmesh::core::Vec3& value) { output << std::format("[{}, {}, {}]", value.x, value.y, value.z); }

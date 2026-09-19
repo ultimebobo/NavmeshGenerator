@@ -4,3 +4,6 @@
 [submodule "tools/BSAFileExtractor"]
 	path = tools/BSAFileExtractor
 	url = https://github.com/Sw4T/BSAFileExtractor.git
+[submodule "lib/nifly"]
+	path = lib/nifly
+	url = https://github.com/ousnius/nifly.git

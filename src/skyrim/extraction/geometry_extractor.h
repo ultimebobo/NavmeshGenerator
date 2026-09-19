@@ -20,6 +20,12 @@ namespace navmesh::skyrim::offline
         float scale{ 1.0F };
         std::size_t vertices{};
         std::size_t triangles{};
+        std::size_t invalidIndices{};
+        std::size_t degenerateTriangles{};
+        std::size_t meshVertexOffset{};
+        std::size_t meshTriangleOffset{};
+        std::vector<std::string> shapes;
+        std::string nifVersion;
         std::string failure;
     };
 

@@ -1,11 +1,45 @@
 #include "analysis/navmesh_analysis.h"
 #include "core/geometry/types.h"
+#include "skyrim/extraction/geometry_extractor.h"
 #include "validation/validation.h"
 
+#include <NifFile.hpp>
+
 #include <cassert>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
+namespace
+{
+    void TestBstTriShapeExtraction()
+    {
+        const auto tempRoot = std::filesystem::temp_directory_path() / "navmesh-bstrishape-test";
+        std::filesystem::remove_all(tempRoot);
+        std::filesystem::create_directories(tempRoot / "meshes");
+        const auto modelPath = tempRoot / "meshes" / "MarkerX.nif";
+
+        nifly::NifFile nif;
+        nif.Create({ nifly::V20_2_0_7, 12, 130 });
+        const std::vector<nifly::Vector3> vertices = { { 0.0F, 0.0F, 0.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F } };
+        const std::vector<nifly::Triangle> triangles = { { 0, 1, 2 } };
+        assert(nif.CreateShapeFromData("MarkerX", &vertices, &triangles, nullptr) != nullptr);
+        assert(nif.Save(modelPath) == 0);
+
+        navmesh::core::Cell cell;
+        cell.references.push_back({ .id = 1, .baseObjectId = 2, .recordType = "STAT", .modelPath = "MarkerX.nif", .position = { 10.0F, 20.0F, 30.0F }, .scale = 1.0F });
+
+        const auto geometry = navmesh::skyrim::offline::ExtractGeometry(tempRoot, cell, tempRoot);
+        assert(geometry.modelsLoaded == 1u);
+        assert(geometry.mesh.vertices.size() == 3u);
+        assert(geometry.mesh.triangles.size() == 1u);
+        assert(geometry.mesh.vertices[0].x == 10.0F && geometry.mesh.vertices[0].y == 20.0F && geometry.mesh.vertices[0].z == 30.0F);
+    }
+}
 
 int main()
 {
+    TestBstTriShapeExtraction();
     navmesh::core::Mesh mesh{ .vertices = { { -1.0F, 2.0F, 3.0F }, { 4.0F, -5.0F, 6.0F } } };
     const auto bounds = mesh.Bounds();
     assert(bounds.IsValid());
