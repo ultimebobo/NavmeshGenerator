@@ -24,7 +24,7 @@ namespace navmesh::cli
         output << "\n  },\n  \"references\": [";
         for (std::size_t index = 0; index < cell.references.size(); ++index) {
             const auto& reference = cell.references[index];
-            output << (index ? "," : "") << "\n    {" << std::format("\"id\": \"{:08X}\", \"base_object_id\": \"{:08X}\", \"name\": \"{}\", \"position\": ", reference.id, reference.baseObjectId, Escape(reference.name)); WriteVec3(output, reference.position); output << ", \"rotation_radians\": "; WriteVec3(output, reference.rotation); output << std::format(", \"scale\": {}", reference.scale);
+            output << (index ? "," : "") << "\n    {" << std::format("\"id\": \"{:08X}\", \"base_object_id\": \"{:08X}\", \"record_type\": \"{}\", \"editor_id\": \"{}\", \"model\": \"{}\", \"name\": \"{}\", \"position\": ", reference.id, reference.baseObjectId, Escape(reference.recordType), Escape(reference.editorId), Escape(reference.modelPath), Escape(reference.name)); WriteVec3(output, reference.position); output << ", \"rotation_radians\": "; WriteVec3(output, reference.rotation); output << std::format(", \"scale\": {}", reference.scale);
             if (reference.localBounds) { output << ", \"local_bounds\": {\"min\": "; WriteVec3(output, reference.localBounds->min); output << ", \"max\": "; WriteVec3(output, reference.localBounds->max); output << "}"; }
             output << "}";
         }

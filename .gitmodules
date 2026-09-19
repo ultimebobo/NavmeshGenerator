@@ -1,3 +1,6 @@
 [submodule "lib/commonlibsse"]
 	path = lib/commonlibsse
 	url = https://github.com/libxse/commonlibsse.git
+[submodule "tools/BSAFileExtractor"]
+	path = tools/BSAFileExtractor
+	url = https://github.com/Sw4T/BSAFileExtractor.git

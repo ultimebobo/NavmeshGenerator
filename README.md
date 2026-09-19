@@ -50,7 +50,9 @@ The CLI writes files into the target output directory:
 
 - This is not an SKSE runtime plugin and does not inspect a running game session.
 - The direct parser is intentionally small and targets the common Bethesda plugin structure, not the entire plugin ecosystem.
-- Collision/NIF/Havok extraction is not implemented yet; geometry export is limited to what can be directly extracted from plugin records.
+- Geometry extraction supports loose NIF files and uses the `tools/BSAFileExtractor` submodule to cache requested BSA-backed assets on demand. Collision/Havok extraction is not complete.
+- Install the BSA bridge dependencies with `python -m pip install -r tools/requirements.txt` before extracting archived assets.
+- Archived assets are cached under `<output>/.bsa-cache`; delete that directory to rebuild the cache.
 - Terrain extraction is not implemented beyond any simple geometry that is explicitly included in the parsed records.
 - Some Skyrim record variants and non-standard modded data layouts may still be rejected or reported as unsupported.
 

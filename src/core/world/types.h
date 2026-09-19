@@ -9,7 +9,7 @@
 namespace navmesh::core
 {
     struct Reference {
-        std::uint32_t id{}; std::uint32_t baseObjectId{}; std::string name; Vec3 position; Vec3 rotation; float scale{ 1.0F };
+        std::uint32_t id{}; std::uint32_t baseObjectId{}; std::string name; std::string recordType; std::string editorId; std::string modelPath; Vec3 position; Vec3 rotation; float scale{ 1.0F };
         std::optional<AABB> localBounds;
     };
     struct Cell {

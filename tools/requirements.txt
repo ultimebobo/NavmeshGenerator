@@ -1,0 +1,5 @@
+# Runtime dependencies for tools/extract_bsa_models.py
+construct>=2.10.70
+lz4>=4.4.0
+attrs>=23.0
+multidict>=6.0

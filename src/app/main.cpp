@@ -1,6 +1,7 @@
 #include "analysis/navmesh_analysis.h"
 #include "cli/json_report.h"
 #include "skyrim/parser/plugin_parser.h"
+#include "skyrim/extraction/geometry_extractor.h"
 #include "validation/validation.h"
 
 #include <filesystem>
@@ -24,6 +25,7 @@ namespace
         std::optional<std::uint32_t> cellFormId;
         std::filesystem::path output;
         bool listCells{};
+        std::filesystem::path exportGeometry;
     };
 
     [[nodiscard]] std::string ToString(const std::optional<std::int32_t>& value)
@@ -53,6 +55,8 @@ namespace
                 options.cellY = std::stoi(argv[++index]);
             } else if (argument == "--output" && index + 1 < argc) {
                 options.output = argv[++index];
+            } else if (argument == "--export-geometry" && index + 1 < argc) {
+                options.exportGeometry = argv[++index];
             } else if (argument == "--list-cells") {
                 options.listCells = true;
             }
@@ -86,7 +90,7 @@ int main(int argc, char** argv)
 {
     const auto options = ParseArgs(argc, argv);
     if (options.plugin.empty()) {
-        std::cerr << "Usage: navmesh-offline --plugin <plugin.esm> [--cell-formid <hex>] [--editor-id <id>] [--cell <name>] [--worldspace <name>] [--cell-x <n> --cell-y <n>] [--list-cells] [--output <dir>]\n";
+        std::cerr << "Usage: navmesh-offline --plugin <plugin.esm> [--cell-formid <hex>] [--editor-id <id>] [--cell <name>] [--worldspace <name>] [--cell-x <n> --cell-y <n>] [--list-cells] [--output <dir>] [--export-geometry <path>]\n";
         return 1;
     }
 
@@ -121,6 +125,11 @@ int main(int argc, char** argv)
     std::ofstream reportStream(reportPath, std::ios::trunc | std::ios::binary);
     reportStream << report;
 
+    const auto geometry = navmesh::skyrim::offline::ExtractGeometry(options.plugin.parent_path(), *cell, options.output / ".bsa-cache");
+    const auto geometryPath = options.exportGeometry.empty() ? options.output / "geometry.obj" : options.exportGeometry;
+    if (!navmesh::skyrim::offline::WriteGeometryObj(geometryPath, geometry)) std::cerr << "Failed to write geometry OBJ to " << geometryPath << "\n";
+    if (!navmesh::skyrim::offline::WriteGeometryJson(options.output / "geometry.json", *cell, geometry)) std::cerr << "Failed to write geometry JSON\n";
+
     for (std::size_t index = 0; index < cell->navMeshes.size(); ++index) {
         const auto& mesh = cell->navMeshes[index];
         const auto meshPath = options.output / std::format("navmesh_{}.obj", index);
@@ -151,5 +160,6 @@ int main(int argc, char** argv)
     }
 
     std::cout << "Wrote report to " << reportPath << "\n";
+    std::cout << std::format("References: {}\nReferences with models: {}\nModels loaded: {}\nModels missing: {}\nGeometry vertices: {}\nGeometry triangles: {}\nExported geometry: {}\n", cell->references.size(), geometry.referencesWithModels, geometry.modelsLoaded, geometry.modelsMissing, geometry.mesh.vertices.size(), geometry.mesh.triangles.size(), geometryPath.string());
     return 0;
 }

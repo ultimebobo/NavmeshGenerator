@@ -66,6 +66,45 @@ namespace
         std::uint32_t formId{};
     };
 
+    struct BaseRecord
+    {
+        std::string type;
+        std::string editorId;
+        std::string modelPath;
+    };
+
+    struct ParsedReference
+    {
+        navmesh::core::Reference reference;
+        std::uint32_t cellId{};
+    };
+
+    void ParseReferencePayload(const std::vector<std::uint8_t>& payload, const RecordHeader& header, const std::string& type, std::vector<ParsedReference>& references)
+    {
+        navmesh::core::Reference reference{};
+        reference.id = header.formId;
+        reference.recordType = type;
+        std::size_t offset = 0;
+        while (offset + 6 <= payload.size()) {
+            const auto subType = ReadAscii(payload, offset, 4);
+            const auto subSize = ReadU16LE(payload, offset + 4);
+            const auto dataStart = offset + 6;
+            const auto dataEnd = dataStart + subSize;
+            if (dataEnd > payload.size()) break;
+            if (subType == "NAME" && subSize >= 4) reference.baseObjectId = ReadU32LE(payload, dataStart);
+            else if (subType == "DATA" && subSize >= 24) {
+                std::memcpy(&reference.position.x, payload.data() + dataStart, 4);
+                std::memcpy(&reference.position.y, payload.data() + dataStart + 4, 4);
+                std::memcpy(&reference.position.z, payload.data() + dataStart + 8, 4);
+                std::memcpy(&reference.rotation.x, payload.data() + dataStart + 12, 4);
+                std::memcpy(&reference.rotation.y, payload.data() + dataStart + 16, 4);
+                std::memcpy(&reference.rotation.z, payload.data() + dataStart + 20, 4);
+            } else if (subType == "XSCL" && subSize >= 4) std::memcpy(&reference.scale, payload.data() + dataStart, 4);
+            offset = dataEnd;
+        }
+        references.push_back({ std::move(reference), 0 });
+    }
+
     [[nodiscard]] std::optional<RecordHeader> ParseRecordHeader(const std::vector<std::uint8_t>& buffer, std::size_t offset)
     {
         if (offset + 24 > buffer.size()) {
@@ -186,6 +225,8 @@ namespace navmesh::skyrim::offline
         const auto fileStart = buffer.size() >= 8 && ReadAscii(buffer, 0, 4) == "TES4" ? 24 + ReadU32LE(buffer, 4) : 0;
         std::vector<core::Cell> cells;
         std::unordered_map<std::uint32_t, std::vector<core::NavMesh>> navMeshesByGroup;
+        std::unordered_map<std::uint32_t, BaseRecord> baseRecords;
+        std::vector<ParsedReference> references;
 
         const auto walk = [&](const auto& self, std::size_t begin, std::size_t end, std::uint32_t groupId) -> void {
             auto current = begin;
@@ -248,14 +289,35 @@ namespace navmesh::skyrim::offline
                         subOffset = subDataEnd;
                     }
                     cells.push_back(std::move(cell));
+                } else if (type == "REFR" || type == "ACHR") {
+                    const auto payload = DecompressNavMesh(buffer, dataStart, dataEnd, header->flags);
+                    if (payload) {
+                        ParseReferencePayload(*payload, *header, type, references);
+                        if (!references.empty()) references.back().cellId = groupId;
+                    }
                 } else if (type == "NAVM") {
                     const auto payload = DecompressNavMesh(buffer, dataStart, dataEnd, header->flags);
                     if (payload) {
                         const auto mesh = ParseNavMesh(*payload, header->formId);
-                        if (mesh) {
-                            navMeshesByGroup[groupId].push_back(*mesh);
+                        if (mesh) navMeshesByGroup[groupId].push_back(*mesh);
+                    }
+                } else {
+                    BaseRecord record{ .type = type };
+                    const auto payload = DecompressNavMesh(buffer, dataStart, dataEnd, header->flags);
+                    if (payload) {
+                        std::size_t subOffset = 0;
+                        while (subOffset + 6 <= payload->size()) {
+                            const auto subType = ReadAscii(*payload, subOffset, 4);
+                            const auto subSize = ReadU16LE(*payload, subOffset + 4);
+                            const auto subDataStart = subOffset + 6;
+                            const auto subDataEnd = subDataStart + subSize;
+                            if (subDataEnd > payload->size()) break;
+                            if (subType == "EDID") record.editorId = TrimNulls(ReadAscii(*payload, subDataStart, subSize));
+                            else if (subType == "MODL") record.modelPath = TrimNulls(ReadAscii(*payload, subDataStart, subSize));
+                            subOffset = subDataEnd;
                         }
                     }
+                    baseRecords[header->formId] = std::move(record);
                 }
                 current = dataEnd;
             }
@@ -266,6 +328,15 @@ namespace navmesh::skyrim::offline
             const auto meshes = navMeshesByGroup.find(cell.id);
             if (meshes != navMeshesByGroup.end()) {
                 cell.navMeshes = meshes->second;
+            }
+            for (auto& parsed : references) {
+                if (parsed.cellId != cell.id) continue;
+                if (const auto base = baseRecords.find(parsed.reference.baseObjectId); base != baseRecords.end()) {
+                    parsed.reference.recordType = base->second.type;
+                    parsed.reference.editorId = base->second.editorId;
+                    parsed.reference.modelPath = base->second.modelPath;
+                }
+                cell.references.push_back(parsed.reference);
             }
         }
         return cells;
