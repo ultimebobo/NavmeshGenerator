@@ -99,6 +99,16 @@ namespace
         return relativePath;
     }
 
+    [[nodiscard]] bool IsVisualEffectModel(const std::string& modelPath)
+    {
+        auto normalized = modelPath;
+        for (auto& character : normalized) {
+            character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+            if (character == '/') character = '\\';
+        }
+        return normalized.rfind("effects\\", 0) == 0;
+    }
+
     void ExtractBsaModels(const std::filesystem::path& dataDirectory, const std::filesystem::path& cacheDirectory, const navmesh::core::Cell& cell)
     {
         if (cacheDirectory.empty()) return;
@@ -134,6 +144,14 @@ namespace navmesh::skyrim::offline
             const auto modelPath = std::filesystem::exists(loosePath) ? loosePath : cachedPath;
             const auto mesh = LoadNif(modelPath);
             if (mesh.version.empty() || mesh.vertices.empty() || mesh.triangles.empty()) { report.failure = std::filesystem::exists(modelPath) ? "unsupported or empty NIF" : "missing loose NIF"; ++output.modelsMissing; output.references.push_back(std::move(report)); continue; }
+            if (IsVisualEffectModel(reference.modelPath)) {
+                report.failure = "excluded visual effect from support geometry";
+                report.vertices = mesh.vertices.size();
+                report.triangles = mesh.triangles.size();
+                ++output.modelsLoaded;
+                output.references.push_back(std::move(report));
+                continue;
+            }
             const auto base = static_cast<std::uint32_t>(output.mesh.vertices.size());
             report.meshVertexOffset = base;
             report.meshTriangleOffset = output.mesh.triangles.size();

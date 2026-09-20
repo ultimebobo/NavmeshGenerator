@@ -206,6 +206,35 @@ namespace navmesh::analysis
         return static_cast<float>(std::acos(cosine) * 180.0 / std::numbers::pi);
     }
 
+    [[nodiscard]] float HorizontalDistance(const core::Vec3& a, const core::Vec3& b)
+    {
+        return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+    }
+
+    [[nodiscard]] float CandidateSupportScore(const core::Vec3& centroid, const SurfaceHit& hit, float searchRadius, float maxSlope)
+    {
+        const auto vertical = core::Vec3{ 0.0F, 0.0F, 1.0F };
+        const auto slope = SurfaceSlopeDegrees(hit.normal);
+        const auto horizontalOffset = HorizontalDistance(hit.point, centroid);
+        const float upDot = std::clamp<float>(std::abs(Dot(Normalize(hit.normal), vertical)), 0.0F, 1.0F);
+
+        if (horizontalOffset > searchRadius) {
+            return -std::numeric_limits<float>::infinity();
+        }
+        if (upDot <= 0.15F) {
+            return -std::numeric_limits<float>::infinity();
+        }
+        if (slope > 75.0F) {
+            return -std::numeric_limits<float>::infinity();
+        }
+
+        const auto slopePenalty = std::max(0.0F, slope - std::min(maxSlope, 45.0F));
+        const auto offsetPenalty = horizontalOffset / std::max(searchRadius, 1.0F);
+        const float walkableFit = std::clamp<float>(1.0F - slope / 90.0F, 0.0F, 1.0F);
+        const float centroidFit = std::clamp<float>(1.0F - offsetPenalty, 0.0F, 1.0F);
+        return 500.0F * walkableFit + 400.0F * centroidFit + 100.0F * upDot - 25.0F * slopePenalty;
+    }
+
     std::string ClassifySupport(float heightDelta, float slopeDegrees, float maxSupportDistance, float maxSlope)
     {
         if (slopeDegrees > maxSlope) {
@@ -285,7 +314,7 @@ namespace navmesh::analysis
             }
 
             std::optional<SurfaceHit> best;
-            float bestDistance = std::numeric_limits<float>::max();
+            float bestScore = -std::numeric_limits<float>::infinity();
             for (const auto candidateIndex : candidateTriangles) {
                 if (candidateIndex >= geometry.triangles.size()) {
                     continue;
@@ -301,16 +330,12 @@ namespace navmesh::analysis
                 if (!hit) {
                     continue;
                 }
-                if (std::hypot(hit->point.x - centroid.x, hit->point.y - centroid.y) > configuration.surfaceSearchRadius) {
+                const auto score = CandidateSupportScore(centroid, *hit, configuration.surfaceSearchRadius, configuration.maxSlope);
+                if (score <= bestScore) {
                     continue;
                 }
-                if (Dot(hit->normal, vertical) <= 0.0F) {
-                    continue;
-                }
-                if (hit->distance < bestDistance) {
-                    bestDistance = hit->distance;
-                    best = *hit;
-                }
+                bestScore = score;
+                best = *hit;
             }
 
             if (best) {

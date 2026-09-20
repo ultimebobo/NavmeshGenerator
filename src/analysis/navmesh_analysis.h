@@ -104,6 +104,8 @@ namespace navmesh::analysis
         core::Vec3 normal{};
         float slopeDegrees{};
         std::size_t triangleIndex{};
+        std::string sourceNifPath;
+        std::optional<std::size_t> sourceTriangleIndex;
     };
 
     struct PolygonAnalysisResult

@@ -7,8 +7,11 @@
 #include <filesystem>
 #include <fstream>
 #include <format>
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -27,6 +30,7 @@ namespace
         bool listCells{};
         std::filesystem::path exportGeometry;
         std::filesystem::path exportAnalysis;
+        bool diagnostics{};
         float surfaceSearchRadius{ 64.0F };
         float maxSupportDistance{ 32.0F };
         float maxSlope{ 45.0F };
@@ -63,6 +67,8 @@ namespace
                 options.exportGeometry = argv[++index];
             } else if (argument == "--export-analysis" && index + 1 < argc) {
                 options.exportAnalysis = argv[++index];
+            } else if (argument == "--diagnostics") {
+                options.diagnostics = true;
             } else if (argument == "--surface-search-radius" && index + 1 < argc) {
                 options.surfaceSearchRadius = std::stof(argv[++index]);
             } else if (argument == "--max-support-distance" && index + 1 < argc) {
@@ -142,6 +148,19 @@ namespace
         stream << "# exported analysis visualization\n";
     }
 
+    [[nodiscard]] std::string JsonEscape(const std::string& value)
+    {
+        std::string result;
+        for (const char character : value) {
+            if (character == '\\') result += "\\\\";
+            else if (character == '"') result += "\\\"";
+            else if (character == '\n') result += "\\n";
+            else if (character == '\r') result += "\\r";
+            else result += character;
+        }
+        return result;
+    }
+
     void WriteAnalysisJson(const std::filesystem::path& outputPath, const navmesh::analysis::AnalysisReport& analysisReport, const navmesh::analysis::GeometrySummary& geometrySummary, const navmesh::analysis::NavMeshSummary& meshSummary)
     {
         std::ofstream stream(outputPath, std::ios::trunc);
@@ -203,13 +222,17 @@ namespace
             stream << "        \"centroid\": [" << polygon.centroid.x << ", " << polygon.centroid.y << ", " << polygon.centroid.z << "],\n";
             stream << "        \"normal\": [" << polygon.normal.x << ", " << polygon.normal.y << ", " << polygon.normal.z << "],\n";
             stream << "        \"support\": {\n";
-            stream << std::format("          \"found\": {},\n", polygon.support.found ? "true" : "false");
+            stream << std::format("          \"found\": {}{}\n", polygon.support.found ? "true" : "false", polygon.support.found ? "," : "");
             if (polygon.support.found) {
                 stream << "          \"point\": [" << polygon.support.point.x << ", " << polygon.support.point.y << ", " << polygon.support.point.z << "],\n";
                 stream << std::format("          \"distance\": {},\n", polygon.support.distance);
                 stream << std::format("          \"heightDelta\": {},\n", polygon.support.heightDelta);
                 stream << "          \"normal\": [" << polygon.support.normal.x << ", " << polygon.support.normal.y << ", " << polygon.support.normal.z << "],\n";
                 stream << std::format("          \"slopeDegrees\": {},\n", polygon.support.slopeDegrees);
+                stream << std::format("          \"triangleIndex\": {},\n", polygon.support.triangleIndex);
+                    stream << std::format("          \"sourceNifPath\": \"{}\",\n", JsonEscape(polygon.support.sourceNifPath));
+                if (polygon.support.sourceTriangleIndex) stream << std::format("          \"sourceTriangleIndex\": {}\n", *polygon.support.sourceTriangleIndex);
+                else stream << "          \"sourceTriangleIndex\": null\n";
             }
             stream << "        },\n";
             stream << std::format("        \"classification\": \"{}\"\n", polygon.classification);
@@ -218,6 +241,101 @@ namespace
         stream << "    ]\n";
         stream << "  }\n";
         stream << "}\n";
+    }
+
+    [[nodiscard]] std::string HtmlEscape(const std::string& value)
+    {
+        std::string result;
+        for (const char character : value) {
+            if (character == '&') result += "&amp;";
+            else if (character == '<') result += "&lt;";
+            else if (character == '>') result += "&gt;";
+            else if (character == '"') result += "&quot;";
+            else result += character;
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::string Vec3Text(const navmesh::core::Vec3& value)
+    {
+        return std::format("({:.2f}, {:.2f}, {:.2f})", value.x, value.y, value.z);
+    }
+
+    void AnnotateSupportSources(navmesh::analysis::AnalysisReport& report, const navmesh::skyrim::offline::GeometryExtraction& geometry)
+    {
+        for (auto& polygon : report.polygons) {
+            if (!polygon.support.found) continue;
+            for (const auto& reference : geometry.references) {
+                if (polygon.support.triangleIndex < reference.meshTriangleOffset || polygon.support.triangleIndex >= reference.meshTriangleOffset + reference.triangles) continue;
+                polygon.support.sourceNifPath = reference.modelPath;
+                polygon.support.sourceTriangleIndex = polygon.support.triangleIndex - reference.meshTriangleOffset;
+                break;
+            }
+        }
+    }
+
+    [[nodiscard]] std::string ProjectionSvg(const navmesh::core::NavMesh& mesh, const navmesh::core::Mesh& geometry, const navmesh::analysis::PolygonAnalysisResult& polygon)
+    {
+        std::vector<navmesh::core::Vec3> points;
+        if (polygon.index < mesh.polygons.size()) {
+            const auto& navPolygon = mesh.polygons[polygon.index];
+            for (const auto vertex : navPolygon.vertices) if (vertex < mesh.vertices.size()) points.push_back(mesh.vertices[vertex]);
+        }
+        if (polygon.support.found && polygon.support.triangleIndex < geometry.triangles.size()) {
+            const auto& triangle = geometry.triangles[polygon.support.triangleIndex];
+            for (const auto vertex : triangle.vertices) if (vertex < geometry.vertices.size()) points.push_back(geometry.vertices[vertex]);
+        }
+        if (points.empty()) return "<svg viewBox=\"0 0 360 90\"><text x=\"8\" y=\"20\">no geometry</text></svg>";
+        float minX = points.front().x, maxX = points.front().x, minY = points.front().y, maxY = points.front().y, minZ = points.front().z, maxZ = points.front().z;
+        for (const auto& point : points) { minX = std::min(minX, point.x); maxX = std::max(maxX, point.x); minY = std::min(minY, point.y); maxY = std::max(maxY, point.y); minZ = std::min(minZ, point.z); maxZ = std::max(maxZ, point.z); }
+        const auto scale = [](float value, float low, float high, float outputLow, float outputHigh) { return outputLow + (high - low > 1.0e-4F ? (value - low) / (high - low) : 0.5F) * (outputHigh - outputLow); };
+        const auto topX = [&](const navmesh::core::Vec3& point) { return scale(point.x, minX, maxX, 12.0F, 168.0F); };
+        const auto topY = [&](const navmesh::core::Vec3& point) { return scale(point.y, minY, maxY, 74.0F, 12.0F); };
+        const auto sideX = [&](const navmesh::core::Vec3& point) { return scale(point.x, minX, maxX, 192.0F, 348.0F); };
+        const auto sideY = [&](const navmesh::core::Vec3& point) { return scale(point.z, minZ, maxZ, 74.0F, 12.0F); };
+        std::ostringstream svg;
+        svg << "<svg viewBox=\"0 0 360 90\" role=\"img\"><rect width=\"360\" height=\"90\" fill=\"#f7f4ed\"/><text x=\"12\" y=\"9\" font-size=\"6\">top</text><text x=\"192\" y=\"9\" font-size=\"6\">side</text>";
+        if (points.size() >= 3) svg << std::format("<polygon points=\"{},{} {},{} {},{}\" fill=\"#386641\" fill-opacity=\".35\" stroke=\"#386641\"/>", topX(points[0]), topY(points[0]), topX(points[1]), topY(points[1]), topX(points[2]), topY(points[2]));
+        if (points.size() >= 3) svg << std::format("<polygon points=\"{},{} {},{} {},{}\" fill=\"#386641\" fill-opacity=\".35\" stroke=\"#386641\"/>", sideX(points[0]), sideY(points[0]), sideX(points[1]), sideY(points[1]), sideX(points[2]), sideY(points[2]));
+        if (points.size() >= 6) svg << std::format("<polygon points=\"{},{} {},{} {},{}\" fill=\"#bc4749\" fill-opacity=\".35\" stroke=\"#bc4749\"/>", topX(points[3]), topY(points[3]), topX(points[4]), topY(points[4]), topX(points[5]), topY(points[5]));
+        for (std::size_t index = 0; index < std::min<std::size_t>(points.size(), 6); ++index) svg << std::format("<circle cx=\"{}\" cy=\"{}\" r=\"1.5\" fill=\"{}\"/>", topX(points[index]), topY(points[index]), index < 3 ? "#386641" : "#bc4749");
+        if (polygon.support.found) svg << std::format("<circle cx=\"{}\" cy=\"{}\" r=\"2.5\" fill=\"#f08a24\"/><circle cx=\"{}\" cy=\"{}\" r=\"2.5\" fill=\"#f08a24\"/>", topX(polygon.centroid), topY(polygon.centroid), sideX(polygon.centroid), sideY(polygon.centroid));
+        if (points.size() >= 6) svg << std::format("<polygon points=\"{},{} {},{} {},{}\" fill=\"none\" stroke=\"#bc4749\" stroke-dasharray=\"2 2\"/>", sideX(points[3]), sideY(points[3]), sideX(points[4]), sideY(points[4]), sideX(points[5]), sideY(points[5]));
+        svg << "</svg>";
+        return svg.str();
+    }
+
+    void WriteDiagnosticHtml(const std::filesystem::path& outputPath, const navmesh::core::Cell& cell, const navmesh::core::NavMesh& mesh, const navmesh::core::Mesh& geometry, const navmesh::skyrim::offline::GeometryExtraction& extraction, const navmesh::analysis::AnalysisReport& report)
+    {
+        std::ofstream stream(outputPath, std::ios::trunc);
+        if (!stream) return;
+        std::vector<const navmesh::analysis::PolygonAnalysisResult*> selected;
+        const std::vector<std::string> classes = { "supported", "floating", "buried", "too_steep", "unsupported" };
+        for (const auto& classification : classes) {
+            std::size_t limit = classification == "buried" ? 10U : 1U;
+            for (const auto& polygon : report.polygons) if (polygon.classification == classification && limit-- > 0) selected.push_back(&polygon);
+        }
+        const auto missingModels = extraction.modelsMissing > 0 || !extraction.terrainSupported || !extraction.collisionGeometrySupported;
+        stream << "<!doctype html><html><head><meta charset=\"utf-8\"><title>NAVM support diagnostics</title><style>body{font:14px system-ui,sans-serif;color:#252422;background:#f1eee7;margin:2rem}h1{font-family:Georgia,serif}table{border-collapse:collapse;background:#fff}th,td{border:1px solid #d8d2c6;padding:.45rem;text-align:left;vertical-align:top}th{background:#283618;color:#fff}tr.buried{background:#fff0e1}svg{width:360px;max-width:100%;height:auto}code{white-space:nowrap}</style></head><body>";
+        stream << std::format("<h1>NAVM support diagnostics</h1><p>Cell <code>{:08X}</code> &middot; {} &middot; polygons analyzed: {} &middot; geometry triangles: {}</p>", cell.id, HtmlEscape(cell.editorId.empty() ? cell.name : cell.editorId), report.summary.polygonsAnalyzed, geometry.triangles.size());
+        stream << std::format("<p><strong>Counts:</strong> supported {} &middot; floating {} &middot; buried {} &middot; too steep {} &middot; unsupported {}.</p>", report.summary.supported, report.summary.floating, report.summary.buried, report.summary.tooSteep, report.summary.unsupported);
+        stream << "<h2>Diagnostic assessment</h2><p>Each support shown is the nearest upward-facing triangle selected by the existing downward-centroid ray. No thresholds were changed.</p>";
+        stream << (missingModels ? "<p><strong>Geometry limitation:</strong> terrain or collision geometry is not included, or one or more model NIFs could not be loaded; buried counts may be incomplete or misleading where those surfaces are missing.</p>" : "<p><strong>Geometry coverage:</strong> extracted model geometry is available for the analyzed cell; the examples below can be inspected as actual world-space support triangles.</p>");
+        stream << "<p><strong>Interpretation:</strong> a buried result is supported by a concrete selected triangle and a negative height delta. When the triangle has NIF provenance and the two views show the NAVM above that triangle, it is consistent with genuinely buried NAVM. A missing source, visibly displaced triangle, or a systematic offset is evidence for geometry/transform limitations and should be investigated before changing thresholds.</p>";
+        stream << "<h2>Selected polygons</h2><table><thead><tr><th>Index</th><th>Class</th><th>Centroid</th><th>Support point</th><th>Delta</th><th>Slope</th><th>Support triangle</th><th>Source</th><th>Views</th></tr></thead><tbody>";
+        for (const auto* polygon : selected) {
+            std::string triangleText = "none";
+            std::string sourceText = "none";
+            if (polygon->support.found && polygon->support.triangleIndex < geometry.triangles.size()) {
+                const auto& triangle = geometry.triangles[polygon->support.triangleIndex];
+                triangleText = std::format("world #{}", polygon->support.triangleIndex);
+                if (triangle.vertices[0] < geometry.vertices.size() && triangle.vertices[1] < geometry.vertices.size() && triangle.vertices[2] < geometry.vertices.size()) triangleText += " " + Vec3Text(geometry.vertices[triangle.vertices[0]]) + " / " + Vec3Text(geometry.vertices[triangle.vertices[1]]) + " / " + Vec3Text(geometry.vertices[triangle.vertices[2]]);
+                sourceText = HtmlEscape(polygon->support.sourceNifPath.empty() ? "unknown" : polygon->support.sourceNifPath);
+                if (polygon->support.sourceTriangleIndex) sourceText += std::format(" #{}", *polygon->support.sourceTriangleIndex);
+            }
+            stream << std::format("<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><small>{}</small></td><td><small>{}</small></td><td>{}</td></tr>", polygon->classification == "buried" ? "buried" : "", polygon->index, polygon->classification, Vec3Text(polygon->centroid), polygon->support.found ? Vec3Text(polygon->support.point) : "none", polygon->support.found ? std::format("{:.2f}", polygon->support.heightDelta) : "none", polygon->support.found ? std::format("{:.2f} deg", polygon->support.slopeDegrees) : "none", HtmlEscape(triangleText), sourceText, ProjectionSvg(mesh, geometry, *polygon));
+        }
+        stream << "</tbody></table><p><strong>Legend:</strong> green triangle = NAVM polygon; red triangle = world-geometry support triangle in the top view; dotted red triangle = the same world-geometry support triangle in the side view; orange markers = NAVM centroid and selected support point.</p></body></html>\n";
     }
 
     void PrintAnalysisSummary(const navmesh::analysis::AnalysisReport& analysis)
@@ -241,7 +359,7 @@ int main(int argc, char** argv)
 {
     const auto options = ParseArgs(argc, argv);
     if (options.plugin.empty()) {
-        std::cerr << "Usage: navmesh-offline --plugin <plugin.esm> [--cell-formid <hex>] [--editor-id <id>] [--cell <name>] [--worldspace <name>] [--cell-x <n> --cell-y <n>] [--list-cells] [--output <dir>] [--export-geometry <path>] [--export-analysis <path>] [--surface-search-radius <n>] [--max-support-distance <n>] [--max-slope <n>]\n";
+        std::cerr << "Usage: navmesh-offline --plugin <plugin.esm> [--cell-formid <hex>] [--editor-id <id>] [--cell <name>] [--worldspace <name>] [--cell-x <n> --cell-y <n>] [--list-cells] [--output <dir>] [--diagnostics] [--export-geometry <path>] [--export-analysis <path>] [--surface-search-radius <n>] [--max-support-distance <n>] [--max-slope <n>]\n";
         return 1;
     }
 
@@ -284,7 +402,8 @@ int main(int argc, char** argv)
     const auto geometrySummary = navmesh::analysis::AnalyzeGeometry(geometry.mesh);
     const auto meshSummary = navmesh::analysis::AnalyzeNavMesh(cell->navMeshes.empty() ? navmesh::core::NavMesh{} : cell->navMeshes.front());
     const auto analysisConfig = navmesh::analysis::AnalysisConfiguration{ .surfaceSearchRadius = options.surfaceSearchRadius, .maxSupportDistance = options.maxSupportDistance, .maxSlope = options.maxSlope };
-    const auto analysisReport = cell->navMeshes.empty() ? navmesh::analysis::AnalysisReport{} : navmesh::analysis::AnalyzeNavMeshPolygons(cell->navMeshes.front(), geometry.mesh, analysisConfig);
+    auto analysisReport = cell->navMeshes.empty() ? navmesh::analysis::AnalysisReport{} : navmesh::analysis::AnalyzeNavMeshPolygons(cell->navMeshes.front(), geometry.mesh, analysisConfig);
+    AnnotateSupportSources(analysisReport, geometry);
 
     if (!options.exportAnalysis.empty() && !cell->navMeshes.empty()) {
         WriteAnalysisObj(options.exportAnalysis, cell->navMeshes.front(), geometry.mesh, analysisReport);
@@ -307,6 +426,11 @@ int main(int argc, char** argv)
     std::cout << std::format("Analysis thresholds: surfaceSearchRadius={} maxSupportDistance={} maxSlope={}\n", options.surfaceSearchRadius, options.maxSupportDistance, options.maxSlope);
 
     WriteAnalysisJson(options.output / "analysis.json", analysisReport, geometrySummary, meshSummary);
+    if (options.diagnostics && !cell->navMeshes.empty()) {
+        const auto diagnosticPath = options.output / "navmesh_diagnostics.html";
+        WriteDiagnosticHtml(diagnosticPath, *cell, cell->navMeshes.front(), geometry.mesh, geometry, analysisReport);
+        std::cout << "Wrote diagnostic report to " << diagnosticPath << "\n";
+    }
     PrintAnalysisSummary(analysisReport);
 
     std::cout << std::format("Resolved cell: {:08X} editor_id=\"{}\" name=\"{}\" type={}",

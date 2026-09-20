@@ -99,5 +99,15 @@ int main()
     assert(polygonReport.summary.polygonsAnalyzed == 1u);
     assert(polygonReport.polygons.front().support.found);
     assert(polygonReport.polygons.front().classification == "supported");
+
+    navmesh::core::NavMesh centroidMesh{ .vertices = { { 0.5F, 0.5F, 3.0F }, { 1.5F, 0.5F, 3.0F }, { 0.5F, 1.5F, 3.0F } }, .polygons = { { .vertices = { 0, 1, 2 }, .neighbors = { 0, 0, 0 }, .flags = 1 } } };
+    navmesh::core::Mesh wallScene{ .vertices = {
+        { 0.0F, 0.0F, 0.0F }, { 2.0F, 0.0F, 0.0F }, { 0.0F, 2.0F, 0.0F },
+        { 0.45F, 0.0F, 0.0F }, { 0.55F, 0.0F, 1.5F }, { 0.50F, 1.0F, 0.0F }
+    }, .triangles = { { { 0u, 1u, 2u } }, { { 3u, 4u, 5u } } } };
+    const auto wallSelection = navmesh::analysis::AnalyzeNavMeshPolygons(centroidMesh, wallScene, { .surfaceSearchRadius = 64.0F, .maxSupportDistance = 2.0F, .maxSlope = 45.0F });
+    assert(wallSelection.polygons.front().support.found);
+    assert(wallSelection.polygons.front().support.triangleIndex == 0u);
+    assert(wallSelection.polygons.front().classification == "floating");
     return 0;
 }
