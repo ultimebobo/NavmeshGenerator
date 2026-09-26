@@ -250,7 +250,10 @@ namespace
                 stream << "          \"normal\": [" << polygon.support.normal.x << ", " << polygon.support.normal.y << ", " << polygon.support.normal.z << "],\n";
                 stream << std::format("          \"slopeDegrees\": {},\n", polygon.support.slopeDegrees);
                 stream << std::format("          \"triangleIndex\": {},\n", polygon.support.triangleIndex);
-                    stream << std::format("          \"sourceNifPath\": \"{}\",\n", JsonEscape(polygon.support.sourceNifPath));
+                stream << std::format("          \"sourceType\": \"{}\",\n", JsonEscape(polygon.support.sourceType));
+                stream << std::format("          \"collisionType\": \"{}\",\n", JsonEscape(polygon.support.collisionType));
+                stream << std::format("          \"sourceConfidence\": {},\n", polygon.support.sourceConfidence);
+                stream << std::format("          \"sourceNifPath\": \"{}\",\n", JsonEscape(polygon.support.sourceNifPath));
                 if (polygon.support.sourceTriangleIndex) stream << std::format("          \"sourceTriangleIndex\": {}\n", *polygon.support.sourceTriangleIndex);
                 else stream << "          \"sourceTriangleIndex\": null\n";
             }
@@ -285,10 +288,24 @@ namespace
     {
         for (auto& polygon : report.polygons) {
             if (!polygon.support.found) continue;
+            if (polygon.support.triangleIndex < geometry.scene.triangleProvenance.size()) {
+                const auto& provenance = geometry.scene.triangleProvenance[polygon.support.triangleIndex];
+                if (provenance.geometrySource < geometry.scene.geometrySources.size()) {
+                    const auto& source = geometry.scene.geometrySources[provenance.geometrySource];
+                    switch (source.sourceType) {
+                    case navmesh::core::GeometrySourceType::Terrain: polygon.support.sourceType = "terrain"; break;
+                    case navmesh::core::GeometrySourceType::Collision: polygon.support.sourceType = "collision"; break;
+                    case navmesh::core::GeometrySourceType::RenderFallback: polygon.support.sourceType = "render_fallback"; break;
+                    }
+                    polygon.support.collisionType = source.collisionType;
+                    polygon.support.sourceConfidence = source.confidence;
+                    polygon.support.sourceTriangleIndex = provenance.sourceTriangle;
+                }
+            }
             for (const auto& reference : geometry.references) {
                 if (polygon.support.triangleIndex < reference.meshTriangleOffset || polygon.support.triangleIndex >= reference.meshTriangleOffset + reference.triangles) continue;
                 polygon.support.sourceNifPath = reference.modelPath;
-                polygon.support.sourceTriangleIndex = polygon.support.triangleIndex - reference.meshTriangleOffset;
+                if (!polygon.support.sourceTriangleIndex) polygon.support.sourceTriangleIndex = polygon.support.triangleIndex - reference.meshTriangleOffset;
                 break;
             }
         }
@@ -351,6 +368,7 @@ namespace
                 triangleText = std::format("world #{}", polygon->support.triangleIndex);
                 if (triangle.vertices[0] < geometry.vertices.size() && triangle.vertices[1] < geometry.vertices.size() && triangle.vertices[2] < geometry.vertices.size()) triangleText += " " + Vec3Text(geometry.vertices[triangle.vertices[0]]) + " / " + Vec3Text(geometry.vertices[triangle.vertices[1]]) + " / " + Vec3Text(geometry.vertices[triangle.vertices[2]]);
                 sourceText = HtmlEscape(polygon->support.sourceNifPath.empty() ? "unknown" : polygon->support.sourceNifPath);
+                sourceText = HtmlEscape(polygon->support.sourceType) + " (" + std::format("{:.2f}", polygon->support.sourceConfidence) + ") " + sourceText;
                 if (polygon->support.sourceTriangleIndex) sourceText += std::format(" #{}", *polygon->support.sourceTriangleIndex);
             }
             stream << std::format("<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><small>{}</small></td><td><small>{}</small></td><td>{}</td></tr>", polygon->classification == "buried" ? "buried" : "", polygon->index, polygon->classification, Vec3Text(polygon->centroid), polygon->support.found ? Vec3Text(polygon->support.point) : "none", polygon->support.found ? std::format("{:.2f}", polygon->support.heightDelta) : "none", polygon->support.found ? std::format("{:.2f} deg", polygon->support.slopeDegrees) : "none", HtmlEscape(triangleText), sourceText, ProjectionSvg(mesh, geometry, *polygon));
@@ -507,6 +525,7 @@ int main(int argc, char** argv)
         geometry.terrainLandRecords = terrain.landRecordsFound; geometry.terrainLandDecoded = terrain.landRecordsDecoded; geometry.terrainLandMissing = terrain.landRecordsMissing;
         for (const auto& warning : terrain.warnings) std::cerr << warning << "\n";
     }
+    geometry.collisionGeometrySupported = geometry.collisionModelsLoaded != 0;
     navmesh::reproducibility::ExportMetadata metadata{
         .inputPlugin = options.plugin,
         .selectedCell = &*cell,
@@ -516,7 +535,7 @@ int main(int argc, char** argv)
             .geometryVertices = geometry.mesh.vertices.size(), .geometryTriangles = geometry.mesh.triangles.size(),
             .terrainLandRecords = geometry.terrainLandRecords, .terrainLandDecoded = geometry.terrainLandDecoded, .terrainLandMissing = geometry.terrainLandMissing,
             .terrainSupported = geometry.terrainSupported, .collisionGeometrySupported = geometry.collisionGeometrySupported },
-        .warnings = { geometry.terrainLandMissing ? "Terrain coverage is missing for this exterior CELL; no flat substitute was emitted." : "Terrain is not applicable to this interior CELL.", "Collision geometry is not supported by the current extractor." } };
+        .warnings = { geometry.terrainLandMissing ? "Terrain coverage is missing for this exterior CELL; no flat substitute was emitted." : "Terrain is not applicable to this interior CELL.", geometry.collisionGeometrySupported ? "Collision support is limited to reachable bhkPackedNiTriStripsData; unsupported Havok shapes are not approximated." : "No supported packed Havok collision was found; any render triangles are low-confidence fallbacks." } };
     const auto findings = navmesh::validation::Validate(*cell);
     const auto report = navmesh::cli::ToJson(*cell, findings, metadata);
     const auto reportPath = options.output / "report.json";

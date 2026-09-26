@@ -21,10 +21,14 @@ namespace navmesh::core
         [[nodiscard]] Vec3 ApplyPoint(Vec3 point) const noexcept;
     };
 
-    enum class MaterialCollisionClass { Unknown, RenderVisual, Terrain };
+    enum class MaterialCollisionClass { Unknown, RenderVisual, Terrain, HavokPackedTriangles };
+    // This is deliberately separate from material: it is the evidence class a
+    // navigation query must report, even when the triangle was produced from a
+    // model that also has a render mesh.
+    enum class GeometrySourceType { Terrain, Collision, RenderFallback };
     enum class GeometryCoverage { Found, Excluded, Missing, Unreadable, Unsupported };
     struct RecordProvenance { std::string plugin; std::uint32_t formId{}; std::string recordType; };
-    struct GeometrySource { std::string modelPath; MaterialCollisionClass materialClass{ MaterialCollisionClass::RenderVisual }; RecordProvenance reference; RecordProvenance baseObject; };
+    struct GeometrySource { std::string modelPath; MaterialCollisionClass materialClass{ MaterialCollisionClass::RenderVisual }; GeometrySourceType sourceType{ GeometrySourceType::RenderFallback }; std::string collisionType; float confidence{ 0.5F }; RecordProvenance reference; RecordProvenance baseObject; };
     // LAND samples identify the lower-left grid sample of the terrain quad that
     // emitted this triangle. Diagnostics can therefore identify the exact data.
     struct TerrainTriangleProvenance { std::int32_t cellX{}; std::int32_t cellY{}; std::uint32_t landFormId{}; std::uint8_t sampleX{}; std::uint8_t sampleY{}; };

@@ -11,6 +11,7 @@
 #include <array>
 
 #include <NifFile.hpp>
+#include <bhk.hpp>
 
 #include <cassert>
 #include <cmath>
@@ -204,6 +205,37 @@ namespace
         assert(provenance.sourceTriangle == 0u && geometry.scene.geometrySources[provenance.geometrySource].reference.plugin == "Patch.esp");
     }
 
+    // Legal synthetic fixture: the render triangle is at z=0 while the packed
+    // Havok collision triangle is at z=7.  Extraction must select collision.
+    void TestPackedCollisionPreferredOverRenderFixture()
+    {
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-packed-collision-fixture";
+        std::filesystem::remove_all(root); std::filesystem::create_directories(root / "meshes");
+        const auto modelPath = root / "meshes" / "CollisionWins.nif";
+        nifly::NifFile nif; nif.Create({ nifly::V20_2_0_7, 12, 130 });
+        const std::vector<nifly::Vector3> renderVertices = { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 } };
+        const std::vector<nifly::Triangle> renderTriangles = { { 0, 1, 2 } };
+        Require(nif.CreateShapeFromData("DecorativeRender", &renderVertices, &renderTriangles, nullptr) != nullptr);
+        auto packedData = std::make_unique<nifly::hkPackedNiTriStripsData>();
+        packedData->numVerts = 3; packedData->compressedVertData = { { 0, 0, 7 }, { 1, 0, 7 }, { 0, 1, 7 } };
+        packedData->keyCount = 1; packedData->triData.resize(1); packedData->triData[0].tri = { 0, 1, 2 };
+        const auto packedDataId = nif.GetHeader().AddBlock(std::move(packedData));
+        auto packedShape = std::make_unique<nifly::bhkPackedNiTriStripsShape>(); packedShape->dataRef.index = packedDataId;
+        const auto packedShapeId = nif.GetHeader().AddBlock(std::move(packedShape));
+        auto body = std::make_unique<nifly::bhkRigidBody>(); body->shapeRef.index = packedShapeId; body->translation = { 0, 0, 2, 0 };
+        const auto bodyId = nif.GetHeader().AddBlock(std::move(body));
+        auto collision = std::make_unique<nifly::bhkCollisionObject>(); collision->bodyRef.index = bodyId; collision->targetRef.index = nif.GetBlockID(nif.GetRootNode());
+        nif.GetRootNode()->collisionRef.index = nif.GetHeader().AddBlock(std::move(collision));
+        Require(nif.Save(modelPath) == 0);
+
+        navmesh::core::Cell cell; cell.references.push_back({ .id = 3, .baseObjectId = 4, .recordType = "REFR", .modelPath = "CollisionWins.nif", .sourcePlugin = "Fixture.esp", .basePlugin = "Fixture.esm", .baseRecordType = "STAT" });
+        const auto geometry = navmesh::skyrim::offline::ExtractGeometry(root, cell, root);
+        Require(geometry.collisionModelsLoaded == 1 && geometry.renderFallbackModels == 0 && geometry.mesh.triangles.size() == 1);
+        Require(geometry.mesh.vertices.front().z == 9.0F); // Packed z=7 plus Havok body translation.
+        const auto& source = geometry.scene.geometrySources.at(geometry.scene.triangleProvenance.front().geometrySource);
+        Require(source.sourceType == navmesh::core::GeometrySourceType::Collision && source.confidence == 1.0F && source.collisionType == "hkPackedNiTriStripsData");
+    }
+
     void TestSceneTransforms()
     {
         using navmesh::core::Transform;
@@ -232,6 +264,7 @@ int main()
     TestExportMetadata();
     TestOptionalLocalGameData();
     TestBstTriShapeExtraction();
+    TestPackedCollisionPreferredOverRenderFixture();
     TestSceneTransforms();
     navmesh::core::Mesh mesh{ .vertices = { { -1.0F, 2.0F, 3.0F }, { 4.0F, -5.0F, 6.0F } } };
     const auto bounds = mesh.Bounds();

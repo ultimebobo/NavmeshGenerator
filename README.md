@@ -9,7 +9,7 @@ This project is an offline, read-only prototype for inspecting Skyrim plugin dat
 ## What it currently does
 
 - Builds a neutral, CommonLib-free C++ core for geometry and navmesh data.
-- Builds a neutral scene graph for extracted visual geometry: every emitted triangle carries reference/base-record and model-path provenance, while found, excluded, missing, unreadable, and unsupported sources are recorded separately.
+- Builds a neutral scene graph for terrain, authoritative packed Havok collision, and explicitly low-confidence render fallbacks. Every emitted triangle carries reference/base-record/model provenance and its source type.
 - Reads the roadmap record subset (`WRLD`, `CELL`, `LAND`, `REFR`/`ACHR`, base-model records, and `NAVM`) through a loss-aware record layer: byte ranges, compressed source bytes, decoded subrecords, and unknown fields are retained for future round trips.
 - Produces JSON diagnostics and OBJ exports for navmesh polygon inspection.
 - Computes basic navmesh statistics such as vertex counts, polygon area range, connected components, and degenerate polygons.
@@ -64,8 +64,8 @@ The CLI writes files into the target output directory:
 
 - `report.json` — cell metadata, references, navmesh summaries, and validation findings.
 - `navmesh.obj` — exported navmesh polygon geometry for inspection in Blender or MeshLab.
-- `geometry.obj` — exported neutral visual mesh geometry plus decoded exterior `LAND` terrain when the selected cell is resolved through a load order.
-- `geometry.json` — machine-readable triangle provenance plus geometry-coverage failures. Terrain triangles name their winning `LAND` record, exterior cell, and lower-left VHGT sample coordinate.
+- `geometry.obj` — exported selected support geometry: packed Havok collision when available for a reference, otherwise a render fallback, plus decoded exterior `LAND` terrain.
+- `geometry.json` — machine-readable triangle provenance plus geometry-coverage failures. Every triangle has `sourceType` (`terrain`, `collision`, or `render_fallback`), `collisionType`, and confidence. Terrain triangles also name their winning `LAND` record, exterior cell, and lower-left VHGT sample coordinate.
 - `input-report.json` — MO2 profile snapshot and virtual-file winners, emitted first for every MO2 run.
 - `load-order.json` — when using `--load-order`, every winning record with its plugin and ordered origin chain.
 
@@ -82,7 +82,7 @@ The repository contains only synthetic, redistributable fixture builders; it doe
 - This is not an SKSE runtime plugin and does not inspect a running game session.
 - The direct parser is intentionally small and targets the common Bethesda plugin structure, not the entire plugin ecosystem.
 - Compressed indexed records are zlib-decoded with declared-size and boundary checks while their original bytes remain retained. Malformed records and unknown NAVM versions are explicit diagnostics, never best-effort geometry.
-- Geometry extraction supports loose visual NIF files and uses the `tools/BSAFileExtractor` submodule to cache requested BSA-backed assets on demand. Its single neutral transform system applies NIF parent transforms followed by reference scale, Euler XYZ rotation (X then Y then Z; radians), and translation. Collision/Havok extraction is intentionally not implemented.
+- Geometry extraction supports loose NIF files and uses the `tools/BSAFileExtractor` submodule to cache requested BSA-backed assets on demand. The supported collision subset is reachable `bhkMoppBvTreeShape`/`bhkListShape` wrappers containing `bhkPackedNiTriStripsShape` and `hkPackedNiTriStripsData`; packed triangle vertices receive the Havok rigid-body transform, then reference scale, Euler XYZ rotation (X then Y then Z; radians), and translation. Other Havok primitives are reported as unsupported rather than guessed. Render meshes are retained only as 0.35-confidence fallback when no supported collision exists. Effects, furniture, actors, and path-marked animated/FX references are excluded by policy.
 - Install the BSA bridge dependencies with `python -m pip install -r tools/requirements.txt` before extracting archived assets.
 - Archived assets are cached under `<output>/.bsa-cache`; delete that directory to rebuild the cache.
 - Exterior `LAND` decoding supports the collision-relevant VHGT height grid only: 33×33 samples per cell, 128-unit spacing, and world origin `(cellX * 4096, cellY * 4096)`. It intentionally excludes visual LOD and texture layers. Use `--terrain-only` with a resolved load order to export only that terrain diagnostic surface. Missing or malformed `LAND` records are reported and produce no replacement plane.

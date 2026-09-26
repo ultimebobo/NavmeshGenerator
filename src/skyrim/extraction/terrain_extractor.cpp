@@ -40,7 +40,7 @@ namespace navmesh::skyrim::offline
             std::string error; const auto heights = DecodeVhgt(record, error);
             if (!heights) { result.warnings.push_back(std::format("LAND {:08X} from {} was not decoded: {}.", record.formId, record.winning.plugin, error)); continue; }
             const auto sourceIndex = result.scene.geometrySources.size();
-            result.scene.geometrySources.push_back({ .modelPath = "", .materialClass = core::MaterialCollisionClass::Terrain, .reference = { record.winning.plugin, record.formId, "LAND" }, .baseObject = {} });
+            result.scene.geometrySources.push_back({ .modelPath = "", .materialClass = core::MaterialCollisionClass::Terrain, .sourceType = core::GeometrySourceType::Terrain, .collisionType = "LAND heightfield", .confidence = 1.0F, .reference = { record.winning.plugin, record.formId, "LAND" }, .baseObject = {} });
             const auto vertexBase = static_cast<std::uint32_t>(result.mesh.vertices.size());
             result.mesh.vertices.reserve(result.mesh.vertices.size() + 33 * 33);
             for (std::size_t y = 0; y < 33; ++y) for (std::size_t x = 0; x < 33; ++x)

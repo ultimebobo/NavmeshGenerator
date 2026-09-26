@@ -106,6 +106,9 @@ namespace navmesh::analysis
         std::size_t triangleIndex{};
         std::string sourceNifPath;
         std::optional<std::size_t> sourceTriangleIndex;
+        std::string sourceType{ "unknown" };
+        std::string collisionType;
+        float sourceConfidence{};
     };
 
     struct PolygonAnalysisResult

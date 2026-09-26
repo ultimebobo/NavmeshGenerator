@@ -28,6 +28,9 @@ namespace navmesh::skyrim::offline
         std::size_t meshTriangleOffset{};
         std::vector<std::string> shapes;
         std::string nifVersion;
+        std::string sourceType;
+        std::string collisionType;
+        bool usedRenderFallback{};
         std::string failure;
     };
 
@@ -44,6 +47,10 @@ namespace navmesh::skyrim::offline
         std::size_t modelsExcluded{};
         std::size_t modelsUnreadable{};
         std::size_t modelsUnsupported{};
+        std::size_t collisionModelsLoaded{};
+        std::size_t collisionTriangles{};
+        std::size_t renderFallbackModels{};
+        std::size_t renderFallbackTriangles{};
         bool terrainSupported{};
         std::size_t terrainLandRecords{};
         std::size_t terrainLandDecoded{};
