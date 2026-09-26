@@ -7,6 +7,8 @@ This is the durable implementation plan for an **offline** Skyrim SE/AE navmesh 
 
 The tool never requires Skyrim or SKSE to be running, never edits source plugins in place, and does not claim a repair is safe until it has been validated.
 
+The user-facing input is an existing **Mod Organizer 2 instance and profile**, not a hand-authored load-order file. See [the MO2 operator workflow](operator-workflow.md) for the command contract required at every milestone.
+
 ## Project contract
 
 The end-to-end pipeline is:
@@ -77,13 +79,16 @@ Accept when: a run can be reproduced from an input manifest; exports identify th
 
 Implement:
 
-- a `--data` plus `--load-order`/`--plugin` input model; support text load-order manifests first and common manager formats later;
+- a `--mo2 <instance-or-portable-root> --profile <profile-name>` input model. Read the selected profile's existing `modlist.txt`, `plugins.txt`, and `loadorder.txt`, plus MO2's configured game/mod/profile/overwrite paths; do not ask the user to create or edit a manifest;
+- construct a read-only virtual file map from base-game `Data`, enabled MO2 mods in their recorded priority, and the profile's `Overwrite` content. Report the exact physical source selected for every plugin and loose asset;
+- take an immutable snapshot of the profile inputs for each run (paths, timestamps, hashes, active plugins, and mod priority), and fail clearly if they change during processing;
+- retain `--data` and `--load-order` only as explicitly documented developer/test overrides, never as the normal operator workflow;
 - TES4 master parsing, file identity, full/light FormID resolution, and winning-override resolution;
 - cell/worldspace indexing that preserves persistent, temporary, and exterior-cell groups;
 - diagnostics for missing masters, cycles, duplicate files, unresolved FormIDs, and unsupported record variants;
 - a parser-library evaluation spike with written findings. Retain the direct parser only if its verified coverage and licensing fit the required records; otherwise isolate and adopt a mature offline parser behind a reader interface.
 
-Accept when: a small fixture load order resolves a base cell, a reference override, and a NAVM override exactly as expected; outputs name the winning record and origin chain.
+Accept when: `--mo2` and `--profile` import a real existing profile without manual files; a small fixture load order resolves a base cell, a reference override, and a NAVM override exactly as expected; outputs name the winning record, origin chain, and physical file selected through MO2's virtual-file rules.
 
 ### 2. Build a loss-aware Bethesda record model
 
@@ -301,4 +306,4 @@ Run these in order. Each prompt is deliberately narrow; it authorizes one review
 
 ## Immediate next instruction
 
-Start with Prompt 0. It makes the present diagnostic work measurable, makes transform/ground failures reproducible, and provides a clean baseline before changing the parser or association logic.
+Start with the MO2-import completion prompt in [the operator workflow](operator-workflow.md). The existing milestone-1 implementation is a useful parser/resolution spike, but it is not complete for the operator workflow until it imports a selected MO2 profile directly.

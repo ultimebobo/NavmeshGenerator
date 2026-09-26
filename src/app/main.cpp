@@ -1,6 +1,7 @@
 #include "analysis/navmesh_analysis.h"
 #include "cli/json_report.h"
 #include "skyrim/parser/plugin_parser.h"
+#include "skyrim/mo2/mo2_importer.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "validation/validation.h"
 
@@ -20,6 +21,11 @@ namespace
     struct Options
     {
         std::filesystem::path plugin;
+        std::filesystem::path data;
+        std::filesystem::path loadOrder;
+        std::filesystem::path mo2;
+        std::filesystem::path modsDirectory;
+        std::string profile;
         std::string cell;
         std::string editorId;
         std::string worldspace;
@@ -49,6 +55,16 @@ namespace
             const std::string argument = argv[index];
             if (argument == "--plugin" && index + 1 < argc) {
                 options.plugin = argv[++index];
+            } else if (argument == "--data" && index + 1 < argc) {
+                options.data = argv[++index];
+            } else if (argument == "--load-order" && index + 1 < argc) {
+                options.loadOrder = argv[++index];
+            } else if (argument == "--mo2" && index + 1 < argc) {
+                options.mo2 = argv[++index];
+            } else if (argument == "--profile" && index + 1 < argc) {
+                options.profile = argv[++index];
+            } else if (argument == "--mods-dir" && index + 1 < argc) {
+                options.modsDirectory = argv[++index];
             } else if (argument == "--cell" && index + 1 < argc) {
                 options.cell = argv[++index];
             } else if (argument == "--cell-formid" && index + 1 < argc) {
@@ -353,18 +369,91 @@ namespace
         std::cout << "\nSlope:\n";
         std::cout << std::format("  min:    {}\n  max:    {}\n  mean:   {}\n  median: {}\n  p95:    {}\n", analysis.slopeStats.min, analysis.slopeStats.max, analysis.slopeStats.mean, analysis.slopeStats.median, analysis.slopeStats.p95);
     }
+
+    void WriteLoadOrderJson(const std::filesystem::path& path, const navmesh::skyrim::offline::ResolvedLoadOrder& loadOrder)
+    {
+        std::ofstream stream(path, std::ios::trunc);
+        if (!stream) return;
+        stream << "{\n  \"records\": [\n";
+        for (std::size_t index = 0; index < loadOrder.records.size(); ++index) {
+            const auto& record = loadOrder.records[index];
+            stream << std::format("    {{\"form_id\": \"{:08X}\", \"type\": \"{}\", \"winning_plugin\": \"{}\", \"origin_chain\": [", record.formId, JsonEscape(record.type), JsonEscape(record.winning.plugin));
+            for (std::size_t origin = 0; origin < record.origins.size(); ++origin) stream << std::format("\"{}\"{}", JsonEscape(record.origins[origin].plugin), origin + 1 == record.origins.size() ? "" : ", ");
+            stream << "]}" << (index + 1 == loadOrder.records.size() ? "" : ",") << "\n";
+        }
+        stream << "  ]\n}\n";
+    }
+
+    void WriteCellsJson(const std::filesystem::path& path, const std::vector<navmesh::core::Cell>& cells)
+    {
+        std::ofstream stream(path, std::ios::trunc); if (!stream) return;
+        stream << "{\n  \"cells\": [\n";
+        for (std::size_t index = 0; index < cells.size(); ++index) {
+            const auto& cell = cells[index]; stream << std::format("    {{\"form_id\": \"{:08X}\", \"editor_id\": \"{}\", \"name\": \"{}\", \"interior\": {}", cell.id, JsonEscape(cell.editorId), JsonEscape(cell.name), cell.isInterior ? "true" : "false");
+            if (cell.exteriorCoordinates) stream << std::format(", \"coordinates\": [{}, {}]", (*cell.exteriorCoordinates)[0], (*cell.exteriorCoordinates)[1]);
+            stream << "}" << (index + 1 == cells.size() ? "" : ",") << "\n";
+        }
+        stream << "  ]\n}\n";
+    }
 }
 
 int main(int argc, char** argv)
 {
-    const auto options = ParseArgs(argc, argv);
-    if (options.plugin.empty()) {
-        std::cerr << "Usage: navmesh-offline --plugin <plugin.esm> [--cell-formid <hex>] [--editor-id <id>] [--cell <name>] [--worldspace <name>] [--cell-x <n> --cell-y <n>] [--list-cells] [--output <dir>] [--diagnostics] [--export-geometry <path>] [--export-analysis <path>] [--surface-search-radius <n>] [--max-support-distance <n>] [--max-slope <n>]\n";
+    auto options = ParseArgs(argc, argv);
+    if (options.mo2.empty() && options.plugin.empty() && options.loadOrder.empty()) {
+        std::cerr << "Usage: navmesh-offline --mo2 <instance-or-portable-root> --profile <existing-profile> [--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex>] --output <dir>\nDeveloper/test override: --data <Data> --load-order <plugins.txt>.\n";
         return 1;
+    }
+    if (!options.mo2.empty() && options.profile.empty()) { std::cerr << "--mo2 requires --profile naming an existing MO2 profile.\n"; return 1; }
+
+    std::optional<navmesh::skyrim::offline::ResolvedLoadOrder> resolved;
+    std::optional<navmesh::skyrim::offline::Mo2ProfileInput> mo2Input;
+    if (!options.mo2.empty()) {
+        std::filesystem::create_directories(options.output);
+        std::cerr << "Importing MO2 profile and virtual-file winners...\n";
+        if (!options.modsDirectory.empty()) std::cerr << "Using --mods-dir override: " << options.modsDirectory.string() << "\n";
+        try {
+            mo2Input = navmesh::skyrim::offline::ImportMo2Profile(options.mo2, options.profile,
+                options.modsDirectory.empty() ? std::nullopt : std::optional(options.modsDirectory));
+        } catch (const std::exception& error) {
+            mo2Input = navmesh::skyrim::offline::Mo2ProfileInput{ .instanceRoot = options.mo2, .profile = options.profile };
+            mo2Input->diagnostics.push_back({ navmesh::skyrim::offline::DiagnosticKind::InvalidPlugin, options.mo2.string(), std::string("MO2 import failed: ") + error.what() });
+        }
+        if (!navmesh::skyrim::offline::WriteInputReport(options.output / "input-report.json", *mo2Input)) std::cerr << "Failed to write input-report.json.\n";
+        std::cerr << "Effective MO2 mods directory: " << mo2Input->modsDirectory.string() << "\n";
+        for (const auto& diagnostic : mo2Input->diagnostics) std::cerr << diagnostic.plugin << ": " << diagnostic.message << "\n";
+        if (mo2Input->pluginPaths.empty()) { std::cerr << "MO2 import found no usable active plugin paths; see input-report.json.\n"; return 2; }
+        mo2Input->looseAssetWinners.clear(); mo2Input->looseAssetWinners.shrink_to_fit(); mo2Input->enabledMods.clear(); mo2Input->enabledMods.shrink_to_fit();
+        options.data = mo2Input->gameData;
+        std::cerr << "Resolving worldspace and cell records from " << mo2Input->pluginPaths.size() << " active plugins...\n";
+        try {
+            resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = options.data, .plugins = mo2Input->pluginPaths, .indexReferencesAndNavmeshes = !options.listCells });
+        } catch (const std::exception& error) {
+            std::cerr << "Load-order resolution failed: " << error.what() << ". See input-report.json for the imported profile inputs.\n";
+            return 2;
+        }
+    } else if (!options.loadOrder.empty()) {
+        try { resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = options.data, .plugins = navmesh::skyrim::offline::ReadLoadOrderManifest(options.loadOrder), .indexReferencesAndNavmeshes = !options.listCells }); }
+        catch (const std::exception& error) { std::cerr << "Developer load-order resolution failed: " << error.what() << "\n"; return 2; }
+    }
+    if (resolved) {
+        std::size_t unsupported{};
+        for (const auto& diagnostic : resolved->diagnostics) {
+            if (diagnostic.kind == navmesh::skyrim::offline::DiagnosticKind::UnsupportedRecord) { ++unsupported; continue; }
+            std::cerr << diagnostic.plugin << ": " << diagnostic.message << "\n";
+        }
+        if (unsupported != 0) std::cerr << unsupported << " unsupported record variants were recorded in input-report.json/load-order.json.\n";
+    }
+    if (resolved && std::any_of(resolved->diagnostics.begin(), resolved->diagnostics.end(), [](const auto& d) { return d.kind == navmesh::skyrim::offline::DiagnosticKind::MissingMaster || d.kind == navmesh::skyrim::offline::DiagnosticKind::Cycle || d.kind == navmesh::skyrim::offline::DiagnosticKind::InvalidPlugin; })) return 2;
+    if (mo2Input && !navmesh::skyrim::offline::ProfileSnapshotMatches(*mo2Input)) {
+        std::cerr << "MO2 profile inputs changed while resolving the load order; rerun so the snapshot is coherent.\n";
+        return 2;
     }
 
     if (options.listCells) {
-        const auto cells = navmesh::skyrim::offline::ListCells(options.plugin);
+        if (resolved) { std::filesystem::create_directories(options.output); WriteLoadOrderJson(options.output / "load-order.json", *resolved); }
+        const auto cells = resolved ? resolved->cells : navmesh::skyrim::offline::ListCells(options.plugin);
+        if (!options.output.empty()) { std::filesystem::create_directories(options.output); WriteCellsJson(options.output / "cells.json", cells); }
         for (const auto& cell : cells) {
             std::cout << std::format("{:08X} editor_id=\"{}\" name=\"{}\" type={} coords=",
                 cell.id,
@@ -382,13 +471,25 @@ int main(int argc, char** argv)
     }
 
     std::filesystem::create_directories(options.output);
-    const auto cell = navmesh::skyrim::offline::LoadCell(options.plugin, options.cell, options.worldspace, options.cellX, options.cellY, options.cellFormId, options.editorId);
+    if (resolved) WriteLoadOrderJson(options.output / "load-order.json", *resolved);
+    auto cell = resolved ? std::optional<navmesh::core::Cell>{} : navmesh::skyrim::offline::LoadCell(options.plugin, options.cell, options.worldspace, options.cellX, options.cellY, options.cellFormId, options.editorId);
+    if (resolved) for (const auto& candidate : resolved->cells) {
+        const auto formMatch = options.cellFormId && candidate.id == *options.cellFormId;
+        const auto editorMatch = !options.editorId.empty() && candidate.editorId == options.editorId;
+        const auto coordinateMatch = candidate.exteriorCoordinates && options.cellX && options.cellY && (*candidate.exteriorCoordinates)[0] == *options.cellX && (*candidate.exteriorCoordinates)[1] == *options.cellY;
+        if ((!options.cellFormId && options.editorId.empty() && !options.cellX && !options.cellY) || formMatch || editorMatch || coordinateMatch) { cell = candidate; break; }
+    }
     if (!cell) {
-        std::cerr << "No matching Skyrim cell was found in " << options.plugin << "\n";
+        std::cerr << "No matching Skyrim cell was found in " << (resolved ? options.loadOrder : options.plugin) << "\n";
         return 2;
     }
+    if (resolved) if (const auto* winning = resolved->FindWinning(cell->id)) {
+        std::cout << "Winning CELL: " << winning->winning.plugin << "\nOverride chain:";
+        for (const auto& origin : winning->origins) std::cout << " " << origin.plugin;
+        std::cout << "\n";
+    }
 
-    const auto geometry = navmesh::skyrim::offline::ExtractGeometry(options.plugin.parent_path(), *cell, options.output / ".bsa-cache");
+    const auto geometry = navmesh::skyrim::offline::ExtractGeometry(resolved ? options.data : options.plugin.parent_path(), *cell, options.output / ".bsa-cache");
     navmesh::reproducibility::ExportMetadata metadata{
         .inputPlugin = options.plugin,
         .selectedCell = &*cell,
