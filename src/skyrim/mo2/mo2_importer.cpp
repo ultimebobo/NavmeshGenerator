@@ -34,17 +34,38 @@ namespace
     std::string DecodeQtPath(std::string value)
     {
         constexpr std::string_view prefix = "@ByteArray(";
+        value = Trim(std::move(value));
         if (value.starts_with(prefix) && value.ends_with(')')) value = value.substr(prefix.size(), value.size() - prefix.size() - 1);
         std::string decoded; decoded.reserve(value.size());
         for (std::size_t index = 0; index < value.size(); ++index) {
             if (value[index] == '\\' && index + 1 < value.size() && value[index + 1] == '\\') { decoded.push_back('\\'); ++index; }
             else decoded.push_back(value[index]);
         }
+        // QSettings serializes Windows paths in @ByteArray values with escaped
+        // backslashes. Normalize after unescaping so both portable and global
+        // MO2 instances hand std::filesystem a canonical absolute path.
+        std::replace(decoded.begin(), decoded.end(), '\\', '/');
         return decoded;
+    }
+    std::string ReadIniText(const std::filesystem::path& path)
+    {
+        std::ifstream input(path, std::ios::binary); std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
+        if (bytes.size() >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF))) {
+            const bool littleEndian = bytes[0] == 0xFF; std::string utf8;
+            for (std::size_t index = 2; index + 1 < bytes.size(); index += 2) {
+                const auto unit = static_cast<std::uint16_t>(littleEndian ? bytes[index] | (static_cast<std::uint16_t>(bytes[index + 1]) << 8) : bytes[index + 1] | (static_cast<std::uint16_t>(bytes[index]) << 8));
+                if (unit < 0x80) utf8.push_back(static_cast<char>(unit));
+                else if (unit < 0x800) { utf8.push_back(static_cast<char>(0xC0 | (unit >> 6))); utf8.push_back(static_cast<char>(0x80 | (unit & 0x3F))); }
+                else { utf8.push_back(static_cast<char>(0xE0 | (unit >> 12))); utf8.push_back(static_cast<char>(0x80 | ((unit >> 6) & 0x3F))); utf8.push_back(static_cast<char>(0x80 | (unit & 0x3F))); }
+            }
+            return utf8;
+        }
+        if (bytes.size() >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) return std::string(reinterpret_cast<const char*>(bytes.data() + 3), bytes.size() - 3);
+        return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     }
     std::map<std::string, std::string> ReadIni(const std::filesystem::path& path)
     {
-        std::map<std::string, std::string> values; std::ifstream input(path); std::string line;
+        std::map<std::string, std::string> values; std::istringstream input(ReadIniText(path)); std::string line;
         while (std::getline(input, line)) { line = Trim(line); if (line.empty() || line[0] == '#' || line[0] == ';' || line[0] == '[') continue; const auto equals = line.find('='); if (equals != std::string::npos) values[Lower(Trim(line.substr(0, equals)))] = DecodeQtPath(Trim(line.substr(equals + 1))); }
         return values;
     }
@@ -78,6 +99,44 @@ namespace
             error.clear(); iterator.increment(error);
         }
     }
+    std::filesystem::path LooseAssetCachePath(const std::filesystem::path& directory, const std::string& snapshotHash)
+    {
+        return directory / ("loose-assets-" + snapshotHash + ".tsv");
+    }
+    bool ReadLooseAssetCache(const std::filesystem::path& path, std::vector<VirtualFile>& files)
+    {
+        std::vector<VirtualFile> cached; std::ifstream input(path, std::ios::binary); std::string line;
+        if (!input || !std::getline(input, line) || line != "navmesh-mo2-loose-assets-v1") return false;
+        while (std::getline(input, line)) {
+            const auto first = line.find('\t'); const auto second = first == std::string::npos ? std::string::npos : line.find('\t', first + 1);
+            if (first == std::string::npos || second == std::string::npos) return false;
+            VirtualFile file{ line.substr(0, first), std::filesystem::path(line.substr(first + 1, second - first - 1)), line.substr(second + 1) };
+            if (!std::filesystem::is_regular_file(file.physicalPath)) return false;
+            cached.push_back(std::move(file));
+        }
+        if (!static_cast<bool>(input) && !input.eof()) return false;
+        files = std::move(cached); return true;
+    }
+    void WriteLooseAssetCache(const std::filesystem::path& path, const std::vector<VirtualFile>& files)
+    {
+        std::error_code error; std::filesystem::create_directories(path.parent_path(), error); if (error) return;
+        std::ofstream output(path, std::ios::trunc | std::ios::binary); if (!output) return;
+        output << "navmesh-mo2-loose-assets-v1\n";
+        for (const auto& file : files) output << file.logicalPath << '\t' << PathUtf8(file.physicalPath) << '\t' << file.source << '\n';
+    }
+    void AddTopLevelPluginAndArchiveFiles(std::map<std::string, VirtualFile>& winners, const std::filesystem::path& root, const std::string& source)
+    {
+        std::error_code error;
+        if (!std::filesystem::is_directory(root, error)) return;
+        for (std::filesystem::directory_iterator iterator(root, std::filesystem::directory_options::skip_permission_denied, error), end; iterator != end; iterator.increment(error)) {
+            if (error) { error.clear(); continue; }
+            const auto& entry = *iterator; if (!entry.is_regular_file(error) || error) { error.clear(); continue; }
+            const auto extension = Lower(PathUtf8(entry.path().extension()));
+            if (extension == ".esm" || extension == ".esp" || extension == ".esl" || extension == ".bsa") {
+                const auto logical = Lower(PathUtf8(entry.path().filename())); winners[logical] = { logical, entry.path(), source };
+            }
+        }
+    }
     bool PluginName(const std::filesystem::path& path) { const auto ext = Lower(PathUtf8(path.extension())); return ext == ".esm" || ext == ".esp" || ext == ".esl"; }
     std::uint16_t U16(const std::vector<std::uint8_t>& bytes, std::size_t offset) { return static_cast<std::uint16_t>(bytes[offset]) | static_cast<std::uint16_t>(bytes[offset + 1]) << 8; }
     std::uint32_t U32(const std::vector<std::uint8_t>& bytes, std::size_t offset) { return static_cast<std::uint32_t>(bytes[offset]) | static_cast<std::uint32_t>(bytes[offset + 1]) << 8 | static_cast<std::uint32_t>(bytes[offset + 2]) << 16 | static_cast<std::uint32_t>(bytes[offset + 3]) << 24; }
@@ -109,7 +168,7 @@ namespace navmesh::skyrim::offline
         return digest.str() == input.snapshotHash;
     }
 
-    Mo2ProfileInput ImportMo2Profile(const std::filesystem::path& requestedRoot, const std::string& profile, const std::optional<std::filesystem::path>& modsDirectoryOverride)
+    Mo2ProfileInput ImportMo2Profile(const std::filesystem::path& requestedRoot, const std::string& profile, const std::optional<std::filesystem::path>& modsDirectoryOverride, const std::filesystem::path& cacheDirectory)
     {
         Mo2ProfileInput result{ .instanceRoot = requestedRoot, .profile = profile }; const auto iniPath = requestedRoot / "ModOrganizer.ini";
         if (!std::filesystem::is_regular_file(iniPath)) { result.diagnostics.push_back({ DiagnosticKind::InvalidPlugin, PathUtf8(requestedRoot), "MO2 root does not contain ModOrganizer.ini." }); return result; }
@@ -121,6 +180,11 @@ namespace navmesh::skyrim::offline
         const auto mods = modsDirectoryOverride ? *modsDirectoryOverride : configuredMods;
         const auto overwrite = ConfigPath(ini, "overwrite_directory", requestedRoot, base, std::filesystem::is_directory(base / "overwrite") ? base / "overwrite" : requestedRoot / "overwrite");
         const auto game = ConfigPath(ini, "gamepath", requestedRoot, base, {}); result.gameData = std::filesystem::is_directory(game / "Data") ? game / "Data" : game; result.profileDirectory = profiles / profile; result.modsDirectory = mods;
+        if (game.empty()) {
+            const auto configured = ini.find("gamepath");
+            std::string keys; for (const auto& [key, _] : ini) { if (!keys.empty()) keys += ", "; keys += key; }
+            result.diagnostics.push_back({ DiagnosticKind::InvalidPlugin, "gamePath", configured == ini.end() ? "MO2 gamePath is absent from ModOrganizer.ini; parsed keys: " + keys : "MO2 gamePath decoded to an empty path." });
+        }
         if (modsDirectoryOverride && !std::filesystem::is_directory(mods)) result.diagnostics.push_back({ DiagnosticKind::InvalidPlugin, PathUtf8(mods), "--mods-dir does not name an existing directory." });
         const auto modlist = result.profileDirectory / "modlist.txt"; const auto plugins = result.profileDirectory / "plugins.txt"; const auto loadorder = result.profileDirectory / "loadorder.txt";
         for (const auto& file : { modlist, plugins, loadorder }) if (!std::filesystem::is_regular_file(file)) result.diagnostics.push_back({ DiagnosticKind::InvalidPlugin, PathUtf8(file), "Required MO2 profile file is missing." });
@@ -133,11 +197,22 @@ namespace navmesh::skyrim::offline
         std::vector<std::string> order; std::ifstream orderInput(loadorder);
         while (std::getline(orderInput, line)) { line = Trim(line); if (!line.empty() && active.contains(Lower(line))) order.push_back(line); }
         for (const auto& plugin : active) if (std::none_of(order.begin(), order.end(), [&](const auto& p) { return Lower(p) == plugin; })) result.diagnostics.push_back({ DiagnosticKind::UnsupportedRecord, plugin, "Active plugin is absent from loadorder.txt." });
-        std::map<std::string, VirtualFile> winners; AddFiles(winners, result.gameData, "game Data"); for (const auto& mod : result.enabledMods) AddFiles(winners, mod.path, mod.name); AddFiles(winners, overwrite, "Overwrite");
+        std::ostringstream digest; digest << std::hex << std::setw(16) << std::setfill('0') << hash; result.snapshotHash = digest.str();
+        std::map<std::string, VirtualFile> winners;
+        const auto cachePath = cacheDirectory.empty() ? std::filesystem::path{} : LooseAssetCachePath(cacheDirectory, result.snapshotHash);
+        const auto cacheLoaded = !cachePath.empty() && ReadLooseAssetCache(cachePath, result.looseAssetWinners);
+        result.looseAssetCacheUsed = cacheLoaded;
+        if (cacheLoaded) {
+            for (const auto& file : result.looseAssetWinners) winners[file.logicalPath] = file;
+        } else {
+            AddFiles(winners, result.gameData, "game Data"); for (const auto& mod : result.enabledMods) AddFiles(winners, mod.path, mod.name); AddFiles(winners, overwrite, "Overwrite");
+        }
+        AddTopLevelPluginAndArchiveFiles(winners, result.gameData, "game Data"); for (const auto& mod : result.enabledMods) AddTopLevelPluginAndArchiveFiles(winners, mod.path, mod.name); AddTopLevelPluginAndArchiveFiles(winners, overwrite, "Overwrite");
         std::size_t archiveCount{};
         for (const auto& [logical, file] : winners) {
             if (Lower(PathUtf8(file.physicalPath.extension())) == ".bsa") { ++archiveCount; continue; }
-            if (PluginName(file.physicalPath)) continue; result.looseAssetWinners.push_back(file);
+            if (PluginName(file.physicalPath)) continue;
+            if (!cacheLoaded) result.looseAssetWinners.push_back(file);
         }
         if (archiveCount != 0) result.diagnostics.push_back({ DiagnosticKind::UnsupportedRecord, "MO2 virtual file map", std::to_string(archiveCount) + " BSA archives were found. Their contained assets are not indexed in milestone 1; only loose-file winners are reported." });
         // Skyrim's core masters may be implicit in an MO2 profile. Derive the
@@ -161,14 +236,15 @@ namespace navmesh::skyrim::offline
             if (!insertedMaster) ++index;
         }
         for (const auto& name : order) { const auto it = winners.find(Lower(name)); if (it == winners.end()) result.diagnostics.push_back({ DiagnosticKind::MissingMaster, name, "Active plugin has no physical winner in MO2's virtual file map." }); else result.pluginPaths.push_back(it->second.physicalPath); }
-        std::ostringstream digest; digest << std::hex << std::setw(16) << std::setfill('0') << hash; result.snapshotHash = digest.str(); return result;
+        if (!cachePath.empty() && !cacheLoaded) WriteLooseAssetCache(cachePath, result.looseAssetWinners);
+        return result;
     }
 
     namespace
     {
         void WriteJson(std::ostream& json, const Mo2ProfileInput& input)
         {
-            json << "{\n  \"snapshot_hash\": \"" << input.snapshotHash << "\",\n  \"profile\": \"" << Escape(input.profile) << "\",\n  \"instance_root\": \"" << Escape(PathUtf8(input.instanceRoot)) << "\",\n  \"game_data\": \"" << Escape(PathUtf8(input.gameData)) << "\",\n  \"mods_directory\": \"" << Escape(PathUtf8(input.modsDirectory)) << "\",\n  \"profile_files\": [\n";
+            json << "{\n  \"snapshot_hash\": \"" << input.snapshotHash << "\",\n  \"loose_asset_cache_used\": " << (input.looseAssetCacheUsed ? "true" : "false") << ",\n  \"profile\": \"" << Escape(input.profile) << "\",\n  \"instance_root\": \"" << Escape(PathUtf8(input.instanceRoot)) << "\",\n  \"game_data\": \"" << Escape(PathUtf8(input.gameData)) << "\",\n  \"mods_directory\": \"" << Escape(PathUtf8(input.modsDirectory)) << "\",\n  \"profile_files\": [\n";
             const std::vector<std::filesystem::path> profileFiles = { input.profileDirectory / "modlist.txt", input.profileDirectory / "plugins.txt", input.profileDirectory / "loadorder.txt" };
             for (std::size_t i = 0; i < profileFiles.size(); ++i) { const auto exists = std::filesystem::exists(profileFiles[i]); const auto stamp = exists ? std::to_string(std::filesystem::last_write_time(profileFiles[i]).time_since_epoch().count()) : "missing"; json << std::format("    {{\"path\": \"{}\", \"timestamp\": \"{}\"}}{}\n", Escape(PathUtf8(profileFiles[i])), stamp, i + 1 == profileFiles.size() ? "" : ","); }
             json << "  ],\n  \"active_plugins\": [\n";

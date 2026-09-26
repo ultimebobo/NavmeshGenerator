@@ -6,11 +6,14 @@
 #include "core/reproducibility/export_metadata.h"
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
 namespace navmesh::skyrim::offline
 {
+    using GeometryProgressCallback = std::function<void(std::size_t completedReferences, std::size_t totalReferences)>;
+    using GeometryCancellationCallback = std::function<bool()>;
     struct GeometryReferenceReport
     {
         std::uint32_t formId{};
@@ -58,7 +61,7 @@ namespace navmesh::skyrim::offline
         bool collisionGeometrySupported{};
     };
 
-    [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path& dataDirectory, const core::Cell& cell, const std::filesystem::path& cacheDirectory = {});
+    [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path& dataDirectory, const core::Cell& cell, const std::filesystem::path& cacheDirectory = {}, const GeometryProgressCallback& progress = {}, const GeometryCancellationCallback& cancelled = {});
     [[nodiscard]] bool WriteGeometryObj(const std::filesystem::path& outputPath, const GeometryExtraction& geometry);
     [[nodiscard]] bool WriteGeometryJson(const std::filesystem::path& outputPath, const core::Cell& cell, const GeometryExtraction& geometry, const reproducibility::ExportMetadata& metadata);
 }

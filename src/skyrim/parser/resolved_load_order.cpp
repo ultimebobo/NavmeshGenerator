@@ -65,7 +65,10 @@ namespace
             else if ((kind == "XLKR" || kind == "XESP" || kind == "XNDP" || kind == "XTEL") && size >= 4) record.linkedFormIds.push_back(U32(payload, data));
             else if (kind == "DATA" && (record.type == "REFR" || record.type == "ACHR") && size >= 24) { std::array<float, 6> transform{}; std::memcpy(transform.data(), payload.data() + data, sizeof(transform)); record.transform = transform; }
             else if (kind == "XSCL" && (record.type == "REFR" || record.type == "ACHR") && size >= 4) { float scale{}; std::memcpy(&scale, payload.data() + data, sizeof(scale)); record.referenceScale = scale; }
-            else if (kind == "XCLC" && size >= 12 && U32(payload, data + 8) == 0) record.exteriorCoordinates = { I32(payload, data), I32(payload, data + 4) };
+            // XCLC is present on exterior CELL records. Its optional third
+            // DWORD is a cell flag field, not an interior/exterior discriminator
+            // (Riverwood, for example, legitimately has non-zero flags).
+            else if (kind == "XCLC" && size >= 8) record.exteriorCoordinates = { I32(payload, data), I32(payload, data + 4) };
             else if (kind == "NVNM" && record.type == "NAVM") {
                 if (size < 0x18) { error = "NVNM is shorter than the verified vertex-count header"; return false; }
                 const auto vertexCount = U32(payload, data + 0x10); const auto vertices = data + 0x14;
@@ -82,6 +85,23 @@ namespace
         }
         if (extendedSize) { error = "XXXX extended-size marker has no following subrecord"; return false; }
         return true;
+    }
+    std::optional<navmesh::core::NavMesh> DecodeNavMesh(const ResolvedRecord& record)
+    {
+        if (!record.raw || !record.navm || !record.navm->supported) return std::nullopt;
+        const auto& layout = *record.navm; const auto& payload = record.raw->decodedPayload;
+        if (!Has(payload, static_cast<std::size_t>(layout.vertices.offset), static_cast<std::size_t>(layout.vertices.size)) || !Has(payload, static_cast<std::size_t>(layout.triangles.offset), static_cast<std::size_t>(layout.triangles.size))) return std::nullopt;
+        navmesh::core::NavMesh mesh{ .id = record.formId }; mesh.vertices.reserve(layout.vertexCount); mesh.polygons.reserve(layout.triangleCount);
+        for (std::size_t index{}; index < layout.vertexCount; ++index) {
+            navmesh::core::Vec3 vertex{}; std::memcpy(&vertex, payload.data() + layout.vertices.offset + index * 12, sizeof(vertex)); mesh.vertices.push_back(vertex);
+        }
+        for (std::size_t index{}; index < layout.triangleCount; ++index) {
+            const auto offset = static_cast<std::size_t>(layout.triangles.offset) + index * 16;
+            navmesh::core::NavPolygon polygon{};
+            for (std::size_t edge{}; edge < 3; ++edge) { polygon.vertices[edge] = U16(payload, offset + edge * 2); polygon.neighbors[edge] = U16(payload, offset + 6 + edge * 2); }
+            polygon.flags = U16(payload, offset + 12); mesh.polygons.push_back(polygon);
+        }
+        return mesh;
     }
 }
 
@@ -113,7 +133,7 @@ namespace navmesh::skyrim::offline
                 if ((kind == "GRUP" && size < 24) || next > end) { diagnostics.push_back({ DiagnosticKind::InvalidPlugin, plugin, "A record/group size exceeds its containing group." }); return; }
                 if (kind == "GRUP") {
                     const auto label = U32(b, p + 8); const auto groupType = U32(b, p + 12);
-                    self(self, p + 24, next, groupType == 6 || groupType == 8 || groupType == 9 ? label : cell,
+                    self(self, p + 24, next, groupType == 6 || groupType == 8 || groupType == 9 || groupType == 10 ? label : cell,
                         groupType == 1 ? label : world, persistent || groupType == 8, temporary || groupType == 9);
                 } else {
                     const auto flags = U32(b, p + 8); const auto payload = p + 24;
@@ -153,14 +173,17 @@ namespace navmesh::skyrim::offline
     {
         struct Source { std::filesystem::path path; std::vector<std::string> masters; std::vector<ResolvedRecord> records; bool light{}; };
         ResolvedLoadOrder result; std::vector<Source> sources; std::unordered_map<std::string, std::size_t> byName;
-        for (const auto& requested : input.plugins) {
+        for (std::size_t requestedIndex = 0; requestedIndex < input.plugins.size(); ++requestedIndex) {
+            const auto& requested = input.plugins[requestedIndex];
             auto path = requested.is_absolute() ? requested : input.dataDirectory / requested;
+            if (input.progress) input.progress(requestedIndex, input.plugins.size(), path);
             const auto name = Lower(path.filename().string());
             if (byName.contains(name)) { result.diagnostics.push_back({ DiagnosticKind::DuplicatePlugin, path.filename().string(), "The load-order manifest names this plugin more than once." }); continue; }
             Source source{ .path = path }; reader.Read(path, source.records, source.masters, source.light, result.diagnostics, input.indexReferencesAndNavmeshes);
             if (!input.indexReferencesAndNavmeshes) std::erase_if(source.records, [](const auto& record) { return record.type != "WRLD" && record.type != "CELL"; });
             byName.emplace(name, sources.size()); result.plugins.push_back(path.filename().string()); sources.push_back(std::move(source));
         }
+        if (input.progress) input.progress(input.plugins.size(), input.plugins.size(), {});
         for (const auto& source : sources) for (const auto& master : source.masters) if (!byName.contains(Lower(master))) result.diagnostics.push_back({ DiagnosticKind::MissingMaster, source.path.filename().string(), "Missing master '" + master + "'. Add it before this plugin in --load-order." });
         for (std::size_t i = 0; i < sources.size(); ++i) for (const auto& master : sources[i].masters) if (const auto it = byName.find(Lower(master)); it != byName.end() && it->second >= i) result.diagnostics.push_back({ DiagnosticKind::Cycle, sources[i].path.filename().string(), "Master '" + master + "' must occur earlier in the load order." });
         std::vector<std::uint32_t> full(sources.size()), light(sources.size()); std::uint32_t nextFull = 0, nextLight = 0;
@@ -201,12 +224,22 @@ namespace navmesh::skyrim::offline
             }
             else { record.origins.push_back(record.winning); winners.emplace(*global, result.records.size()); result.records.push_back(std::move(record)); }
         }
-        for (const auto& record : result.records) if (record.type == "CELL") result.cells.push_back({ .id = record.formId, .editorId = record.editorId, .name = record.name, .isInterior = !record.exteriorCoordinates.has_value(), .exteriorCoordinates = record.exteriorCoordinates });
+        std::unordered_map<std::uint32_t, std::size_t> cellsById;
+        for (const auto& record : result.records) if (record.type == "CELL") {
+            cellsById.emplace(record.formId, result.cells.size());
+            result.cells.push_back({ .id = record.formId, .editorId = record.editorId, .name = record.name, .isInterior = !record.exteriorCoordinates.has_value(), .exteriorCoordinates = record.exteriorCoordinates });
+        }
+        for (const auto& record : result.records) {
+            if (record.type != "NAVM" || !record.cellFormId) continue;
+            const auto cell = cellsById.find(*record.cellFormId); if (cell == cellsById.end()) continue;
+            if (const auto mesh = DecodeNavMesh(record)) result.cells[cell->second].navMeshes.push_back(*mesh);
+        }
         // Scene assembly intentionally uses only winning records: the reference and
         // its base object may originate in different plugins, both of which remain
         // attached as provenance for the neutral scene boundary.
-        for (auto& cell : result.cells) for (const auto& record : result.records) {
-            if ((record.type != "REFR" && record.type != "ACHR") || record.cellFormId != cell.id) continue;
+        for (const auto& record : result.records) {
+            if ((record.type != "REFR" && record.type != "ACHR") || !record.cellFormId) continue;
+            const auto cell = cellsById.find(*record.cellFormId); if (cell == cellsById.end()) continue;
             core::Reference reference{ .id = record.formId, .recordType = record.type, .editorId = record.editorId, .sourcePlugin = record.winning.plugin };
             if (!record.referencedFormIds.empty()) reference.baseObjectId = record.referencedFormIds.front();
             if (record.transform) {
@@ -215,14 +248,15 @@ namespace navmesh::skyrim::offline
                 reference.rotation = { transform[3], transform[4], transform[5] };
             }
             if (record.referenceScale) reference.scale = *record.referenceScale;
-            if (const auto* base = result.FindWinning(reference.baseObjectId)) {
+            if (const auto baseIndex = winners.find(reference.baseObjectId); baseIndex != winners.end()) {
+                const auto* base = &result.records[baseIndex->second];
                 reference.modelPath = base->modelPath.value_or("");
                 reference.basePlugin = base->winning.plugin;
                 reference.baseRecordType = base->type;
             }
             // A reference-local MODL is unusual, but remains a valid resolved source.
             if (reference.modelPath.empty() && record.modelPath) reference.modelPath = *record.modelPath;
-            cell.references.push_back(std::move(reference));
+            result.cells[cell->second].references.push_back(std::move(reference));
         }
         return result;
     }

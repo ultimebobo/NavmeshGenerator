@@ -39,6 +39,11 @@ namespace navmesh::core
     {
         std::vector<SceneNode> nodes;
         std::vector<GeometrySource> geometrySources;
+        // Visual meshes retained for scene inspection when authoritative
+        // collision also exists.  They are deliberately separate from mesh:
+        // render geometry must not become navigation-support evidence.
+        Mesh renderFallbackMesh;
+        std::vector<TriangleProvenance> renderFallbackTriangleProvenance;
         Mesh mesh;
         std::vector<TriangleProvenance> triangleProvenance;
         std::vector<CoverageEntry> coverage;

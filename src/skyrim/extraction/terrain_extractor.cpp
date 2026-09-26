@@ -12,14 +12,18 @@ namespace
         if (!record.raw) { error = "LAND record payload was not retained"; return std::nullopt; }
         const auto it = std::find_if(record.raw->subrecords.begin(), record.raw->subrecords.end(), [](const auto& sub) { return sub.type == "VHGT"; });
         if (it == record.raw->subrecords.end()) { error = "LAND record has no VHGT height subrecord"; return std::nullopt; }
-        constexpr std::size_t kExpectedSize = 4 + 33 * 33 - 1;
-        if (it->data.size() != kExpectedSize) { error = std::format("VHGT has {} bytes; expected {}", it->data.size(), kExpectedSize); return std::nullopt; }
+        // VHGT stores a height offset followed by one signed delta for every
+        // sample in its 33x33 grid.  The remaining three bytes in an on-disk
+        // record are alignment padding.
+        constexpr std::size_t kRequiredSize = 4 + 33 * 33;
+        if (it->data.size() < kRequiredSize) { error = std::format("VHGT has {} bytes; requires at least {}", it->data.size(), kRequiredSize); return std::nullopt; }
         float base{}; std::memcpy(&base, it->data.data(), sizeof(base));
         if (!std::isfinite(base)) { error = "VHGT base height is not finite"; return std::nullopt; }
-        std::vector<float> heights(33 * 33); heights[0] = base;
-        for (std::size_t index = 1; index < heights.size(); ++index) {
-            const auto previous = index % 33 == 0 ? index - 33 : index - 1;
-            heights[index] = heights[previous] + static_cast<float>(static_cast<std::int8_t>(it->data[4 + index - 1])) * 8.0F;
+        std::vector<float> heights(33 * 33);
+        for (std::size_t index{}; index < heights.size(); ++index) {
+            const auto previous = index == 0 ? 0 : index % 33 == 0 ? index - 33 : index - 1;
+            const auto baseHeight = index == 0 ? base * 8.0F : heights[previous];
+            heights[index] = baseHeight + static_cast<float>(static_cast<std::int8_t>(it->data[4 + index])) * 8.0F;
         }
         return heights;
     }

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -39,7 +40,8 @@ namespace navmesh::skyrim::offline
         std::vector<std::string> plugins; std::vector<ResolvedRecord> records; std::vector<core::Cell> cells; std::vector<Diagnostic> diagnostics;
         [[nodiscard]] const ResolvedRecord* FindWinning(std::uint32_t formId) const;
     };
-    struct LoadOrderInput { std::filesystem::path dataDirectory; std::vector<std::filesystem::path> plugins; bool indexReferencesAndNavmeshes{ true }; };
+    using LoadOrderProgressCallback = std::function<void(std::size_t completedPlugins, std::size_t totalPlugins, const std::filesystem::path& currentPlugin)>;
+    struct LoadOrderInput { std::filesystem::path dataDirectory; std::vector<std::filesystem::path> plugins; bool indexReferencesAndNavmeshes{ true }; LoadOrderProgressCallback progress{}; };
 
     // Parser boundary: a mature parser can replace DirectPluginReader without changing load-order callers.
     class IPluginReader {

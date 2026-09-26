@@ -67,6 +67,7 @@ namespace
     struct NifGeometry {
         TriangleGeometry render;
         TriangleGeometry collision;
+        std::vector<std::string> collisionShapeTypes;
         bool nonSolidCollision{};
         std::string version;
     };
@@ -94,22 +95,124 @@ namespace
         }
     }
 
+    void AddNiTriStripsTriangles(const nifly::NiTriStripsData& data, const nifly::bhkRigidBody& body, TriangleGeometry& result)
+    {
+        std::vector<nifly::Triangle> triangles;
+        if (!data.GetTriangles(triangles)) return;
+        const auto base = static_cast<std::uint32_t>(result.vertices.size());
+        result.vertices.reserve(result.vertices.size() + data.vertices.size());
+        for (const auto& vertex : data.vertices) result.vertices.push_back(ApplyRigidBodyTransform(body, vertex));
+        for (const auto& triangle : triangles) {
+            if (triangle.p1 >= data.vertices.size() || triangle.p2 >= data.vertices.size() || triangle.p3 >= data.vertices.size()) { ++result.invalidIndices; continue; }
+            if (triangle.p1 == triangle.p2 || triangle.p1 == triangle.p3 || triangle.p2 == triangle.p3) { ++result.degenerateTriangles; continue; }
+            result.triangles.push_back({ { base + triangle.p1, base + triangle.p2, base + triangle.p3 } });
+        }
+    }
+
+    void AddCompressedBigTriangles(const nifly::bhkCompressedMeshShapeData& data, const nifly::bhkRigidBody& body, TriangleGeometry& result)
+    {
+        // "Big" vertices are already stored as floating-point coordinates.
+        // They cover the non-quantised triangle stream in compressed Havok
+        // meshes, so they can be exported exactly without guessing at the
+        // packed-chunk bit layout.
+        const auto base = static_cast<std::uint32_t>(result.vertices.size());
+        result.vertices.reserve(result.vertices.size() + data.bigVerts.size());
+        for (auto vertex = data.bigVerts.cbegin(); vertex != data.bigVerts.cend(); ++vertex) {
+            result.vertices.push_back(ApplyRigidBodyTransform(body, { vertex->x, vertex->y, vertex->z }));
+        }
+        for (auto triangle = data.bigTris.cbegin(); triangle != data.bigTris.cend(); ++triangle) {
+            if (triangle->triangle1 >= data.bigVerts.size() || triangle->triangle2 >= data.bigVerts.size() || triangle->triangle3 >= data.bigVerts.size()) { ++result.invalidIndices; continue; }
+            if (triangle->triangle1 == triangle->triangle2 || triangle->triangle1 == triangle->triangle3 || triangle->triangle2 == triangle->triangle3) { ++result.degenerateTriangles; continue; }
+            result.triangles.push_back({ { base + triangle->triangle1, base + triangle->triangle2, base + triangle->triangle3 } });
+        }
+    }
+
+    void AddCompressedChunkTriangles(const nifly::bhkCompressedMeshShapeData& data, const nifly::bhkRigidBody& body, TriangleGeometry& result)
+    {
+        for (auto chunk = data.chunks.cbegin(); chunk != data.chunks.cend(); ++chunk) {
+            // Chunk::verts is a flat [x, y, z] u16 component array.  Each
+            // component is quantized using the mesh-wide error term around
+            // this chunk's local translation.  Indices address the resulting
+            // vertices directly (not the flat component array).
+            const auto vertexCount = static_cast<std::uint32_t>(chunk->verts.size() / 3);
+            const auto base = static_cast<std::uint32_t>(result.vertices.size());
+            auto component = chunk->verts.cbegin();
+            for (std::uint32_t vertex{}; vertex < vertexCount; ++vertex) {
+                const nifly::Vector3 position{
+                    chunk->translation.x + static_cast<float>(*component++) * data.error,
+                    chunk->translation.y + static_cast<float>(*component++) * data.error,
+                    chunk->translation.z + static_cast<float>(*component++) * data.error
+                };
+                result.vertices.push_back(ApplyRigidBodyTransform(body, position));
+            }
+
+            std::vector<std::uint16_t> indices;
+            indices.reserve(chunk->indices.size());
+            for (auto index = chunk->indices.cbegin(); index != chunk->indices.cend(); ++index) indices.push_back(*index);
+            const auto addTriangle = [&](const std::uint16_t first, const std::uint16_t second, const std::uint16_t third) {
+                if (first >= vertexCount || second >= vertexCount || third >= vertexCount) { ++result.invalidIndices; return; }
+                if (first == second || first == third || second == third) { ++result.degenerateTriangles; return; }
+                result.triangles.push_back({ { base + first, base + second, base + third } });
+            };
+
+            std::size_t offset{};
+            for (auto stripLength = chunk->strips.cbegin(); stripLength != chunk->strips.cend() && offset < indices.size(); ++stripLength) {
+                const auto end = std::min(offset + static_cast<std::size_t>(*stripLength), indices.size());
+                for (std::size_t index = offset; index + 2 < end; ++index) {
+                    if ((index - offset) % 2 == 0) addTriangle(indices[index], indices[index + 1], indices[index + 2]);
+                    else addTriangle(indices[index + 1], indices[index], indices[index + 2]);
+                }
+                offset = end;
+            }
+            for (; offset + 2 < indices.size(); offset += 3) addTriangle(indices[offset], indices[offset + 1], indices[offset + 2]);
+        }
+    }
+
     // SE static-world collision is normally bhkMoppBvTreeShape ->
     // bhkPackedNiTriStripsShape -> hkPackedNiTriStripsData.  Nifly retains the
     // packed vertices/triangles losslessly, so support that compact path first.
+    // Older assets can instead use bhkNiTriStripsShape -> NiTriStripsData;
+    // this is triangle data too, not a render-geometry approximation.
     // Other Havok primitives are intentionally reported as unsupported rather
     // than approximated with decorative render geometry.
-    void LoadPackedCollision(const nifly::NifFile& nif, TriangleGeometry& result, bool& nonSolidCollision)
+    void LoadPackedCollision(const nifly::NifFile& nif, TriangleGeometry& result, std::vector<std::string>& shapeTypes, bool& nonSolidCollision)
     {
         const auto& header = nif.GetHeader();
         std::unordered_set<std::uint32_t> reachablePacked;
         std::function<void(nifly::bhkShape*, const nifly::bhkRigidBody&)> visit = [&](nifly::bhkShape* shape, const nifly::bhkRigidBody& body) {
             if (!shape) return;
+            const std::string shapeName = shape->GetBlockName();
+            if (std::find(shapeTypes.begin(), shapeTypes.end(), shapeName) == shapeTypes.end()) shapeTypes.push_back(shapeName);
             if (auto* mopp = dynamic_cast<nifly::bhkMoppBvTreeShape*>(shape)) { visit(header.GetBlock(mopp->shapeRef), body); return; }
             if (auto* list = dynamic_cast<nifly::bhkListShape*>(shape)) { for (const auto& child : list->subShapeRefs) visit(header.GetBlock(child), body); return; }
             if (auto* packed = dynamic_cast<nifly::bhkPackedNiTriStripsShape*>(shape)) {
                 const auto id = header.GetBlockID(packed);
-                if (reachablePacked.insert(id).second) if (const auto* data = header.GetBlock(packed->dataRef)) AddPackedTriangles(*data, body, result);
+                if (reachablePacked.insert(id).second) if (const auto* data = header.GetBlock(packed->dataRef)) {
+                    AddPackedTriangles(*data, body, result);
+                    result.shapes.push_back("hkPackedNiTriStripsData");
+                }
+                return;
+            }
+            if (auto* triStrips = dynamic_cast<nifly::bhkNiTriStripsShape*>(shape)) {
+                const auto id = header.GetBlockID(triStrips);
+                if (reachablePacked.insert(id).second) {
+                    for (const auto& part : triStrips->partRefs) {
+                        if (const auto* data = header.GetBlock(part)) {
+                            AddNiTriStripsTriangles(*data, body, result);
+                            result.shapes.push_back("NiTriStripsData");
+                        }
+                    }
+                }
+                return;
+            }
+            if (auto* compressed = dynamic_cast<nifly::bhkCompressedMeshShape*>(shape)) {
+                const auto id = header.GetBlockID(compressed);
+                if (reachablePacked.insert(id).second) if (const auto* data = header.GetBlock(compressed->dataRef)) {
+                    const auto trianglesBefore = result.triangles.size();
+                    AddCompressedBigTriangles(*data, body, result);
+                    AddCompressedChunkTriangles(*data, body, result);
+                    if (result.triangles.size() > trianglesBefore) result.shapes.push_back("bhkCompressedMeshShape");
+                }
             }
         };
         for (std::uint32_t block = 0; block < header.GetNumBlocks(); ++block) {
@@ -119,7 +222,6 @@ namespace
             if (body && body->collisionResponse == nifly::RESPONSE_NONE) { nonSolidCollision = true; continue; }
             if (body) visit(header.GetBlock(body->shapeRef), *body);
         }
-        if (!result.triangles.empty()) result.shapes.push_back("hkPackedNiTriStripsData");
     }
 
     [[nodiscard]] NifGeometry LoadNif(const std::filesystem::path& path)
@@ -128,7 +230,7 @@ namespace
         nifly::NifFile nif;
         if (nif.Load(path) != 0 || !nif.IsValid()) return result;
         result.version = nif.GetHeader().GetVersion().String();
-        LoadPackedCollision(nif, result.collision, result.nonSolidCollision);
+        LoadPackedCollision(nif, result.collision, result.collisionShapeTypes, result.nonSolidCollision);
         for (auto* shape : nif.GetShapes()) {
             std::vector<nifly::Vector3> vertices;
             std::vector<nifly::Triangle> triangles;
@@ -193,6 +295,21 @@ namespace
         return path.find("\\effects\\") != std::string::npos || path.find("\\animated\\") != std::string::npos || path.find("\\fx\\") != std::string::npos;
     }
 
+    void AppendGeometry(const TriangleGeometry& geometry, const navmesh::core::Transform& transform, const std::size_t sourceIndex, navmesh::core::Mesh& mesh, std::vector<navmesh::core::TriangleProvenance>& provenance, std::size_t& invalidVertices)
+    {
+        const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
+        for (const auto& vertex : geometry.vertices) {
+            const auto transformed = transform.ApplyPoint(vertex);
+            if (!std::isfinite(transformed.x) || !std::isfinite(transformed.y) || !std::isfinite(transformed.z) || std::abs(transformed.x) > 1.0e7F || std::abs(transformed.y) > 1.0e7F || std::abs(transformed.z) > 1.0e7F) ++invalidVertices;
+            mesh.vertices.push_back(transformed);
+        }
+        for (std::size_t triangleIndex{}; triangleIndex < geometry.triangles.size(); ++triangleIndex) {
+            const auto& triangle = geometry.triangles[triangleIndex];
+            mesh.triangles.push_back({ { base + triangle.vertices[0], base + triangle.vertices[1], base + triangle.vertices[2] } });
+            provenance.push_back({ sourceIndex, triangleIndex });
+        }
+    }
+
     void ExtractBsaModels(const std::filesystem::path& dataDirectory, const std::filesystem::path& cacheDirectory, const navmesh::core::Cell& cell)
     {
         if (cacheDirectory.empty()) return;
@@ -215,11 +332,15 @@ namespace
 
 namespace navmesh::skyrim::offline
 {
-    GeometryExtraction ExtractGeometry(const std::filesystem::path& dataDirectory, const core::Cell& cell, const std::filesystem::path& cacheDirectory)
+    GeometryExtraction ExtractGeometry(const std::filesystem::path& dataDirectory, const core::Cell& cell, const std::filesystem::path& cacheDirectory, const GeometryProgressCallback& progress, const GeometryCancellationCallback& cancelled)
     {
         GeometryExtraction output;
         ExtractBsaModels(dataDirectory, cacheDirectory, cell);
-        for (const auto& reference : cell.references) {
+        const auto totalReferences = cell.references.size();
+        for (std::size_t referenceIndex{}; referenceIndex < totalReferences; ++referenceIndex) {
+            if (cancelled && cancelled()) return output;
+            if (progress) progress(referenceIndex, totalReferences);
+            const auto& reference = cell.references[referenceIndex];
             GeometryReferenceReport report{ .formId = reference.id, .baseFormId = reference.baseObjectId, .recordType = reference.recordType, .modelPath = reference.modelPath, .position = reference.position, .rotation = reference.rotation, .scale = reference.scale };
             core::GeometrySource source{ .modelPath = reference.modelPath, .reference = { reference.sourcePlugin, reference.id, reference.recordType }, .baseObject = { reference.basePlugin, reference.baseObjectId, reference.baseRecordType } };
             if (reference.modelPath.empty()) { report.failure = "reference has no model path"; output.scene.coverage.push_back({ core::GeometryCoverage::Missing, std::move(source), report.failure }); output.references.push_back(std::move(report)); continue; }
@@ -250,25 +371,51 @@ namespace navmesh::skyrim::offline
                 output.references.push_back(std::move(report));
                 continue;
             }
+            const auto transform = core::Transform::FromEulerXYZ(reference.position, reference.rotation, reference.scale);
+            const auto appendSource = [&](const TriangleGeometry& sourceMesh, core::GeometrySource meshSource, core::Mesh& destination, std::vector<core::TriangleProvenance>& destinationProvenance) {
+                const auto sourceIndex = output.scene.geometrySources.size();
+                output.scene.geometrySources.push_back(std::move(meshSource));
+                output.scene.nodes.push_back({ .name = reference.editorId.empty() ? reference.modelPath : reference.editorId, .localTransform = transform, .geometrySource = sourceIndex });
+                AppendGeometry(sourceMesh, transform, sourceIndex, destination, destinationProvenance, output.invalidVertices);
+                return sourceIndex;
+            };
             source.sourceType = hasCollision ? core::GeometrySourceType::Collision : core::GeometrySourceType::RenderFallback;
             source.materialClass = hasCollision ? core::MaterialCollisionClass::HavokPackedTriangles : core::MaterialCollisionClass::RenderVisual;
-            source.collisionType = hasCollision ? "hkPackedNiTriStripsData" : "render mesh (no supported collision)";
+            if (hasCollision) source.collisionType = nifGeometry.collision.shapes.front();
+            else if (nifGeometry.collisionShapeTypes.empty()) source.collisionType = "render mesh (no supported collision)";
+            else {
+                source.collisionType = "render mesh (unsupported Havok collision: ";
+                for (std::size_t index{}; index < nifGeometry.collisionShapeTypes.size(); ++index) {
+                    if (index != 0) source.collisionType += " -> ";
+                    source.collisionType += nifGeometry.collisionShapeTypes[index];
+                }
+                source.collisionType += ")";
+            }
             source.confidence = hasCollision ? 1.0F : 0.35F;
-            const auto sourceIndex = output.scene.geometrySources.size();
-            output.scene.geometrySources.push_back(source);
-            output.scene.nodes.push_back({ .name = reference.editorId.empty() ? reference.modelPath : reference.editorId, .localTransform = core::Transform::FromEulerXYZ(reference.position, reference.rotation, reference.scale), .geometrySource = sourceIndex });
-            const auto base = static_cast<std::uint32_t>(output.mesh.vertices.size());
-            report.meshVertexOffset = base;
-            report.meshTriangleOffset = output.mesh.triangles.size();
-            const auto transform = output.scene.nodes.back().localTransform;
-            for (const auto& vertex : mesh.vertices) { const auto transformed = transform.ApplyPoint(vertex); if (!std::isfinite(transformed.x) || !std::isfinite(transformed.y) || !std::isfinite(transformed.z) || std::abs(transformed.x) > 1.0e7F || std::abs(transformed.y) > 1.0e7F || std::abs(transformed.z) > 1.0e7F) ++output.invalidVertices; output.mesh.vertices.push_back(transformed); }
-            for (std::size_t triangleIndex = 0; triangleIndex < mesh.triangles.size(); ++triangleIndex) { const auto& triangle = mesh.triangles[triangleIndex]; output.mesh.triangles.push_back({ { base + triangle.vertices[0], base + triangle.vertices[1], base + triangle.vertices[2] } }); output.scene.triangleProvenance.push_back({ sourceIndex, triangleIndex }); }
-            output.invalidIndices += mesh.invalidIndices;
-            report.vertices = mesh.vertices.size(); report.triangles = mesh.triangles.size(); report.invalidIndices = mesh.invalidIndices; report.degenerateTriangles = mesh.degenerateTriangles; report.shapes = mesh.shapes; report.nifVersion = nifGeometry.version; report.sourceType = SourceTypeName(source.sourceType); report.collisionType = source.collisionType; report.usedRenderFallback = !hasCollision; ++output.modelsLoaded; output.references.push_back(std::move(report));
-            if (hasCollision) { ++output.collisionModelsLoaded; output.collisionTriangles += mesh.triangles.size(); }
-            else { ++output.renderFallbackModels; output.renderFallbackTriangles += mesh.triangles.size(); }
-            output.scene.coverage.push_back({ core::GeometryCoverage::Found, std::move(source), hasCollision ? "packed Havok collision loaded" : "render NIF loaded as low-confidence fallback; no supported collision" });
+            const auto& supportMesh = hasCollision ? nifGeometry.collision : nifGeometry.render;
+            const auto supportSourceIndex = appendSource(supportMesh, source, output.mesh, output.scene.triangleProvenance);
+            report.meshVertexOffset = output.mesh.vertices.size() - supportMesh.vertices.size();
+            report.meshTriangleOffset = output.mesh.triangles.size() - supportMesh.triangles.size();
+            output.invalidIndices += supportMesh.invalidIndices;
+            report.vertices = supportMesh.vertices.size(); report.triangles = supportMesh.triangles.size(); report.invalidIndices = supportMesh.invalidIndices; report.degenerateTriangles = supportMesh.degenerateTriangles; report.shapes = supportMesh.shapes; report.nifVersion = nifGeometry.version; report.sourceType = SourceTypeName(source.sourceType); report.collisionType = source.collisionType; report.usedRenderFallback = !hasCollision; ++output.modelsLoaded; output.references.push_back(std::move(report));
+            if (hasCollision) {
+                ++output.collisionModelsLoaded; output.collisionTriangles += supportMesh.triangles.size();
+                if (!nifGeometry.render.triangles.empty()) {
+                    auto renderSource = source;
+                    renderSource.sourceType = core::GeometrySourceType::RenderFallback;
+                    renderSource.materialClass = core::MaterialCollisionClass::RenderVisual;
+                    renderSource.collisionType = std::format("render mesh (supplemental; collision: {})", source.collisionType);
+                    renderSource.confidence = 0.35F;
+                    appendSource(nifGeometry.render, std::move(renderSource), output.scene.renderFallbackMesh, output.scene.renderFallbackTriangleProvenance);
+                    ++output.renderFallbackModels;
+                    output.renderFallbackTriangles += nifGeometry.render.triangles.size();
+                    output.invalidIndices += nifGeometry.render.invalidIndices;
+                }
+            } else { ++output.renderFallbackModels; output.renderFallbackTriangles += supportMesh.triangles.size(); }
+            const auto& supportSource = output.scene.geometrySources[supportSourceIndex];
+            output.scene.coverage.push_back({ core::GeometryCoverage::Found, supportSource, hasCollision ? "packed Havok collision loaded; render mesh retained as display-only fallback" : "render NIF loaded as low-confidence fallback; no supported collision" });
         }
+        if (progress) progress(totalReferences, totalReferences);
         output.scene.mesh = output.mesh;
         return output;
     }

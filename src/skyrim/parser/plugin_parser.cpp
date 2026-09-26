@@ -280,11 +280,11 @@ namespace navmesh::skyrim::offline
                             }
                         } else if (subType == "XCLL") {
                             cell.isInterior = true;
-                        } else if (subType == "XCLC" && subSize >= 12) {
-                            cell.isInterior = ReadU32LE(*payload, subDataStart + 8) != 0;
-                            if (!cell.isInterior) {
-                                cell.exteriorCoordinates = { ReadI32LE(*payload, subDataStart), ReadI32LE(*payload, subDataStart + 4) };
-                            }
+                        } else if (subType == "XCLC" && subSize >= 8) {
+                            // XCLC's coordinates define an exterior CELL. The
+                            // optional flag DWORD is not an interior marker.
+                            cell.isInterior = false;
+                            cell.exteriorCoordinates = { ReadI32LE(*payload, subDataStart), ReadI32LE(*payload, subDataStart + 4) };
                         }
                         subOffset = subDataEnd;
                     }

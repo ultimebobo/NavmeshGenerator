@@ -21,4 +21,4 @@ worldY = cellY * 4096 + y * 128
 worldZ = VHGT height
 ```
 
-`VHGT` starts with the first sample's float height. Its remaining 1,088 signed-byte deltas are accumulated across a row, with the first sample of each subsequent row continuing from the sample directly above; each delta is eight world units. Terrain triangles retain the owning `LAND` FormID, exterior cell coordinate, and lower-left grid sample in JSON provenance. This covers collision-relevant height surfaces only: terrain textures and visual LOD remain out of scope.
+`VHGT` starts with a float height offset and has one signed-byte delta for each of its 1,089 samples. Both are in eight-world-unit height units. The stored LAND grid is row-major: sample `(x, y)` is read at `y * 33 + x`, matching the scene's world-space X/Y basis. Terrain triangles retain the owning `LAND` FormID, exterior cell coordinate, and lower-left grid sample in JSON provenance. This covers collision-relevant height surfaces only: terrain textures and visual LOD remain out of scope.

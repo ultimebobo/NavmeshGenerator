@@ -1,9 +1,11 @@
 #include "analysis/navmesh_analysis.h"
+#include "app/run.h"
 #include "cli/json_report.h"
 #include "skyrim/parser/plugin_parser.h"
 #include "skyrim/mo2/mo2_importer.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
+#include "core/scene/scene_exporter.h"
 #include "validation/validation.h"
 
 #include <filesystem>
@@ -11,97 +13,17 @@
 #include <format>
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <iostream>
+#include <map>
 #include <optional>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace
 {
-    struct Options
-    {
-        std::filesystem::path plugin;
-        std::filesystem::path data;
-        std::filesystem::path loadOrder;
-        std::filesystem::path mo2;
-        std::filesystem::path modsDirectory;
-        std::string profile;
-        std::string cell;
-        std::string editorId;
-        std::string worldspace;
-        std::optional<std::int32_t> cellX;
-        std::optional<std::int32_t> cellY;
-        std::optional<std::uint32_t> cellFormId;
-        std::filesystem::path output;
-        bool listCells{};
-        std::filesystem::path exportGeometry;
-        std::filesystem::path exportAnalysis;
-        bool diagnostics{};
-        bool terrainOnly{};
-        float surfaceSearchRadius{ 64.0F };
-        float maxSupportDistance{ 32.0F };
-        float maxSlope{ 45.0F };
-    };
-
-    [[nodiscard]] std::string ToString(const std::optional<std::int32_t>& value)
-    {
-        return value ? std::to_string(*value) : "";
-    }
-
-    [[nodiscard]] Options ParseArgs(int argc, char** argv)
-    {
-        Options options;
-        options.output = ".";
-        for (int index = 1; index < argc; ++index) {
-            const std::string argument = argv[index];
-            if (argument == "--plugin" && index + 1 < argc) {
-                options.plugin = argv[++index];
-            } else if (argument == "--data" && index + 1 < argc) {
-                options.data = argv[++index];
-            } else if (argument == "--load-order" && index + 1 < argc) {
-                options.loadOrder = argv[++index];
-            } else if (argument == "--mo2" && index + 1 < argc) {
-                options.mo2 = argv[++index];
-            } else if (argument == "--profile" && index + 1 < argc) {
-                options.profile = argv[++index];
-            } else if (argument == "--mods-dir" && index + 1 < argc) {
-                options.modsDirectory = argv[++index];
-            } else if (argument == "--cell" && index + 1 < argc) {
-                options.cell = argv[++index];
-            } else if (argument == "--cell-formid" && index + 1 < argc) {
-                options.cellFormId = static_cast<std::uint32_t>(std::stoul(argv[++index], nullptr, 16));
-            } else if (argument == "--editor-id" && index + 1 < argc) {
-                options.editorId = argv[++index];
-            } else if (argument == "--worldspace" && index + 1 < argc) {
-                options.worldspace = argv[++index];
-            } else if (argument == "--cell-x" && index + 1 < argc) {
-                options.cellX = std::stoi(argv[++index]);
-            } else if (argument == "--cell-y" && index + 1 < argc) {
-                options.cellY = std::stoi(argv[++index]);
-            } else if (argument == "--output" && index + 1 < argc) {
-                options.output = argv[++index];
-            } else if (argument == "--export-geometry" && index + 1 < argc) {
-                options.exportGeometry = argv[++index];
-            } else if (argument == "--export-analysis" && index + 1 < argc) {
-                options.exportAnalysis = argv[++index];
-            } else if (argument == "--diagnostics") {
-                options.diagnostics = true;
-            } else if (argument == "--terrain-only") {
-                options.terrainOnly = true;
-            } else if (argument == "--surface-search-radius" && index + 1 < argc) {
-                options.surfaceSearchRadius = std::stof(argv[++index]);
-            } else if (argument == "--max-support-distance" && index + 1 < argc) {
-                options.maxSupportDistance = std::stof(argv[++index]);
-            } else if (argument == "--max-slope" && index + 1 < argc) {
-                options.maxSlope = std::stof(argv[++index]);
-            } else if (argument == "--list-cells") {
-                options.listCells = true;
-            }
-        }
-        return options;
-    }
-
     void WriteObj(const std::filesystem::path& outputPath, const navmesh::core::NavMesh& mesh, const std::string& name)
     {
         std::ofstream stream(outputPath, std::ios::trunc);
@@ -359,6 +281,18 @@ namespace
         stream << "<h2>Diagnostic assessment</h2><p>Each support shown is the nearest upward-facing triangle selected by the existing downward-centroid ray. No thresholds were changed.</p>";
         stream << (missingModels ? "<p><strong>Geometry limitation:</strong> terrain or collision geometry is not included, or one or more model NIFs could not be loaded; buried counts may be incomplete or misleading where those surfaces are missing.</p>" : "<p><strong>Geometry coverage:</strong> extracted model geometry is available for the analyzed cell; the examples below can be inspected as actual world-space support triangles.</p>");
         stream << "<p><strong>Interpretation:</strong> a buried result is supported by a concrete selected triangle and a negative height delta. When the triangle has NIF provenance and the two views show the NAVM above that triangle, it is consistent with genuinely buried NAVM. A missing source, visibly displaced triangle, or a systematic offset is evidence for geometry/transform limitations and should be investigated before changing thresholds.</p>";
+        std::map<std::string, std::size_t> supportSources, coverage;
+        for (const auto& polygon : report.polygons) if (polygon.support.found) ++supportSources[polygon.support.sourceType.empty() ? "unknown" : polygon.support.sourceType];
+        for (const auto& entry : extraction.scene.coverage) {
+            const auto name = entry.status == navmesh::core::GeometryCoverage::Found ? "found" : entry.status == navmesh::core::GeometryCoverage::Excluded ? "excluded" : entry.status == navmesh::core::GeometryCoverage::Missing ? "missing" : entry.status == navmesh::core::GeometryCoverage::Unreadable ? "unreadable" : "unsupported";
+            ++coverage[name];
+        }
+        stream << "<h2>Source and coverage groups</h2><table><thead><tr><th>Support source</th><th>Classified NAVM polygons linked to source triangles</th></tr></thead><tbody>";
+        for (const auto& [name, count] : supportSources) stream << std::format("<tr><td>{}</td><td>{}</td></tr>", HtmlEscape(name), count);
+        if (supportSources.empty()) stream << "<tr><td>none</td><td>0</td></tr>";
+        stream << "</tbody></table><table><thead><tr><th>Geometry coverage status</th><th>Sources</th></tr></thead><tbody>";
+        for (const auto& [name, count] : coverage) stream << std::format("<tr><td>{}</td><td>{}</td></tr>", HtmlEscape(name), count);
+        stream << "</tbody></table><p>Every selected row below identifies its world support-triangle index; use <code>analysis.json</code> to join that index to the full <code>geometry.json</code> triangle provenance.</p>";
         stream << "<h2>Selected polygons</h2><table><thead><tr><th>Index</th><th>Class</th><th>Centroid</th><th>Support point</th><th>Delta</th><th>Slope</th><th>Support triangle</th><th>Source</th><th>Views</th></tr></thead><tbody>";
         for (const auto* polygon : selected) {
             std::string triangleText = "none";
@@ -392,6 +326,70 @@ namespace
         std::cout << std::format("  min:    {}\n  max:    {}\n  mean:   {}\n  median: {}\n  p95:    {}\n", analysis.slopeStats.min, analysis.slopeStats.max, analysis.slopeStats.mean, analysis.slopeStats.median, analysis.slopeStats.p95);
     }
 
+    [[nodiscard]] bool EqualsIgnoreCase(const std::string& left, const std::string& right)
+    {
+        return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin(), [](unsigned char a, unsigned char b) { return std::tolower(a) == std::tolower(b); });
+    }
+
+    [[nodiscard]] std::vector<navmesh::core::SceneLayer> ParseSceneLayers(const std::string& value)
+    {
+        std::vector<navmesh::core::SceneLayer> result;
+        std::stringstream input(value); std::string token;
+        while (std::getline(input, token, ',')) {
+            std::transform(token.begin(), token.end(), token.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (token == "navmesh" || token == "navm") result.push_back(navmesh::core::SceneLayer::ExistingNavmesh);
+            else if (token == "terrain") result.push_back(navmesh::core::SceneLayer::Terrain);
+            else if (token == "collision") result.push_back(navmesh::core::SceneLayer::Collision);
+            else if (token == "render" || token == "render_fallback") result.push_back(navmesh::core::SceneLayer::RenderFallback);
+            else if (token == "diagnostics" || token == "markers") result.push_back(navmesh::core::SceneLayer::DiagnosticMarkers);
+        }
+        return result;
+    }
+
+    void AppendGeometry(navmesh::skyrim::offline::GeometryExtraction& destination, navmesh::skyrim::offline::GeometryExtraction&& source)
+    {
+        const auto sourceOffset = destination.scene.geometrySources.size();
+        const auto vertexOffset = static_cast<std::uint32_t>(destination.mesh.vertices.size());
+        const auto renderVertexOffset = static_cast<std::uint32_t>(destination.scene.renderFallbackMesh.vertices.size());
+        const auto triangleOffset = destination.mesh.triangles.size();
+        const auto nodeStart = destination.scene.nodes.size();
+        destination.scene.geometrySources.insert(destination.scene.geometrySources.end(), std::make_move_iterator(source.scene.geometrySources.begin()), std::make_move_iterator(source.scene.geometrySources.end()));
+        destination.scene.nodes.insert(destination.scene.nodes.end(), std::make_move_iterator(source.scene.nodes.begin()), std::make_move_iterator(source.scene.nodes.end()));
+        for (std::size_t index = nodeStart; index < destination.scene.nodes.size(); ++index) if (destination.scene.nodes[index].geometrySource) *destination.scene.nodes[index].geometrySource += sourceOffset;
+        destination.mesh.vertices.insert(destination.mesh.vertices.end(), source.mesh.vertices.begin(), source.mesh.vertices.end());
+        for (auto triangle : source.mesh.triangles) { for (auto& vertex : triangle.vertices) vertex += vertexOffset; destination.mesh.triangles.push_back(triangle); }
+        for (auto provenance : source.scene.triangleProvenance) { provenance.geometrySource += sourceOffset; destination.scene.triangleProvenance.push_back(provenance); }
+        destination.scene.renderFallbackMesh.vertices.insert(destination.scene.renderFallbackMesh.vertices.end(), source.scene.renderFallbackMesh.vertices.begin(), source.scene.renderFallbackMesh.vertices.end());
+        for (auto triangle : source.scene.renderFallbackMesh.triangles) { for (auto& vertex : triangle.vertices) vertex += renderVertexOffset; destination.scene.renderFallbackMesh.triangles.push_back(triangle); }
+        for (auto provenance : source.scene.renderFallbackTriangleProvenance) { provenance.geometrySource += sourceOffset; destination.scene.renderFallbackTriangleProvenance.push_back(provenance); }
+        destination.scene.coverage.insert(destination.scene.coverage.end(), std::make_move_iterator(source.scene.coverage.begin()), std::make_move_iterator(source.scene.coverage.end()));
+        for (auto reference : source.references) { reference.meshVertexOffset += vertexOffset; reference.meshTriangleOffset += triangleOffset; destination.references.push_back(std::move(reference)); }
+        destination.referencesWithModels += source.referencesWithModels; destination.modelsLoaded += source.modelsLoaded; destination.modelsMissing += source.modelsMissing; destination.invalidVertices += source.invalidVertices; destination.invalidIndices += source.invalidIndices; destination.modelsExcluded += source.modelsExcluded; destination.modelsUnreadable += source.modelsUnreadable; destination.modelsUnsupported += source.modelsUnsupported; destination.collisionModelsLoaded += source.collisionModelsLoaded; destination.collisionTriangles += source.collisionTriangles; destination.renderFallbackModels += source.renderFallbackModels; destination.renderFallbackTriangles += source.renderFallbackTriangles; destination.terrainLandRecords += source.terrainLandRecords; destination.terrainLandDecoded += source.terrainLandDecoded; destination.terrainLandMissing += source.terrainLandMissing;
+        destination.terrainSupported = destination.terrainSupported || source.terrainSupported; destination.collisionGeometrySupported = destination.collisionGeometrySupported || source.collisionGeometrySupported; destination.scene.mesh = destination.mesh;
+    }
+
+    void CullGeometryToBounds(navmesh::skyrim::offline::GeometryExtraction& geometry, const navmesh::core::AABB& bounds)
+    {
+        navmesh::core::Mesh selected;
+        std::vector<navmesh::core::TriangleProvenance> provenance;
+        std::vector<std::pair<std::size_t, std::size_t>> oldRanges; oldRanges.reserve(geometry.references.size());
+        for (const auto& reference : geometry.references) oldRanges.push_back({ reference.meshTriangleOffset, reference.triangles });
+        for (auto& reference : geometry.references) { reference.meshVertexOffset = 0; reference.meshTriangleOffset = 0; reference.vertices = 0; reference.triangles = 0; }
+        std::size_t referenceIndex{};
+        for (std::size_t triangleIndex{}; triangleIndex < geometry.mesh.triangles.size(); ++triangleIndex) {
+            const auto& triangle = geometry.mesh.triangles[triangleIndex]; navmesh::core::AABB triangleBounds;
+            bool valid = true; for (const auto vertex : triangle.vertices) { if (vertex >= geometry.mesh.vertices.size()) { valid = false; break; } triangleBounds.Expand(geometry.mesh.vertices[vertex]); }
+            if (!valid || !triangleBounds.Intersects(bounds)) continue;
+            while (referenceIndex < oldRanges.size() && triangleIndex >= oldRanges[referenceIndex].first + oldRanges[referenceIndex].second) ++referenceIndex;
+            const auto base = static_cast<std::uint32_t>(selected.vertices.size()); for (const auto vertex : triangle.vertices) selected.vertices.push_back(geometry.mesh.vertices[vertex]); selected.triangles.push_back({ { base, base + 1, base + 2 } });
+            if (triangleIndex < geometry.scene.triangleProvenance.size()) provenance.push_back(geometry.scene.triangleProvenance[triangleIndex]);
+            if (referenceIndex < geometry.references.size() && triangleIndex >= oldRanges[referenceIndex].first) {
+                auto& reference = geometry.references[referenceIndex]; if (reference.triangles == 0) { reference.meshVertexOffset = base; reference.meshTriangleOffset = selected.triangles.size() - 1; } reference.vertices += 3; ++reference.triangles;
+            }
+        }
+        geometry.mesh = std::move(selected); geometry.scene.mesh = geometry.mesh; geometry.scene.triangleProvenance = std::move(provenance);
+    }
+
     void WriteLoadOrderJson(const std::filesystem::path& path, const navmesh::skyrim::offline::ResolvedLoadOrder& loadOrder)
     {
         std::ofstream stream(path, std::ios::trunc);
@@ -419,9 +417,12 @@ namespace
     }
 }
 
-int main(int argc, char** argv)
+int navmesh::app::Run(const Options& input, const ProgressCallback& progress, const CancellationCallback& cancelled)
 {
-    auto options = ParseArgs(argc, argv);
+    auto options = input;
+    const auto update = [&](int percent, std::string_view status) { if (progress) progress(percent, status); };
+    const auto wasCancelled = [&] { return cancelled && cancelled(); };
+    update(0, "Validating inputs");
     if (options.mo2.empty() && options.plugin.empty() && options.loadOrder.empty()) {
         std::cerr << "Usage: navmesh-offline --mo2 <instance-or-portable-root> --profile <existing-profile> [--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex>] --output <dir>\nDeveloper/test override: --data <Data> --load-order <plugins.txt>.\n";
         return 1;
@@ -432,24 +433,32 @@ int main(int argc, char** argv)
     std::optional<navmesh::skyrim::offline::Mo2ProfileInput> mo2Input;
     if (!options.mo2.empty()) {
         std::filesystem::create_directories(options.output);
+        update(5, "Reading MO2 profile");
         std::cerr << "Importing MO2 profile and virtual-file winners...\n";
         if (!options.modsDirectory.empty()) std::cerr << "Using --mods-dir override: " << options.modsDirectory.string() << "\n";
         try {
             mo2Input = navmesh::skyrim::offline::ImportMo2Profile(options.mo2, options.profile,
-                options.modsDirectory.empty() ? std::nullopt : std::optional(options.modsDirectory));
+                options.modsDirectory.empty() ? std::nullopt : std::optional(options.modsDirectory), options.output / ".mo2-cache");
         } catch (const std::exception& error) {
             mo2Input = navmesh::skyrim::offline::Mo2ProfileInput{ .instanceRoot = options.mo2, .profile = options.profile };
             mo2Input->diagnostics.push_back({ navmesh::skyrim::offline::DiagnosticKind::InvalidPlugin, options.mo2.string(), std::string("MO2 import failed: ") + error.what() });
         }
         if (!navmesh::skyrim::offline::WriteInputReport(options.output / "input-report.json", *mo2Input)) std::cerr << "Failed to write input-report.json.\n";
+        update(15, mo2Input->looseAssetCacheUsed ? "MO2 loose-asset cache loaded" : "MO2 loose-asset cache created");
+        std::cerr << (mo2Input->looseAssetCacheUsed ? "Using" : "Created") << " MO2 loose-asset cache in " << (options.output / ".mo2-cache").string() << "\n";
         std::cerr << "Effective MO2 mods directory: " << mo2Input->modsDirectory.string() << "\n";
         for (const auto& diagnostic : mo2Input->diagnostics) std::cerr << diagnostic.plugin << ": " << diagnostic.message << "\n";
         if (mo2Input->pluginPaths.empty()) { std::cerr << "MO2 import found no usable active plugin paths; see input-report.json.\n"; return 2; }
         mo2Input->looseAssetWinners.clear(); mo2Input->looseAssetWinners.shrink_to_fit(); mo2Input->enabledMods.clear(); mo2Input->enabledMods.shrink_to_fit();
         options.data = mo2Input->gameData;
+        update(20, "Resolving active plugin load order");
         std::cerr << "Resolving worldspace and cell records from " << mo2Input->pluginPaths.size() << " active plugins...\n";
         try {
-            resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = options.data, .plugins = mo2Input->pluginPaths, .indexReferencesAndNavmeshes = !options.listCells });
+            resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = options.data, .plugins = mo2Input->pluginPaths, .indexReferencesAndNavmeshes = !options.listCells,
+                .progress = [&](std::size_t completed, std::size_t total, const std::filesystem::path& plugin) {
+                    const auto percent = total == 0 ? 30 : 20 + static_cast<int>((10 * completed) / total);
+                    update(percent, completed == total ? "Load order records resolved" : std::format("Resolving plugin {} of {}: {}", completed + 1, total, plugin.filename().string()));
+                } });
         } catch (const std::exception& error) {
             std::cerr << "Load-order resolution failed: " << error.what() << ". See input-report.json for the imported profile inputs.\n";
             return 2;
@@ -471,6 +480,8 @@ int main(int argc, char** argv)
         std::cerr << "MO2 profile inputs changed while resolving the load order; rerun so the snapshot is coherent.\n";
         return 2;
     }
+    update(30, resolved ? "Load order resolved" : "Plugin input ready");
+    if (wasCancelled()) return 3;
 
     if (options.listCells) {
         if (resolved) { std::filesystem::create_directories(options.output); WriteLoadOrderJson(options.output / "load-order.json", *resolved); }
@@ -489,6 +500,7 @@ int main(int argc, char** argv)
             }
             std::cout << "\n";
         }
+        update(100, cells.empty() ? "No cells found" : "Cell list complete");
         return cells.empty() ? 2 : 0;
     }
 
@@ -497,35 +509,62 @@ int main(int argc, char** argv)
     auto cell = resolved ? std::optional<navmesh::core::Cell>{} : navmesh::skyrim::offline::LoadCell(options.plugin, options.cell, options.worldspace, options.cellX, options.cellY, options.cellFormId, options.editorId);
     if (resolved) for (const auto& candidate : resolved->cells) {
         const auto formMatch = options.cellFormId && candidate.id == *options.cellFormId;
-        const auto editorMatch = !options.editorId.empty() && candidate.editorId == options.editorId;
+        const auto editorMatch = !options.editorId.empty() && EqualsIgnoreCase(candidate.editorId, options.editorId);
         const auto coordinateMatch = candidate.exteriorCoordinates && options.cellX && options.cellY && (*candidate.exteriorCoordinates)[0] == *options.cellX && (*candidate.exteriorCoordinates)[1] == *options.cellY;
         if ((!options.cellFormId && options.editorId.empty() && !options.cellX && !options.cellY) || formMatch || editorMatch || coordinateMatch) { cell = candidate; break; }
     }
     if (!cell) {
-        std::cerr << "No matching Skyrim cell was found in " << (resolved ? options.loadOrder : options.plugin) << "\n";
+        if (resolved) {
+            std::cerr << "No matching Skyrim CELL was found in the resolved MO2 load order";
+            if (!options.editorId.empty()) std::cerr << " for editor ID '" << options.editorId << "'";
+            else if (options.cellFormId) std::cerr << " for form ID " << std::format("{:08X}", *options.cellFormId);
+            else if (options.cellX && options.cellY) std::cerr << " at exterior coordinates " << *options.cellX << "," << *options.cellY;
+            std::cerr << ". Use List cells to find an exact CELL editor ID or form ID.\n";
+        } else std::cerr << "No matching Skyrim cell was found in " << options.plugin << "\n";
         return 2;
     }
+    update(45, "Cell resolved");
+    if (wasCancelled()) return 3;
     if (resolved) if (const auto* winning = resolved->FindWinning(cell->id)) {
         std::cout << "Winning CELL: " << winning->winning.plugin << "\nOverride chain:";
         for (const auto& origin : winning->origins) std::cout << " " << origin.plugin;
         std::cout << "\n";
     }
 
-    auto geometry = options.terrainOnly ? navmesh::skyrim::offline::GeometryExtraction{} : navmesh::skyrim::offline::ExtractGeometry(resolved ? options.data : options.plugin.parent_path(), *cell, options.output / ".bsa-cache");
-    if (resolved) {
-        const auto terrain = navmesh::skyrim::offline::ExtractTerrain(*resolved, *cell);
-        const auto sourceOffset = geometry.scene.geometrySources.size();
-        const auto vertexOffset = static_cast<std::uint32_t>(geometry.mesh.vertices.size());
-        geometry.scene.geometrySources.insert(geometry.scene.geometrySources.end(), terrain.scene.geometrySources.begin(), terrain.scene.geometrySources.end());
-        geometry.mesh.vertices.insert(geometry.mesh.vertices.end(), terrain.mesh.vertices.begin(), terrain.mesh.vertices.end());
-        for (auto triangle : terrain.mesh.triangles) { for (auto& vertex : triangle.vertices) vertex += vertexOffset; geometry.mesh.triangles.push_back(triangle); }
-        for (auto provenance : terrain.scene.triangleProvenance) { provenance.geometrySource += sourceOffset; geometry.scene.triangleProvenance.push_back(provenance); }
-        geometry.scene.mesh = geometry.mesh;
-        geometry.terrainSupported = terrain.landRecordsDecoded != 0;
-        geometry.terrainLandRecords = terrain.landRecordsFound; geometry.terrainLandDecoded = terrain.landRecordsDecoded; geometry.terrainLandMissing = terrain.landRecordsMissing;
-        for (const auto& warning : terrain.warnings) std::cerr << warning << "\n";
+    // Exterior cells are streamed one at a time and appended with re-based
+    // provenance. This keeps selection/indexing scalable instead of first
+    // materializing every neighbouring cell's meshes in a single extraction.
+    std::vector<navmesh::core::Cell> sceneCells{ *cell };
+    if (resolved && cell->exteriorCoordinates && options.neighboringCellRadius > 0) for (const auto& candidate : resolved->cells) {
+        if (!candidate.exteriorCoordinates || candidate.id == cell->id) continue;
+        const auto dx = std::abs((*candidate.exteriorCoordinates)[0] - (*cell->exteriorCoordinates)[0]);
+        const auto dy = std::abs((*candidate.exteriorCoordinates)[1] - (*cell->exteriorCoordinates)[1]);
+        if (dx <= options.neighboringCellRadius && dy <= options.neighboringCellRadius) sceneCells.push_back(candidate);
+    }
+    navmesh::skyrim::offline::GeometryExtraction geometry;
+    for (std::size_t cellIndex{}; cellIndex < sceneCells.size(); ++cellIndex) {
+        auto extracted = options.terrainOnly ? navmesh::skyrim::offline::GeometryExtraction{} : navmesh::skyrim::offline::ExtractGeometry(
+            resolved ? options.data : options.plugin.parent_path(), sceneCells[cellIndex], options.output / ".bsa-cache",
+            [&](std::size_t completed, std::size_t total) { const auto percent = total == 0 ? 65 : 45 + static_cast<int>((20 * completed) / total); update(percent, std::format("Extracting scene cell {}/{}: reference {} of {}", cellIndex + 1, sceneCells.size(), completed, total)); }, wasCancelled);
+        if (resolved) {
+            auto terrain = navmesh::skyrim::offline::ExtractTerrain(*resolved, sceneCells[cellIndex]);
+            navmesh::skyrim::offline::GeometryExtraction terrainGeometry;
+            terrainGeometry.scene = std::move(terrain.scene); terrainGeometry.mesh = std::move(terrain.mesh); terrainGeometry.scene.mesh = terrainGeometry.mesh;
+            terrainGeometry.terrainSupported = terrain.landRecordsDecoded != 0; terrainGeometry.terrainLandRecords = terrain.landRecordsFound; terrainGeometry.terrainLandDecoded = terrain.landRecordsDecoded; terrainGeometry.terrainLandMissing = terrain.landRecordsMissing;
+            for (const auto& warning : terrain.warnings) std::cerr << warning << "\n";
+            AppendGeometry(extracted, std::move(terrainGeometry));
+        }
+        if (options.sceneBounds) {
+            const auto& bounds = *options.sceneBounds;
+            if (bounds[0] > bounds[2] || bounds[1] > bounds[3]) { std::cerr << "--scene-bounds requires minX minY maxX maxY.\n"; return 1; }
+            CullGeometryToBounds(extracted, { .min = { bounds[0], bounds[1], std::numeric_limits<float>::lowest() }, .max = { bounds[2], bounds[3], std::numeric_limits<float>::max() } });
+        }
+        AppendGeometry(geometry, std::move(extracted));
+        if (wasCancelled()) { update(0, "Cancelled"); return 3; }
     }
     geometry.collisionGeometrySupported = geometry.collisionModelsLoaded != 0;
+    update(65, "Geometry extracted");
+    if (wasCancelled()) return 3;
     navmesh::reproducibility::ExportMetadata metadata{
         .inputPlugin = options.plugin,
         .selectedCell = &*cell,
@@ -545,12 +584,31 @@ int main(int argc, char** argv)
     if (!navmesh::skyrim::offline::WriteGeometryObj(geometryPath, geometry)) std::cerr << "Failed to write geometry OBJ to " << geometryPath << "\n";
     if (!navmesh::reproducibility::WriteSidecar(geometryPath, metadata)) std::cerr << "Failed to write geometry metadata sidecar\n";
     if (!navmesh::skyrim::offline::WriteGeometryJson(options.output / "geometry.json", *cell, geometry, metadata)) std::cerr << "Failed to write geometry JSON\n";
+    update(78, "Geometry exports written");
+    if (wasCancelled()) return 3;
 
     const auto geometrySummary = navmesh::analysis::AnalyzeGeometry(geometry.mesh);
     const auto meshSummary = navmesh::analysis::AnalyzeNavMesh(cell->navMeshes.empty() ? navmesh::core::NavMesh{} : cell->navMeshes.front());
     const auto analysisConfig = navmesh::analysis::AnalysisConfiguration{ .surfaceSearchRadius = options.surfaceSearchRadius, .maxSupportDistance = options.maxSupportDistance, .maxSlope = options.maxSlope };
     auto analysisReport = cell->navMeshes.empty() ? navmesh::analysis::AnalysisReport{} : navmesh::analysis::AnalyzeNavMeshPolygons(cell->navMeshes.front(), geometry.mesh, analysisConfig);
     AnnotateSupportSources(analysisReport, geometry);
+    std::vector<navmesh::core::NavMesh> sceneNavmeshes;
+    for (const auto& sceneCell : sceneCells) sceneNavmeshes.insert(sceneNavmeshes.end(), sceneCell.navMeshes.begin(), sceneCell.navMeshes.end());
+    std::vector<navmesh::core::DiagnosticMarker> sceneMarkers;
+    sceneMarkers.reserve(analysisReport.polygons.size());
+    for (const auto& polygon : analysisReport.polygons) sceneMarkers.push_back({ polygon.centroid, polygon.classification, polygon.index, polygon.support.found ? std::optional<std::size_t>{ polygon.support.triangleIndex } : std::nullopt });
+    navmesh::core::SceneExportOptions sceneOptions{ .layers = ParseSceneLayers(options.geometryLayers), .detailedProvenance = options.outputDetail != "summary" };
+    if (options.sceneBounds) {
+        const auto& bounds = *options.sceneBounds;
+        if (bounds[0] > bounds[2] || bounds[1] > bounds[3]) { std::cerr << "--scene-bounds requires minX minY maxX maxY.\n"; return 1; }
+        sceneOptions.bounds = navmesh::core::SceneBounds{ .world = { .min = { bounds[0], bounds[1], std::numeric_limits<float>::lowest() }, .max = { bounds[2], bounds[3], std::numeric_limits<float>::max() } } };
+    }
+    const auto scenePath = options.exportScene.empty() ? options.output / "scene.glb" : options.exportScene;
+    const auto sceneExport = navmesh::core::WriteCombinedGlb(scenePath, geometry.scene, sceneNavmeshes, sceneMarkers, metadata, sceneOptions);
+    if (!navmesh::reproducibility::WriteSidecar(scenePath, metadata)) std::cerr << "Failed to write GLB metadata sidecar\n";
+    std::cout << std::format("Exported combined GLB scene to {} ({} objects, {} triangles, {} geometry triangles culled)\n", scenePath.string(), sceneExport.objects, sceneExport.triangles, sceneExport.culledTriangles);
+    update(90, "Navmesh support analyzed");
+    if (wasCancelled()) return 3;
 
     if (!options.exportAnalysis.empty() && !cell->navMeshes.empty()) {
         WriteAnalysisObj(options.exportAnalysis, cell->navMeshes.front(), geometry.mesh, analysisReport);
@@ -575,6 +633,11 @@ int main(int argc, char** argv)
     std::cout << std::format("Analysis thresholds: surfaceSearchRadius={} maxSupportDistance={} maxSlope={}\n", options.surfaceSearchRadius, options.maxSupportDistance, options.maxSlope);
 
     WriteAnalysisJson(options.output / "analysis.json", analysisReport, geometrySummary, meshSummary, metadata);
+    if (!cell->navMeshes.empty()) {
+        const auto sceneReportPath = options.output / "scene-report.html";
+        WriteDiagnosticHtml(sceneReportPath, *cell, cell->navMeshes.front(), geometry.mesh, geometry, analysisReport);
+        if (!navmesh::reproducibility::WriteSidecar(sceneReportPath, metadata)) std::cerr << "Failed to write scene report metadata sidecar\n";
+    }
     if (options.diagnostics && !cell->navMeshes.empty()) {
         const auto diagnosticPath = options.output / "navmesh_diagnostics.html";
         WriteDiagnosticHtml(diagnosticPath, *cell, cell->navMeshes.front(), geometry.mesh, geometry, analysisReport);
@@ -608,5 +671,6 @@ int main(int argc, char** argv)
 
     std::cout << "Wrote report to " << reportPath << "\n";
     std::cout << std::format("References: {}\nReferences with models: {}\nModels loaded: {}\nModels missing: {}\nGeometry vertices: {}\nGeometry triangles: {}\nExported geometry: {}\n", cell->references.size(), geometry.referencesWithModels, geometry.modelsLoaded, geometry.modelsMissing, geometry.mesh.vertices.size(), geometry.mesh.triangles.size(), geometryPath.string());
+    update(100, "Completed");
     return 0;
 }
