@@ -1,6 +1,7 @@
 #include "analysis/navmesh_analysis.h"
 #include "core/geometry/types.h"
 #include "core/reproducibility/export_metadata.h"
+#include "core/scene/scene.h"
 #include "skyrim/parser/plugin_parser.h"
 #include "skyrim/mo2/mo2_importer.h"
 #include "skyrim/extraction/geometry_extractor.h"
@@ -11,6 +12,7 @@
 #include <NifFile.hpp>
 
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
@@ -167,13 +169,34 @@ namespace
         assert(nif.Save(modelPath) == 0);
 
         navmesh::core::Cell cell;
-        cell.references.push_back({ .id = 1, .baseObjectId = 2, .recordType = "STAT", .modelPath = "MarkerX.nif", .position = { 10.0F, 20.0F, 30.0F }, .scale = 1.0F });
+        cell.references.push_back({ .id = 1, .baseObjectId = 2, .recordType = "REFR", .modelPath = "MarkerX.nif", .position = { 10.0F, 20.0F, 30.0F }, .scale = 1.0F, .sourcePlugin = "Patch.esp", .basePlugin = "Base.esm", .baseRecordType = "STAT" });
 
         const auto geometry = navmesh::skyrim::offline::ExtractGeometry(tempRoot, cell, tempRoot);
         assert(geometry.modelsLoaded == 1u);
         assert(geometry.mesh.vertices.size() == 3u);
         assert(geometry.mesh.triangles.size() == 1u);
         assert(geometry.mesh.vertices[0].x == 10.0F && geometry.mesh.vertices[0].y == 20.0F && geometry.mesh.vertices[0].z == 30.0F);
+        assert(geometry.scene.HasCompleteTriangleProvenance());
+        const auto& provenance = geometry.scene.triangleProvenance.front();
+        assert(provenance.sourceTriangle == 0u && geometry.scene.geometrySources[provenance.geometrySource].reference.plugin == "Patch.esp");
+    }
+
+    void TestSceneTransforms()
+    {
+        using navmesh::core::Transform;
+        constexpr float halfPi = 1.57079632679F;
+        const auto translated = Transform::FromEulerXYZ({ 5, -2, 7 }, {}, 1.0F).ApplyPoint({ 1, 2, 3 });
+        Require(translated.x == 6 && translated.y == 0 && translated.z == 10);
+        const auto scaled = Transform::FromEulerXYZ({}, {}, 2.0F).ApplyPoint({ 1, -2, 3 });
+        Require(scaled.x == 2 && scaled.y == -4 && scaled.z == 6);
+        const auto rotated = Transform::FromEulerXYZ({}, { 0, 0, halfPi }).ApplyPoint({ 1, 0, 0 });
+        Require(std::abs(rotated.x) < 1.0e-4F && std::abs(rotated.y - 1) < 1.0e-4F);
+        navmesh::core::Scene scene;
+        scene.nodes.push_back({ .name = "parent", .localTransform = Transform::FromEulerXYZ({ 10, 0, 0 }, { 0, 0, halfPi }) });
+        scene.nodes.push_back({ .name = "child", .parent = 0u, .localTransform = Transform::FromEulerXYZ({ 2, 0, 0 }, {}, 1.0F) });
+        const auto world = scene.WorldTransform(1); Require(world.has_value());
+        const auto point = world->ApplyPoint({});
+        Require(std::abs(point.x - 10) < 1.0e-4F && std::abs(point.y - 2) < 1.0e-4F);
     }
 }
 
@@ -185,6 +208,7 @@ int main()
     TestExportMetadata();
     TestOptionalLocalGameData();
     TestBstTriShapeExtraction();
+    TestSceneTransforms();
     navmesh::core::Mesh mesh{ .vertices = { { -1.0F, 2.0F, 3.0F }, { 4.0F, -5.0F, 6.0F } } };
     const auto bounds = mesh.Bounds();
     assert(bounds.IsValid());

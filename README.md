@@ -9,7 +9,7 @@ This project is an offline, read-only prototype for inspecting Skyrim plugin dat
 ## What it currently does
 
 - Builds a neutral, CommonLib-free C++ core for geometry and navmesh data.
-- Extracts basic cell and reference information from Skyrim plugin records in a direct offline pass.
+- Builds a neutral scene graph for extracted visual geometry: every emitted triangle carries reference/base-record and model-path provenance, while found, excluded, missing, unreadable, and unsupported sources are recorded separately.
 - Reads the roadmap record subset (`WRLD`, `CELL`, `LAND`, `REFR`/`ACHR`, base-model records, and `NAVM`) through a loss-aware record layer: byte ranges, compressed source bytes, decoded subrecords, and unknown fields are retained for future round trips.
 - Produces JSON diagnostics and OBJ exports for navmesh polygon inspection.
 - Computes basic navmesh statistics such as vertex counts, polygon area range, connected components, and degenerate polygons.
@@ -64,7 +64,8 @@ The CLI writes files into the target output directory:
 
 - `report.json` — cell metadata, references, navmesh summaries, and validation findings.
 - `navmesh.obj` — exported navmesh polygon geometry for inspection in Blender or MeshLab.
-- `geometry.obj` — exported neutral mesh/geometry derived from the parsed records.
+- `geometry.obj` — exported neutral visual mesh geometry derived from parsed records (terrain and collision are intentionally absent).
+- `geometry.json` — machine-readable triangle provenance plus geometry-coverage failures for the visual-mesh scene.
 - `input-report.json` — MO2 profile snapshot and virtual-file winners, emitted first for every MO2 run.
 - `load-order.json` — when using `--load-order`, every winning record with its plugin and ordered origin chain.
 
@@ -81,7 +82,7 @@ The repository contains only synthetic, redistributable fixture builders; it doe
 - This is not an SKSE runtime plugin and does not inspect a running game session.
 - The direct parser is intentionally small and targets the common Bethesda plugin structure, not the entire plugin ecosystem.
 - Compressed indexed records are zlib-decoded with declared-size and boundary checks while their original bytes remain retained. Malformed records and unknown NAVM versions are explicit diagnostics, never best-effort geometry.
-- Geometry extraction supports loose NIF files and uses the `tools/BSAFileExtractor` submodule to cache requested BSA-backed assets on demand. Collision/Havok extraction is not complete.
+- Geometry extraction supports loose visual NIF files and uses the `tools/BSAFileExtractor` submodule to cache requested BSA-backed assets on demand. Its single neutral transform system applies NIF parent transforms followed by reference scale, Euler XYZ rotation (X then Y then Z; radians), and translation. Collision/Havok extraction is intentionally not implemented.
 - Install the BSA bridge dependencies with `python -m pip install -r tools/requirements.txt` before extracting archived assets.
 - Archived assets are cached under `<output>/.bsa-cache`; delete that directory to rebuild the cache.
 - Terrain extraction is not implemented beyond any simple geometry that is explicitly included in the parsed records.

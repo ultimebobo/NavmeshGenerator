@@ -30,11 +30,16 @@ namespace
         result += "]";
         return result;
     }
-    [[nodiscard]] navmesh::core::Vec3 Rotate(const navmesh::core::Vec3& value, const navmesh::core::Vec3& rotation)
+    [[nodiscard]] const char* CoverageName(const navmesh::core::GeometryCoverage coverage)
     {
-        const auto cx = std::cos(rotation.x); const auto sx = std::sin(rotation.x); const auto cy = std::cos(rotation.y); const auto sy = std::sin(rotation.y); const auto cz = std::cos(rotation.z); const auto sz = std::sin(rotation.z);
-        const auto x1 = value.x; const auto y1 = value.y * cx - value.z * sx; const auto z1 = value.y * sx + value.z * cx; const auto x2 = x1 * cy + z1 * sy; const auto y2 = y1; const auto z2 = -x1 * sy + z1 * cy;
-        return { x2 * cz - y2 * sz, x2 * sz + y2 * cz, z2 };
+        switch (coverage) {
+        case navmesh::core::GeometryCoverage::Found: return "found";
+        case navmesh::core::GeometryCoverage::Excluded: return "excluded";
+        case navmesh::core::GeometryCoverage::Missing: return "missing";
+        case navmesh::core::GeometryCoverage::Unreadable: return "unreadable";
+        case navmesh::core::GeometryCoverage::Unsupported: return "unsupported";
+        }
+        return "unknown";
     }
     [[nodiscard]] bool IsFiniteVec3(const navmesh::core::Vec3& value)
     {
@@ -137,29 +142,45 @@ namespace navmesh::skyrim::offline
         ExtractBsaModels(dataDirectory, cacheDirectory, cell);
         for (const auto& reference : cell.references) {
             GeometryReferenceReport report{ .formId = reference.id, .baseFormId = reference.baseObjectId, .recordType = reference.recordType, .modelPath = reference.modelPath, .position = reference.position, .rotation = reference.rotation, .scale = reference.scale };
-            if (reference.modelPath.empty()) { report.failure = "reference has no model path"; output.references.push_back(std::move(report)); continue; }
+            core::GeometrySource source{ .modelPath = reference.modelPath, .reference = { reference.sourcePlugin, reference.id, reference.recordType }, .baseObject = { reference.basePlugin, reference.baseObjectId, reference.baseRecordType } };
+            if (reference.modelPath.empty()) { report.failure = "reference has no model path"; output.scene.coverage.push_back({ core::GeometryCoverage::Missing, std::move(source), report.failure }); output.references.push_back(std::move(report)); continue; }
             ++output.referencesWithModels; const auto relativePath = ModelRelativePath(reference.modelPath);
             const auto loosePath = dataDirectory / relativePath;
             const auto cachedPath = cacheDirectory.empty() ? loosePath : cacheDirectory / relativePath;
             const auto modelPath = std::filesystem::exists(loosePath) ? loosePath : cachedPath;
             const auto mesh = LoadNif(modelPath);
-            if (mesh.version.empty() || mesh.vertices.empty() || mesh.triangles.empty()) { report.failure = std::filesystem::exists(modelPath) ? "unsupported or empty NIF" : "missing loose NIF"; ++output.modelsMissing; output.references.push_back(std::move(report)); continue; }
+            if (mesh.version.empty() || mesh.vertices.empty() || mesh.triangles.empty()) {
+                const auto exists = std::filesystem::exists(modelPath);
+                const auto status = !exists ? core::GeometryCoverage::Missing : mesh.version.empty() ? core::GeometryCoverage::Unreadable : core::GeometryCoverage::Unsupported;
+                report.failure = status == core::GeometryCoverage::Missing ? "missing loose NIF" : status == core::GeometryCoverage::Unreadable ? "NIF could not be read" : "NIF contains no supported triangle geometry";
+                if (status == core::GeometryCoverage::Unsupported) ++output.modelsUnsupported;
+                else if (status == core::GeometryCoverage::Unreadable) ++output.modelsUnreadable;
+                else ++output.modelsMissing;
+                output.scene.coverage.push_back({ status, std::move(source), report.failure }); output.references.push_back(std::move(report)); continue;
+            }
             if (IsVisualEffectModel(reference.modelPath)) {
                 report.failure = "excluded visual effect from support geometry";
                 report.vertices = mesh.vertices.size();
                 report.triangles = mesh.triangles.size();
                 ++output.modelsLoaded;
+                output.scene.coverage.push_back({ core::GeometryCoverage::Excluded, std::move(source), report.failure }); ++output.modelsExcluded;
                 output.references.push_back(std::move(report));
                 continue;
             }
+            const auto sourceIndex = output.scene.geometrySources.size();
+            output.scene.geometrySources.push_back(source);
+            output.scene.nodes.push_back({ .name = reference.editorId.empty() ? reference.modelPath : reference.editorId, .localTransform = core::Transform::FromEulerXYZ(reference.position, reference.rotation, reference.scale), .geometrySource = sourceIndex });
             const auto base = static_cast<std::uint32_t>(output.mesh.vertices.size());
             report.meshVertexOffset = base;
             report.meshTriangleOffset = output.mesh.triangles.size();
-            for (const auto& vertex : mesh.vertices) { auto transformed = Rotate({ vertex.x * reference.scale, vertex.y * reference.scale, vertex.z * reference.scale }, reference.rotation); transformed.x += reference.position.x; transformed.y += reference.position.y; transformed.z += reference.position.z; if (!std::isfinite(transformed.x) || !std::isfinite(transformed.y) || !std::isfinite(transformed.z) || std::abs(transformed.x) > 1.0e7F || std::abs(transformed.y) > 1.0e7F || std::abs(transformed.z) > 1.0e7F) ++output.invalidVertices; output.mesh.vertices.push_back(transformed); }
-            for (const auto& triangle : mesh.triangles) output.mesh.triangles.push_back({ { base + triangle.vertices[0], base + triangle.vertices[1], base + triangle.vertices[2] } });
+            const auto transform = output.scene.nodes.back().localTransform;
+            for (const auto& vertex : mesh.vertices) { const auto transformed = transform.ApplyPoint(vertex); if (!std::isfinite(transformed.x) || !std::isfinite(transformed.y) || !std::isfinite(transformed.z) || std::abs(transformed.x) > 1.0e7F || std::abs(transformed.y) > 1.0e7F || std::abs(transformed.z) > 1.0e7F) ++output.invalidVertices; output.mesh.vertices.push_back(transformed); }
+            for (std::size_t triangleIndex = 0; triangleIndex < mesh.triangles.size(); ++triangleIndex) { const auto& triangle = mesh.triangles[triangleIndex]; output.mesh.triangles.push_back({ { base + triangle.vertices[0], base + triangle.vertices[1], base + triangle.vertices[2] } }); output.scene.triangleProvenance.push_back({ sourceIndex, triangleIndex }); }
             output.invalidIndices += mesh.invalidIndices;
             report.vertices = mesh.vertices.size(); report.triangles = mesh.triangles.size(); report.invalidIndices = mesh.invalidIndices; report.degenerateTriangles = mesh.degenerateTriangles; report.shapes = mesh.shapes; report.nifVersion = mesh.version; ++output.modelsLoaded; output.references.push_back(std::move(report));
+            output.scene.coverage.push_back({ core::GeometryCoverage::Found, std::move(source), "visual NIF loaded" });
         }
+        output.scene.mesh = output.mesh;
         return output;
     }
     bool WriteGeometryObj(const std::filesystem::path& outputPath, const GeometryExtraction& geometry)
@@ -182,10 +203,20 @@ namespace navmesh::skyrim::offline
     {
         std::ofstream output(outputPath, std::ios::trunc); if (!output) return false;
         output << "{\n  \"metadata\": " << reproducibility::ToJson(metadata, "    ") << ",\n";
-        output << std::format("  \"cell\": \"{:08X}\",\n  \"references\": {},\n  \"referencesWithModels\": {},\n  \"modelsLoaded\": {},\n  \"modelsMissing\": {},\n  \"vertices\": {},\n  \"triangles\": {},\n  \"terrainSupported\": false,\n  \"collisionGeometrySupported\": false,\n  \"invalidVertices\": {},\n  \"invalidIndices\": {},\n  \"referenceDetails\": [\n", cell.id, cell.references.size(), geometry.referencesWithModels, geometry.modelsLoaded, geometry.modelsMissing, geometry.mesh.vertices.size(), geometry.mesh.triangles.size(), geometry.invalidVertices, geometry.invalidIndices);
+        output << std::format("  \"cell\": \"{:08X}\",\n  \"references\": {},\n  \"referencesWithModels\": {},\n  \"modelsLoaded\": {},\n  \"modelsMissing\": {},\n  \"modelsExcluded\": {},\n  \"modelsUnreadable\": {},\n  \"modelsUnsupported\": {},\n  \"vertices\": {},\n  \"triangles\": {},\n  \"terrainSupported\": false,\n  \"collisionGeometrySupported\": false,\n  \"invalidVertices\": {},\n  \"invalidIndices\": {},\n  \"referenceDetails\": [\n", cell.id, cell.references.size(), geometry.referencesWithModels, geometry.modelsLoaded, geometry.modelsMissing, geometry.modelsExcluded, geometry.modelsUnreadable, geometry.modelsUnsupported, geometry.mesh.vertices.size(), geometry.mesh.triangles.size(), geometry.invalidVertices, geometry.invalidIndices);
         for (std::size_t index = 0; index < geometry.references.size(); ++index) {
             const auto& reference = geometry.references[index];
             output << std::format("    {{\"formId\":\"{:08X}\",\"baseFormId\":\"{:08X}\",\"recordType\":\"{}\",\"model\":\"{}\",\"nifVersion\":\"{}\",\"shapes\":{},\"position\":[{},{},{}],\"rotation\":[{},{},{}],\"scale\":{},\"vertices\":{},\"triangles\":{},\"invalidIndices\":{},\"degenerateTriangles\":{},\"failure\":\"{}\"}}{}\n", reference.formId, reference.baseFormId, EscapeJson(reference.recordType), EscapeJson(reference.modelPath), EscapeJson(reference.nifVersion), JsonStringArray(reference.shapes), reference.position.x, reference.position.y, reference.position.z, reference.rotation.x, reference.rotation.y, reference.rotation.z, reference.scale, reference.vertices, reference.triangles, reference.invalidIndices, reference.degenerateTriangles, EscapeJson(reference.failure), index + 1 == geometry.references.size() ? "" : ",");
+        }
+        output << "  ],\n  \"coverage\": [\n";
+        for (std::size_t index = 0; index < geometry.scene.coverage.size(); ++index) {
+            const auto& entry = geometry.scene.coverage[index]; const auto& source = entry.source;
+            output << std::format("    {{\"status\":\"{}\",\"detail\":\"{}\",\"model\":\"{}\",\"reference\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}},\"baseObject\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}}}}{}\n", CoverageName(entry.status), EscapeJson(entry.detail), EscapeJson(source.modelPath), EscapeJson(source.reference.plugin), source.reference.formId, EscapeJson(source.reference.recordType), EscapeJson(source.baseObject.plugin), source.baseObject.formId, EscapeJson(source.baseObject.recordType), index + 1 == geometry.scene.coverage.size() ? "" : ",");
+        }
+        output << "  ],\n  \"triangleProvenance\": [\n";
+        for (std::size_t index = 0; index < geometry.scene.triangleProvenance.size(); ++index) {
+            const auto& provenance = geometry.scene.triangleProvenance[index]; const auto& source = geometry.scene.geometrySources[provenance.geometrySource];
+            output << std::format("    {{\"triangle\":{},\"sourceTriangle\":{},\"model\":\"{}\",\"reference\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}},\"baseObject\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}}}}{}\n", index, provenance.sourceTriangle, EscapeJson(source.modelPath), EscapeJson(source.reference.plugin), source.reference.formId, EscapeJson(source.reference.recordType), EscapeJson(source.baseObject.plugin), source.baseObject.formId, EscapeJson(source.baseObject.recordType), index + 1 == geometry.scene.triangleProvenance.size() ? "" : ",");
         }
         output << "  ]\n}\n"; return true;
     }

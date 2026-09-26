@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/geometry/types.h"
+#include "core/scene/scene.h"
 #include "core/world/types.h"
 #include "core/reproducibility/export_metadata.h"
 
@@ -32,6 +33,7 @@ namespace navmesh::skyrim::offline
 
     struct GeometryExtraction
     {
+        core::Scene scene;
         core::Mesh mesh;
         std::vector<GeometryReferenceReport> references;
         std::size_t referencesWithModels{};
@@ -39,6 +41,9 @@ namespace navmesh::skyrim::offline
         std::size_t modelsMissing{};
         std::size_t invalidVertices{};
         std::size_t invalidIndices{};
+        std::size_t modelsExcluded{};
+        std::size_t modelsUnreadable{};
+        std::size_t modelsUnsupported{};
         bool terrainSupported{};
         bool collisionGeometrySupported{};
     };

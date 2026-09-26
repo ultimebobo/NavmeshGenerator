@@ -64,6 +64,7 @@ namespace
             else if (kind == "NAME" && (record.type == "REFR" || record.type == "ACHR") && size >= 4) record.referencedFormIds.push_back(U32(payload, data));
             else if ((kind == "XLKR" || kind == "XESP" || kind == "XNDP" || kind == "XTEL") && size >= 4) record.linkedFormIds.push_back(U32(payload, data));
             else if (kind == "DATA" && (record.type == "REFR" || record.type == "ACHR") && size >= 24) { std::array<float, 6> transform{}; std::memcpy(transform.data(), payload.data() + data, sizeof(transform)); record.transform = transform; }
+            else if (kind == "XSCL" && (record.type == "REFR" || record.type == "ACHR") && size >= 4) { float scale{}; std::memcpy(&scale, payload.data() + data, sizeof(scale)); record.referenceScale = scale; }
             else if (kind == "XCLC" && size >= 12 && U32(payload, data + 8) == 0) record.exteriorCoordinates = { I32(payload, data), I32(payload, data + 4) };
             else if (kind == "NVNM" && record.type == "NAVM") {
                 if (size < 0x18) { error = "NVNM is shorter than the verified vertex-count header"; return false; }
@@ -190,6 +191,28 @@ namespace navmesh::skyrim::offline
             else { record.origins.push_back(record.winning); winners.emplace(*global, result.records.size()); result.records.push_back(std::move(record)); }
         }
         for (const auto& record : result.records) if (record.type == "CELL") result.cells.push_back({ .id = record.formId, .editorId = record.editorId, .name = record.name, .isInterior = !record.exteriorCoordinates.has_value(), .exteriorCoordinates = record.exteriorCoordinates });
+        // Scene assembly intentionally uses only winning records: the reference and
+        // its base object may originate in different plugins, both of which remain
+        // attached as provenance for the neutral scene boundary.
+        for (auto& cell : result.cells) for (const auto& record : result.records) {
+            if ((record.type != "REFR" && record.type != "ACHR") || record.cellFormId != cell.id) continue;
+            core::Reference reference{ .id = record.formId, .recordType = record.type, .editorId = record.editorId, .sourcePlugin = record.winning.plugin };
+            if (!record.referencedFormIds.empty()) reference.baseObjectId = record.referencedFormIds.front();
+            if (record.transform) {
+                const auto& transform = *record.transform;
+                reference.position = { transform[0], transform[1], transform[2] };
+                reference.rotation = { transform[3], transform[4], transform[5] };
+            }
+            if (record.referenceScale) reference.scale = *record.referenceScale;
+            if (const auto* base = result.FindWinning(reference.baseObjectId)) {
+                reference.modelPath = base->modelPath.value_or("");
+                reference.basePlugin = base->winning.plugin;
+                reference.baseRecordType = base->type;
+            }
+            // A reference-local MODL is unusual, but remains a valid resolved source.
+            if (reference.modelPath.empty() && record.modelPath) reference.modelPath = *record.modelPath;
+            cell.references.push_back(std::move(reference));
+        }
         return result;
     }
 

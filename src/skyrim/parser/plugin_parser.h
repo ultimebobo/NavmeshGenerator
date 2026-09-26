@@ -32,7 +32,7 @@ namespace navmesh::skyrim::offline
         std::optional<std::array<std::int32_t, 2>> exteriorCoordinates; bool persistent{}; bool temporary{};
         // These model the roadmap record subset without discarding unrecognised fields.
         std::optional<PluginRecord> raw;
-        std::optional<std::string> modelPath; std::optional<std::array<float, 6>> transform;
+        std::optional<std::string> modelPath; std::optional<std::array<float, 6>> transform; std::optional<float> referenceScale;
         std::vector<std::uint32_t> linkedFormIds; std::optional<NavmLayout> navm;
     };
     struct ResolvedLoadOrder {
