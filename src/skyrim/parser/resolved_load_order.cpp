@@ -183,6 +183,17 @@ namespace navmesh::skyrim::offline
                 else reference = *resolvedReference;
             }
             if (const auto found = winners.find(*global); found != winners.end()) {
+                // LAND overrides commonly change texture/colour data without
+                // repeating VHGT.  Preserve the inherited height subrecord in
+                // the resolved representation so terrain remains the winning
+                // LAND surface rather than being misreported as absent.
+                if (record.type == "LAND" && record.raw && result.records[found->second].raw) {
+                    const auto hasVhgt = [](const PluginRecord& raw) { return std::any_of(raw.subrecords.begin(), raw.subrecords.end(), [](const auto& sub) { return sub.type == "VHGT"; }); };
+                    if (!hasVhgt(*record.raw)) {
+                        const auto inherited = std::find_if(result.records[found->second].raw->subrecords.begin(), result.records[found->second].raw->subrecords.end(), [](const auto& sub) { return sub.type == "VHGT"; });
+                        if (inherited != result.records[found->second].raw->subrecords.end()) record.raw->subrecords.push_back(*inherited);
+                    }
+                }
                 auto origins = std::move(result.records[found->second].origins);
                 origins.push_back(record.winning);
                 record.origins = std::move(origins);

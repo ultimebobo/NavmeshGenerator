@@ -64,8 +64,8 @@ The CLI writes files into the target output directory:
 
 - `report.json` — cell metadata, references, navmesh summaries, and validation findings.
 - `navmesh.obj` — exported navmesh polygon geometry for inspection in Blender or MeshLab.
-- `geometry.obj` — exported neutral visual mesh geometry derived from parsed records (terrain and collision are intentionally absent).
-- `geometry.json` — machine-readable triangle provenance plus geometry-coverage failures for the visual-mesh scene.
+- `geometry.obj` — exported neutral visual mesh geometry plus decoded exterior `LAND` terrain when the selected cell is resolved through a load order.
+- `geometry.json` — machine-readable triangle provenance plus geometry-coverage failures. Terrain triangles name their winning `LAND` record, exterior cell, and lower-left VHGT sample coordinate.
 - `input-report.json` — MO2 profile snapshot and virtual-file winners, emitted first for every MO2 run.
 - `load-order.json` — when using `--load-order`, every winning record with its plugin and ordered origin chain.
 
@@ -85,7 +85,7 @@ The repository contains only synthetic, redistributable fixture builders; it doe
 - Geometry extraction supports loose visual NIF files and uses the `tools/BSAFileExtractor` submodule to cache requested BSA-backed assets on demand. Its single neutral transform system applies NIF parent transforms followed by reference scale, Euler XYZ rotation (X then Y then Z; radians), and translation. Collision/Havok extraction is intentionally not implemented.
 - Install the BSA bridge dependencies with `python -m pip install -r tools/requirements.txt` before extracting archived assets.
 - Archived assets are cached under `<output>/.bsa-cache`; delete that directory to rebuild the cache.
-- Terrain extraction is not implemented beyond any simple geometry that is explicitly included in the parsed records.
+- Exterior `LAND` decoding supports the collision-relevant VHGT height grid only: 33×33 samples per cell, 128-unit spacing, and world origin `(cellX * 4096, cellY * 4096)`. It intentionally excludes visual LOD and texture layers. Use `--terrain-only` with a resolved load order to export only that terrain diagnostic surface. Missing or malformed `LAND` records are reported and produce no replacement plane.
 - Some Skyrim record variants and non-standard modded data layouts may still be rejected or reported as unsupported.
 
 The verified NVNM prefix, preservation policy, and known trailing-layout limits are documented in [docs/navm-format-study.md](docs/navm-format-study.md). This milestone remains read-only and does not serialize plugins.

@@ -21,11 +21,14 @@ namespace navmesh::core
         [[nodiscard]] Vec3 ApplyPoint(Vec3 point) const noexcept;
     };
 
-    enum class MaterialCollisionClass { Unknown, RenderVisual };
+    enum class MaterialCollisionClass { Unknown, RenderVisual, Terrain };
     enum class GeometryCoverage { Found, Excluded, Missing, Unreadable, Unsupported };
     struct RecordProvenance { std::string plugin; std::uint32_t formId{}; std::string recordType; };
     struct GeometrySource { std::string modelPath; MaterialCollisionClass materialClass{ MaterialCollisionClass::RenderVisual }; RecordProvenance reference; RecordProvenance baseObject; };
-    struct TriangleProvenance { std::size_t geometrySource{}; std::size_t sourceTriangle{}; };
+    // LAND samples identify the lower-left grid sample of the terrain quad that
+    // emitted this triangle. Diagnostics can therefore identify the exact data.
+    struct TerrainTriangleProvenance { std::int32_t cellX{}; std::int32_t cellY{}; std::uint32_t landFormId{}; std::uint8_t sampleX{}; std::uint8_t sampleY{}; };
+    struct TriangleProvenance { std::size_t geometrySource{}; std::size_t sourceTriangle{}; std::optional<TerrainTriangleProvenance> terrain; };
     struct SceneNode { std::string name; std::optional<std::size_t> parent; Transform localTransform{ Transform::Identity() }; std::optional<std::size_t> geometrySource; };
     struct CoverageEntry { GeometryCoverage status{}; GeometrySource source; std::string detail; };
     struct Scene

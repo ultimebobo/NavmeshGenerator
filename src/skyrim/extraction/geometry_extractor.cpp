@@ -216,7 +216,8 @@ namespace navmesh::skyrim::offline
         output << "  ],\n  \"triangleProvenance\": [\n";
         for (std::size_t index = 0; index < geometry.scene.triangleProvenance.size(); ++index) {
             const auto& provenance = geometry.scene.triangleProvenance[index]; const auto& source = geometry.scene.geometrySources[provenance.geometrySource];
-            output << std::format("    {{\"triangle\":{},\"sourceTriangle\":{},\"model\":\"{}\",\"reference\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}},\"baseObject\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}}}}{}\n", index, provenance.sourceTriangle, EscapeJson(source.modelPath), EscapeJson(source.reference.plugin), source.reference.formId, EscapeJson(source.reference.recordType), EscapeJson(source.baseObject.plugin), source.baseObject.formId, EscapeJson(source.baseObject.recordType), index + 1 == geometry.scene.triangleProvenance.size() ? "" : ",");
+            const auto terrain = provenance.terrain ? std::format(",\"terrain\":{{\"cell\":[{},{}],\"landFormId\":\"{:08X}\",\"sample\":[{},{}]}}", provenance.terrain->cellX, provenance.terrain->cellY, provenance.terrain->landFormId, provenance.terrain->sampleX, provenance.terrain->sampleY) : "";
+            output << std::format("    {{\"triangle\":{},\"sourceTriangle\":{},\"model\":\"{}\",\"reference\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}},\"baseObject\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}}{}}}{}\n", index, provenance.sourceTriangle, EscapeJson(source.modelPath), EscapeJson(source.reference.plugin), source.reference.formId, EscapeJson(source.reference.recordType), EscapeJson(source.baseObject.plugin), source.baseObject.formId, EscapeJson(source.baseObject.recordType), terrain, index + 1 == geometry.scene.triangleProvenance.size() ? "" : ",");
         }
         output << "  ]\n}\n"; return true;
     }

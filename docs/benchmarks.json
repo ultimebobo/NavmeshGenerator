@@ -3,7 +3,7 @@
   "description": "Local-game benchmark references; no game assets are included.",
   "cases": [
     { "id": "interior", "kind": "interior", "plugin": "Skyrim.esm", "cell": "configure-locally", "purpose": "reference transforms and existing NAVM" },
-    { "id": "exterior", "kind": "exterior", "plugin": "Skyrim.esm", "cell": "configure-locally", "purpose": "terrain/world-coordinate alignment" },
+    { "id": "exterior", "kind": "exterior", "plugin": "Skyrim.esm", "cell": "configure-locally", "purpose": "terrain/world-coordinate alignment", "checks": ["export with --terrain-only", "compare LAND grid bounds to CELL XCLC: origin=(cellX*4096,cellY*4096), extent=4096", "compare terrain Z against nearby NAVM vertices; expected tolerance 0.1 world units", "verify geometry.json terrain provenance names LAND, cell, and sample"] },
     { "id": "bridge", "kind": "bridge_or_overpass", "plugin": "Skyrim.esm", "cell": "configure-locally", "purpose": "stacked-surface coverage" },
     { "id": "conflict", "kind": "mod_conflict", "plugin": "configure-locally", "cell": "configure-locally", "purpose": "override diagnostics" }
   ]

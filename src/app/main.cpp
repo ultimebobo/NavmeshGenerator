@@ -3,6 +3,7 @@
 #include "skyrim/parser/plugin_parser.h"
 #include "skyrim/mo2/mo2_importer.h"
 #include "skyrim/extraction/geometry_extractor.h"
+#include "skyrim/extraction/terrain_extractor.h"
 #include "validation/validation.h"
 
 #include <filesystem>
@@ -37,6 +38,7 @@ namespace
         std::filesystem::path exportGeometry;
         std::filesystem::path exportAnalysis;
         bool diagnostics{};
+        bool terrainOnly{};
         float surfaceSearchRadius{ 64.0F };
         float maxSupportDistance{ 32.0F };
         float maxSlope{ 45.0F };
@@ -85,6 +87,8 @@ namespace
                 options.exportAnalysis = argv[++index];
             } else if (argument == "--diagnostics") {
                 options.diagnostics = true;
+            } else if (argument == "--terrain-only") {
+                options.terrainOnly = true;
             } else if (argument == "--surface-search-radius" && index + 1 < argc) {
                 options.surfaceSearchRadius = std::stof(argv[++index]);
             } else if (argument == "--max-support-distance" && index + 1 < argc) {
@@ -489,7 +493,20 @@ int main(int argc, char** argv)
         std::cout << "\n";
     }
 
-    const auto geometry = navmesh::skyrim::offline::ExtractGeometry(resolved ? options.data : options.plugin.parent_path(), *cell, options.output / ".bsa-cache");
+    auto geometry = options.terrainOnly ? navmesh::skyrim::offline::GeometryExtraction{} : navmesh::skyrim::offline::ExtractGeometry(resolved ? options.data : options.plugin.parent_path(), *cell, options.output / ".bsa-cache");
+    if (resolved) {
+        const auto terrain = navmesh::skyrim::offline::ExtractTerrain(*resolved, *cell);
+        const auto sourceOffset = geometry.scene.geometrySources.size();
+        const auto vertexOffset = static_cast<std::uint32_t>(geometry.mesh.vertices.size());
+        geometry.scene.geometrySources.insert(geometry.scene.geometrySources.end(), terrain.scene.geometrySources.begin(), terrain.scene.geometrySources.end());
+        geometry.mesh.vertices.insert(geometry.mesh.vertices.end(), terrain.mesh.vertices.begin(), terrain.mesh.vertices.end());
+        for (auto triangle : terrain.mesh.triangles) { for (auto& vertex : triangle.vertices) vertex += vertexOffset; geometry.mesh.triangles.push_back(triangle); }
+        for (auto provenance : terrain.scene.triangleProvenance) { provenance.geometrySource += sourceOffset; geometry.scene.triangleProvenance.push_back(provenance); }
+        geometry.scene.mesh = geometry.mesh;
+        geometry.terrainSupported = terrain.landRecordsDecoded != 0;
+        geometry.terrainLandRecords = terrain.landRecordsFound; geometry.terrainLandDecoded = terrain.landRecordsDecoded; geometry.terrainLandMissing = terrain.landRecordsMissing;
+        for (const auto& warning : terrain.warnings) std::cerr << warning << "\n";
+    }
     navmesh::reproducibility::ExportMetadata metadata{
         .inputPlugin = options.plugin,
         .selectedCell = &*cell,
@@ -497,8 +514,9 @@ int main(int argc, char** argv)
             .references = cell->references.size(), .referencesWithModels = geometry.referencesWithModels,
             .modelsLoaded = geometry.modelsLoaded, .modelsMissing = geometry.modelsMissing,
             .geometryVertices = geometry.mesh.vertices.size(), .geometryTriangles = geometry.mesh.triangles.size(),
+            .terrainLandRecords = geometry.terrainLandRecords, .terrainLandDecoded = geometry.terrainLandDecoded, .terrainLandMissing = geometry.terrainLandMissing,
             .terrainSupported = geometry.terrainSupported, .collisionGeometrySupported = geometry.collisionGeometrySupported },
-        .warnings = { "Terrain is not supported by the current extractor.", "Collision geometry is not supported by the current extractor." } };
+        .warnings = { geometry.terrainLandMissing ? "Terrain coverage is missing for this exterior CELL; no flat substitute was emitted." : "Terrain is not applicable to this interior CELL.", "Collision geometry is not supported by the current extractor." } };
     const auto findings = navmesh::validation::Validate(*cell);
     const auto report = navmesh::cli::ToJson(*cell, findings, metadata);
     const auto reportPath = options.output / "report.json";

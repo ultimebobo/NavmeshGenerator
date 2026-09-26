@@ -45,6 +45,9 @@ namespace navmesh::skyrim::offline
         std::size_t modelsUnreadable{};
         std::size_t modelsUnsupported{};
         bool terrainSupported{};
+        std::size_t terrainLandRecords{};
+        std::size_t terrainLandDecoded{};
+        std::size_t terrainLandMissing{};
         bool collisionGeometrySupported{};
     };
 
