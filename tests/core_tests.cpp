@@ -1,5 +1,7 @@
 #include "analysis/navmesh_analysis.h"
 #include "core/geometry/types.h"
+#include "core/reproducibility/export_metadata.h"
+#include "skyrim/parser/plugin_parser.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "validation/validation.h"
 
@@ -8,12 +10,36 @@
 #include <NifFile.hpp>
 
 #include <cassert>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <vector>
 
 namespace
 {
+    void TestExportMetadata()
+    {
+        navmesh::core::Cell cell{ .id = 0x1234, .editorId = "SyntheticCell", .isInterior = true };
+        const navmesh::reproducibility::ExportMetadata metadata{ .inputPlugin = "fixtures/Synthetic.esp", .selectedCell = &cell, .coverage = { .references = 2, .modelsLoaded = 1 }, .warnings = { "synthetic warning" } };
+        const auto json = navmesh::reproducibility::ToJson(metadata);
+        assert(json.contains("navmesh-generator/export-metadata"));
+        assert(json.contains("\"schema_version\": \"1.0.0\""));
+        assert(json.contains("00001234"));
+        assert(json.contains("skyrim-world-z-up-v1"));
+    }
+
+    void TestOptionalLocalGameData()
+    {
+        char* configuredData{};
+        std::size_t configuredDataLength{};
+        if (_dupenv_s(&configuredData, &configuredDataLength, "SKYRIM_DATA_DIR") != 0 || !configuredData || !*configuredData) { std::free(configuredData); return; }
+        const auto plugin = std::filesystem::path(configuredData) / "Skyrim.esm";
+        std::free(configuredData);
+        if (!std::filesystem::is_regular_file(plugin)) return;
+        const auto cells = navmesh::skyrim::offline::ListCells(plugin);
+        assert(!cells.empty());
+    }
+
     void TestBstTriShapeExtraction()
     {
         const auto tempRoot = std::filesystem::temp_directory_path() / "navmesh-bstrishape-test";
@@ -41,6 +67,8 @@ namespace
 
 int main()
 {
+    TestExportMetadata();
+    TestOptionalLocalGameData();
     TestBstTriShapeExtraction();
     navmesh::core::Mesh mesh{ .vertices = { { -1.0F, 2.0F, 3.0F }, { 4.0F, -5.0F, 6.0F } } };
     const auto bounds = mesh.Bounds();

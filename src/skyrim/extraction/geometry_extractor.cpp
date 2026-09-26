@@ -178,10 +178,11 @@ namespace navmesh::skyrim::offline
         return true;
     }
 
-    bool WriteGeometryJson(const std::filesystem::path& outputPath, const core::Cell& cell, const GeometryExtraction& geometry)
+    bool WriteGeometryJson(const std::filesystem::path& outputPath, const core::Cell& cell, const GeometryExtraction& geometry, const reproducibility::ExportMetadata& metadata)
     {
         std::ofstream output(outputPath, std::ios::trunc); if (!output) return false;
-        output << std::format("{{\n  \"cell\": \"{:08X}\",\n  \"references\": {},\n  \"referencesWithModels\": {},\n  \"modelsLoaded\": {},\n  \"modelsMissing\": {},\n  \"vertices\": {},\n  \"triangles\": {},\n  \"terrainSupported\": false,\n  \"collisionGeometrySupported\": false,\n  \"invalidVertices\": {},\n  \"invalidIndices\": {},\n  \"referenceDetails\": [\n", cell.id, cell.references.size(), geometry.referencesWithModels, geometry.modelsLoaded, geometry.modelsMissing, geometry.mesh.vertices.size(), geometry.mesh.triangles.size(), geometry.invalidVertices, geometry.invalidIndices);
+        output << "{\n  \"metadata\": " << reproducibility::ToJson(metadata, "    ") << ",\n";
+        output << std::format("  \"cell\": \"{:08X}\",\n  \"references\": {},\n  \"referencesWithModels\": {},\n  \"modelsLoaded\": {},\n  \"modelsMissing\": {},\n  \"vertices\": {},\n  \"triangles\": {},\n  \"terrainSupported\": false,\n  \"collisionGeometrySupported\": false,\n  \"invalidVertices\": {},\n  \"invalidIndices\": {},\n  \"referenceDetails\": [\n", cell.id, cell.references.size(), geometry.referencesWithModels, geometry.modelsLoaded, geometry.modelsMissing, geometry.mesh.vertices.size(), geometry.mesh.triangles.size(), geometry.invalidVertices, geometry.invalidIndices);
         for (std::size_t index = 0; index < geometry.references.size(); ++index) {
             const auto& reference = geometry.references[index];
             output << std::format("    {{\"formId\":\"{:08X}\",\"baseFormId\":\"{:08X}\",\"recordType\":\"{}\",\"model\":\"{}\",\"nifVersion\":\"{}\",\"shapes\":{},\"position\":[{},{},{}],\"rotation\":[{},{},{}],\"scale\":{},\"vertices\":{},\"triangles\":{},\"invalidIndices\":{},\"degenerateTriangles\":{},\"failure\":\"{}\"}}{}\n", reference.formId, reference.baseFormId, EscapeJson(reference.recordType), EscapeJson(reference.modelPath), EscapeJson(reference.nifVersion), JsonStringArray(reference.shapes), reference.position.x, reference.position.y, reference.position.z, reference.rotation.x, reference.rotation.y, reference.rotation.z, reference.scale, reference.vertices, reference.triangles, reference.invalidIndices, reference.degenerateTriangles, EscapeJson(reference.failure), index + 1 == geometry.references.size() ? "" : ",");

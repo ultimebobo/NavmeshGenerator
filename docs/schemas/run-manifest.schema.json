@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Navmesh Generator reproducible run manifest",
+  "type": "object",
+  "required": ["schema_version", "input_plugins", "selected_cell", "output_directory"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "input_plugins": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "selected_cell": { "type": "object", "minProperties": 1 },
+    "output_directory": { "type": "string" },
+    "analysis": { "type": "object" }
+  }
+}

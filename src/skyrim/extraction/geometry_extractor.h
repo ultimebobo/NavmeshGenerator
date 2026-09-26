@@ -2,6 +2,7 @@
 
 #include "core/geometry/types.h"
 #include "core/world/types.h"
+#include "core/reproducibility/export_metadata.h"
 
 #include <filesystem>
 #include <string>
@@ -44,5 +45,5 @@ namespace navmesh::skyrim::offline
 
     [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path& dataDirectory, const core::Cell& cell, const std::filesystem::path& cacheDirectory = {});
     [[nodiscard]] bool WriteGeometryObj(const std::filesystem::path& outputPath, const GeometryExtraction& geometry);
-    [[nodiscard]] bool WriteGeometryJson(const std::filesystem::path& outputPath, const core::Cell& cell, const GeometryExtraction& geometry);
+    [[nodiscard]] bool WriteGeometryJson(const std::filesystem::path& outputPath, const core::Cell& cell, const GeometryExtraction& geometry, const reproducibility::ExportMetadata& metadata);
 }

@@ -161,14 +161,14 @@ namespace
         return result;
     }
 
-    void WriteAnalysisJson(const std::filesystem::path& outputPath, const navmesh::analysis::AnalysisReport& analysisReport, const navmesh::analysis::GeometrySummary& geometrySummary, const navmesh::analysis::NavMeshSummary& meshSummary)
+    void WriteAnalysisJson(const std::filesystem::path& outputPath, const navmesh::analysis::AnalysisReport& analysisReport, const navmesh::analysis::GeometrySummary& geometrySummary, const navmesh::analysis::NavMeshSummary& meshSummary, const navmesh::reproducibility::ExportMetadata& metadata)
     {
         std::ofstream stream(outputPath, std::ios::trunc);
         if (!stream.is_open()) {
             return;
         }
 
-        stream << "{\n";
+        stream << "{\n  \"metadata\": " << navmesh::reproducibility::ToJson(metadata, "    ") << ",\n";
         stream << "  \"geometry\": {\n";
         stream << std::format("    \"vertices\": {},\n", geometrySummary.vertexCount);
         stream << std::format("    \"triangles\": {},\n", geometrySummary.triangleCount);
@@ -388,16 +388,25 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    const auto geometry = navmesh::skyrim::offline::ExtractGeometry(options.plugin.parent_path(), *cell, options.output / ".bsa-cache");
+    navmesh::reproducibility::ExportMetadata metadata{
+        .inputPlugin = options.plugin,
+        .selectedCell = &*cell,
+        .coverage = {
+            .references = cell->references.size(), .referencesWithModels = geometry.referencesWithModels,
+            .modelsLoaded = geometry.modelsLoaded, .modelsMissing = geometry.modelsMissing,
+            .geometryVertices = geometry.mesh.vertices.size(), .geometryTriangles = geometry.mesh.triangles.size(),
+            .terrainSupported = geometry.terrainSupported, .collisionGeometrySupported = geometry.collisionGeometrySupported },
+        .warnings = { "Terrain is not supported by the current extractor.", "Collision geometry is not supported by the current extractor." } };
     const auto findings = navmesh::validation::Validate(*cell);
-    const auto report = navmesh::cli::ToJson(*cell, findings);
+    const auto report = navmesh::cli::ToJson(*cell, findings, metadata);
     const auto reportPath = options.output / "report.json";
     std::ofstream reportStream(reportPath, std::ios::trunc | std::ios::binary);
     reportStream << report;
-
-    const auto geometry = navmesh::skyrim::offline::ExtractGeometry(options.plugin.parent_path(), *cell, options.output / ".bsa-cache");
     const auto geometryPath = options.exportGeometry.empty() ? options.output / "geometry.obj" : options.exportGeometry;
     if (!navmesh::skyrim::offline::WriteGeometryObj(geometryPath, geometry)) std::cerr << "Failed to write geometry OBJ to " << geometryPath << "\n";
-    if (!navmesh::skyrim::offline::WriteGeometryJson(options.output / "geometry.json", *cell, geometry)) std::cerr << "Failed to write geometry JSON\n";
+    if (!navmesh::reproducibility::WriteSidecar(geometryPath, metadata)) std::cerr << "Failed to write geometry metadata sidecar\n";
+    if (!navmesh::skyrim::offline::WriteGeometryJson(options.output / "geometry.json", *cell, geometry, metadata)) std::cerr << "Failed to write geometry JSON\n";
 
     const auto geometrySummary = navmesh::analysis::AnalyzeGeometry(geometry.mesh);
     const auto meshSummary = navmesh::analysis::AnalyzeNavMesh(cell->navMeshes.empty() ? navmesh::core::NavMesh{} : cell->navMeshes.front());
@@ -407,6 +416,7 @@ int main(int argc, char** argv)
 
     if (!options.exportAnalysis.empty() && !cell->navMeshes.empty()) {
         WriteAnalysisObj(options.exportAnalysis, cell->navMeshes.front(), geometry.mesh, analysisReport);
+        if (!navmesh::reproducibility::WriteSidecar(options.exportAnalysis, metadata)) std::cerr << "Failed to write analysis metadata sidecar\n";
         std::cout << "Exported analysis OBJ to " << options.exportAnalysis << "\n";
     }
 
@@ -414,6 +424,7 @@ int main(int argc, char** argv)
         const auto& mesh = cell->navMeshes[index];
         const auto meshPath = options.output / std::format("navmesh_{}.obj", index);
         WriteObj(meshPath, mesh, std::format("NAVM {:08X}", mesh.id));
+        if (!navmesh::reproducibility::WriteSidecar(meshPath, metadata)) std::cerr << "Failed to write navmesh metadata sidecar\n";
     }
 
     std::cout << std::format("Geometry bounds:\n  X: {} -> {}\n  Y: {} -> {}\n  Z: {} -> {}\n", geometrySummary.bounds.min.x, geometrySummary.bounds.max.x, geometrySummary.bounds.min.y, geometrySummary.bounds.max.y, geometrySummary.bounds.min.z, geometrySummary.bounds.max.z);
@@ -425,10 +436,11 @@ int main(int argc, char** argv)
         meshSummary.extent.x, meshSummary.extent.y, meshSummary.extent.z);
     std::cout << std::format("Analysis thresholds: surfaceSearchRadius={} maxSupportDistance={} maxSlope={}\n", options.surfaceSearchRadius, options.maxSupportDistance, options.maxSlope);
 
-    WriteAnalysisJson(options.output / "analysis.json", analysisReport, geometrySummary, meshSummary);
+    WriteAnalysisJson(options.output / "analysis.json", analysisReport, geometrySummary, meshSummary, metadata);
     if (options.diagnostics && !cell->navMeshes.empty()) {
         const auto diagnosticPath = options.output / "navmesh_diagnostics.html";
         WriteDiagnosticHtml(diagnosticPath, *cell, cell->navMeshes.front(), geometry.mesh, geometry, analysisReport);
+        if (!navmesh::reproducibility::WriteSidecar(diagnosticPath, metadata)) std::cerr << "Failed to write diagnostic metadata sidecar\n";
         std::cout << "Wrote diagnostic report to " << diagnosticPath << "\n";
     }
     PrintAnalysisSummary(analysisReport);

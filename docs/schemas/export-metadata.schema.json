@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://navmesh-generator.local/schemas/export-metadata-1.0.0.json",
+  "title": "Navmesh Generator export metadata",
+  "type": "object",
+  "required": ["schema", "schema_version", "tool", "input_plugins", "selected_cell", "coordinates", "source_coverage", "warnings"],
+  "properties": {
+    "schema": { "const": "navmesh-generator/export-metadata" },
+    "schema_version": { "const": "1.0.0" },
+    "tool": { "type": "object", "required": ["name", "version"] },
+    "input_plugins": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "selected_cell": { "type": ["object", "null"] },
+    "coordinates": { "type": "object", "required": ["convention", "documentation"] },
+    "source_coverage": { "type": "object", "required": ["references", "models_loaded", "models_missing", "terrain_supported", "collision_geometry_supported"] },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": true
+}

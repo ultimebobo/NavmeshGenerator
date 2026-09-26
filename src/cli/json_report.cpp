@@ -17,8 +17,13 @@ namespace navmesh::cli
 {
     std::string ToJson(const core::Cell& cell, const std::vector<validation::Finding>& findings)
     {
+        return ToJson(cell, findings, reproducibility::ExportMetadata{ .selectedCell = &cell });
+    }
+
+    std::string ToJson(const core::Cell& cell, const std::vector<validation::Finding>& findings, const reproducibility::ExportMetadata& metadata)
+    {
         std::ostringstream output;
-        output << "{\n  \"schema_version\": 1,\n  \"cell\": {\n";
+        output << "{\n  \"schema_version\": 1,\n  \"metadata\": " << reproducibility::ToJson(metadata, "    ") << ",\n  \"cell\": {\n";
         output << std::format("    \"id\": \"{:08X}\",\n    \"editor_id\": \"{}\",\n    \"name\": \"{}\",\n    \"is_interior\": {}", cell.id, Escape(cell.editorId), Escape(cell.name), cell.isInterior ? "true" : "false");
         if (cell.exteriorCoordinates) output << std::format(",\n    \"exterior_coordinates\": [{}, {}]", (*cell.exteriorCoordinates)[0], (*cell.exteriorCoordinates)[1]);
         output << "\n  },\n  \"references\": [";

@@ -1,0 +1,8 @@
+{
+  "$schema": "schemas/run-manifest.schema.json",
+  "schema_version": "1.0.0",
+  "input_plugins": ["D:/Games/Skyrim Special Edition/Data/Skyrim.esm"],
+  "selected_cell": { "form_id": "00027D1C" },
+  "output_directory": "./output",
+  "analysis": { "surface_search_radius": 64.0, "max_support_distance": 32.0, "max_slope": 45.0 }
+}
