@@ -247,6 +247,10 @@ namespace navmesh::skyrim::offline
             if ((record.type != "REFR" && record.type != "ACHR") || !record.cellFormId) continue;
             const auto cell = cellsById.find(*record.cellFormId); if (cell == cellsById.end()) continue;
             core::Reference reference{ .id = record.formId, .recordType = record.type, .editorId = record.editorId, .sourcePlugin = record.winning.plugin };
+            if (record.raw) {
+                reference.initiallyDisabled = (record.raw->flags & (1U << 11)) != 0;
+                reference.deleted = (record.raw->flags & (1U << 5)) != 0;
+            }
             if (!record.referencedFormIds.empty()) reference.baseObjectId = record.referencedFormIds.front();
             if (record.transform) {
                 const auto& transform = *record.transform;

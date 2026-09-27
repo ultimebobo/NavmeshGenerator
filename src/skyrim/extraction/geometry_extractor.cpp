@@ -330,7 +330,7 @@ namespace
         if (!manifestStream) return;
         std::size_t modelCount = 0;
         for (const auto& reference : cell.references) {
-            if (reference.modelPath.empty()) continue;
+            if (reference.modelPath.empty() || reference.initiallyDisabled || reference.deleted) continue;
             const auto relative = ModelRelativePath(reference.modelPath);
             if (assets && assets->looseModels.contains(AssetKey(relative))) continue;
             if (std::filesystem::exists(dataDirectory / relative)) continue;
@@ -375,6 +375,7 @@ namespace navmesh::skyrim::offline
             const auto& reference = cell.references[referenceIndex];
             GeometryReferenceReport report{ .formId = reference.id, .baseFormId = reference.baseObjectId, .recordType = reference.recordType, .modelPath = reference.modelPath, .position = reference.position, .rotation = reference.rotation, .scale = reference.scale };
             core::GeometrySource source{ .modelPath = reference.modelPath, .reference = { reference.sourcePlugin, reference.id, reference.recordType }, .baseObject = { reference.basePlugin, reference.baseObjectId, reference.baseRecordType } };
+            if (reference.deleted || reference.initiallyDisabled) { report.failure = reference.deleted ? "winning reference record is deleted" : "winning reference record is initially disabled"; output.scene.coverage.push_back({ core::GeometryCoverage::Excluded, std::move(source), report.failure }); ++output.modelsExcluded; output.references.push_back(std::move(report)); continue; }
             if (reference.modelPath.empty()) { report.failure = "reference has no model path"; output.scene.coverage.push_back({ core::GeometryCoverage::Missing, std::move(source), report.failure }); output.references.push_back(std::move(report)); continue; }
             if (IsFilteredReference(reference)) { report.failure = "excluded by navigation policy (effect, furniture, animated, or actor reference)"; output.scene.coverage.push_back({ core::GeometryCoverage::Excluded, std::move(source), report.failure }); ++output.modelsExcluded; output.references.push_back(std::move(report)); continue; }
             ++output.referencesWithModels; const auto relativePath = ModelRelativePath(reference.modelPath);

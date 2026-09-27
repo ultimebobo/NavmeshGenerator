@@ -11,6 +11,7 @@
 #include "validation/validation.h"
 
 #include <array>
+#include <algorithm>
 
 #include <NifFile.hpp>
 #include <bhk.hpp>
@@ -121,7 +122,16 @@ namespace
     {
         const auto root = std::filesystem::temp_directory_path() / "navmesh-cell-override-test";
         std::filesystem::create_directories(root);
-        WritePlugin(root / "Base.esm", {}, false, { { "CELL", 0x123, CellPayload("ExampleExteriorCell", true) } });
+        std::vector<std::uint8_t> baseChildren;
+        PutRecord(baseChildren, "REFR", 0x401, {});
+        std::vector<std::uint8_t> baseRecords;
+        PutRecord(baseRecords, "CELL", 0x123, CellPayload("ExampleExteriorCell", true));
+        PutGroup(baseRecords, 0x123, 6, baseChildren);
+        std::vector<std::uint8_t> baseBytes;
+        PutRecord(baseBytes, "TES4", 0, {});
+        baseBytes.insert(baseBytes.end(), baseRecords.begin(), baseRecords.end());
+        std::ofstream baseOutput(root / "Base.esm", std::ios::binary);
+        baseOutput.write(reinterpret_cast<const char*>(baseBytes.data()), static_cast<std::streamsize>(baseBytes.size())); baseOutput.close();
 
         std::vector<std::uint8_t> header;
         PutText(header, "MAST", { 'B', 'a', 's', 'e', '.', 'e', 's', 'm', 0 });
@@ -133,6 +143,8 @@ namespace
         std::vector<std::uint8_t> reference;
         std::vector<std::uint8_t> baseId; PutU32(baseId, 0x01000300); PutText(reference, "NAME", baseId);
         std::vector<std::uint8_t> child; PutRecord(child, "REFR", 0x01000400, reference);
+        PutRecord(child, "REFR", 0x00000401, reference, 1U << 11);
+        PutRecord(child, "REFR", 0x01000402, reference, 1U << 5);
         PutGroup(patch, 0x00000123, 6, child);
         std::vector<std::uint8_t> bytes;
         PutRecord(bytes, "TES4", 0, header);
@@ -144,10 +156,21 @@ namespace
         Require(resolved.diagnostics.empty());
         const auto* winner = resolved.FindWinning(0x123);
         Require(winner && winner->winning.plugin == "FixturePatch.esp" && winner->origins.size() == 2);
-        Require(resolved.cells.size() == 1 && resolved.cells.front().references.size() == 1);
-        const auto& placed = resolved.cells.front().references.front();
+        Require(resolved.cells.size() == 1 && resolved.cells.front().references.size() == 3);
+        const auto& references = resolved.cells.front().references;
+        const auto findReference = [&](std::uint32_t id) -> const navmesh::core::Reference& { return *std::find_if(references.begin(), references.end(), [=](const auto& ref) { return ref.id == id; }); };
+        const auto& placed = findReference(0x01000400);
         Require(placed.id == 0x01000400 && placed.baseObjectId == 0x01000300 && placed.sourcePlugin == "FixturePatch.esp");
         Require(placed.modelPath == "meshes/fixture.nif");
+        Require(!placed.initiallyDisabled && !placed.deleted);
+        Require(findReference(0x401).initiallyDisabled && !findReference(0x401).deleted);
+        Require(resolved.FindWinning(0x401)->origins.size() == 2);
+        Require(!findReference(0x01000402).initiallyDisabled && findReference(0x01000402).deleted);
+        const auto extracted = navmesh::skyrim::offline::ExtractGeometry(root, resolved.cells.front(), {});
+        Require(extracted.modelsExcluded == 2 && extracted.modelsMissing == 1 && extracted.scene.coverage.size() == 3);
+        const auto findReport = [&](std::uint32_t id) -> const navmesh::skyrim::offline::GeometryReferenceReport& { return *std::find_if(extracted.references.begin(), extracted.references.end(), [=](const auto& report) { return report.formId == id; }); };
+        Require(findReport(0x401).failure == "winning reference record is initially disabled");
+        Require(findReport(0x01000402).failure == "winning reference record is deleted");
     }
     void TestExteriorLandTerrain()
     {

@@ -84,6 +84,8 @@ namespace
         navmesh::core::Reference reference{};
         reference.id = header.formId;
         reference.recordType = type;
+        reference.initiallyDisabled = (header.flags & (1U << 11)) != 0;
+        reference.deleted = (header.flags & (1U << 5)) != 0;
         std::size_t offset = 0;
         while (offset + 6 <= payload.size()) {
             const auto subType = ReadAscii(payload, offset, 4);

@@ -39,6 +39,13 @@ a neighboring CELL, use `--neighboring-cell-radius 1` in the CLI or set
 **Neighboring cells** to `1` in the Windows UI (the UI default). Set it to `0`
 for an exact single-CELL scene.
 
+Placed references whose winning plugin record is initially disabled or deleted
+are omitted from collision and render geometry. They remain in `geometry.json`
+coverage as `excluded`, with the reason and winning reference provenance. This
+uses the winning record's flags, so a later plugin can enable or disable an
+earlier placement without a height-based scene filter. An initially disabled
+reference that a quest enables at runtime is outside the default offline scene.
+
 When a model has supported collision and a render mesh, collision remains the
 only geometry used for navmesh analysis. Its render mesh is additionally placed
 in `Render fallback` for visual comparison in the 3D viewer; it is display-only
