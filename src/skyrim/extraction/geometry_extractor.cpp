@@ -75,12 +75,15 @@ namespace
     [[nodiscard]] navmesh::core::Vec3 ApplyRigidBodyTransform(const nifly::bhkRigidBody& body, const nifly::Vector3& vertex)
     {
         // Havok stores rigid-body rotation as xyzw quaternion and translation
-        // separately.  Apply it before the reference/NIF transforms below.
+        // separately, in Havok units. Convert the complete rigid-body result
+        // to Skyrim units before applying the reference transform. Without
+        // this, collision shrinks to roughly 1/70 of the render geometry.
+        constexpr float skyrimUnitsPerHavokUnit = 69.99125F;
         const auto& q = body.rotation; const float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
         const float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z, wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
-        return { (1 - 2 * (yy + zz)) * vertex.x + 2 * (xy - wz) * vertex.y + 2 * (xz + wy) * vertex.z + body.translation.x,
-                 2 * (xy + wz) * vertex.x + (1 - 2 * (xx + zz)) * vertex.y + 2 * (yz - wx) * vertex.z + body.translation.y,
-                 2 * (xz - wy) * vertex.x + 2 * (yz + wx) * vertex.y + (1 - 2 * (xx + yy)) * vertex.z + body.translation.z };
+        return { ((1 - 2 * (yy + zz)) * vertex.x + 2 * (xy - wz) * vertex.y + 2 * (xz + wy) * vertex.z + body.translation.x) * skyrimUnitsPerHavokUnit,
+                 (2 * (xy + wz) * vertex.x + (1 - 2 * (xx + zz)) * vertex.y + 2 * (yz - wx) * vertex.z + body.translation.y) * skyrimUnitsPerHavokUnit,
+                 (2 * (xz - wy) * vertex.x + 2 * (yz + wx) * vertex.y + (1 - 2 * (xx + yy)) * vertex.z + body.translation.z) * skyrimUnitsPerHavokUnit };
     }
     void AddPackedTriangles(const nifly::hkPackedNiTriStripsData& data, const nifly::bhkRigidBody& body, TriangleGeometry& result)
     {

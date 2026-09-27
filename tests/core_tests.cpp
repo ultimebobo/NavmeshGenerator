@@ -7,6 +7,7 @@
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
 #include "core/scene/scene_exporter.h"
+#include "core/navmesh/candidate.h"
 #include "validation/validation.h"
 
 #include <array>
@@ -262,9 +263,9 @@ namespace
         assert(provenance.sourceTriangle == 0u && geometry.scene.geometrySources[provenance.geometrySource].reference.plugin == "Patch.esp");
     }
 
-    // Legal synthetic fixture: the render triangle is at z=0 while the packed
-    // Havok collision triangle is at z=7. Collision is the only support mesh,
-    // while render is retained separately for GLB inspection.
+    // Legal synthetic fixture: Havok coordinates and rigid-body translation
+    // are in Havok units; collision must be converted to Skyrim world units.
+    // Render is retained separately for GLB inspection.
     void TestPackedCollisionPreferredOverRenderFixture()
     {
         const auto root = std::filesystem::temp_directory_path() / "navmesh-packed-collision-fixture";
@@ -289,7 +290,9 @@ namespace
         navmesh::core::Cell cell; cell.references.push_back({ .id = 3, .baseObjectId = 4, .recordType = "REFR", .modelPath = "CollisionWins.nif", .sourcePlugin = "Fixture.esp", .basePlugin = "Fixture.esm", .baseRecordType = "STAT" });
         const auto geometry = navmesh::skyrim::offline::ExtractGeometry(root, cell, root);
         Require(geometry.collisionModelsLoaded == 1 && geometry.renderFallbackModels == 1 && geometry.mesh.triangles.size() == 1 && geometry.scene.renderFallbackMesh.triangles.size() == 1);
-        Require(geometry.mesh.vertices.front().z == 9.0F); // Packed z=7 plus Havok body translation.
+        constexpr float skyrimUnitsPerHavokUnit = 69.99125F;
+        Require(std::abs(geometry.mesh.vertices.front().z - 9.0F * skyrimUnitsPerHavokUnit) < 0.01F);
+        Require(std::abs(geometry.mesh.vertices[1].x - skyrimUnitsPerHavokUnit) < 0.01F);
         const auto& source = geometry.scene.geometrySources.at(geometry.scene.triangleProvenance.front().geometrySource);
         Require(source.sourceType == navmesh::core::GeometrySourceType::Collision && source.confidence == 1.0F && source.collisionType == "hkPackedNiTriStripsData");
         const auto& renderSource = geometry.scene.geometrySources.at(geometry.scene.renderFallbackTriangleProvenance.front().geometrySource);
@@ -355,11 +358,88 @@ namespace
         navmesh::core::SceneExportOptions cull{ .layers = { navmesh::core::SceneLayer::Collision }, .bounds = navmesh::core::SceneBounds{ .world = { .min = { 100, 100, -1 }, .max = { 101, 101, 1 } } } };
         const auto culled = navmesh::core::WriteCombinedGlb(root / "culled.glb", scene, {}, {}, metadata, cull); Require(culled.triangles == 0 && culled.culledTriangles == 1);
     }
+    void TestCandidateGeneration()
+    {
+        using namespace navmesh::core;
+        Scene scene;
+        scene.geometrySources.push_back({ .sourceType = GeometrySourceType::Terrain, .confidence = 1.0F,
+            .reference = { "Fixture.esm", 0x100, "LAND" } });
+        scene.geometrySources.push_back({ .sourceType = GeometrySourceType::Collision, .confidence = 1.0F,
+            .reference = { "Fixture.esm", 0x200, "REFR" } });
+        scene.geometrySources.push_back({ .sourceType = GeometrySourceType::RenderFallback, .confidence = 0.35F,
+            .reference = { "Fixture.esm", 0x300, "REFR" } });
+        scene.mesh.vertices = { {0,0,0},{128,0,0},{128,128,0},{0,128,0},
+            {200,0,0},{328,0,0},{328,128,500}, {400,0,0},{528,0,0},{528,128,0} };
+        scene.mesh.triangles = { {{0,1,2}},{{0,2,3}},{{4,5,6}},{{7,8,9}} };
+        scene.triangleProvenance = { {0,0,{}},{0,1,{}},{1,0,{}},{2,0,{}} };
+        auto profile = *FindNavigationProfile("human@1.0.0");
+        Require(!FindNavigationProfile("human@9.0.0"));
+        profile.agentRadius = 0; profile.minimumRegionArea = 0;
+        const auto flat = GenerateCandidate(scene,profile);
+        Require(flat.topology.valid && flat.mesh.polygons.size() == 2 && flat.regions.size() == 1);
+        Require(flat.statistics.rejectedSlope == 1 && flat.statistics.rejectedSource == 1);
+        Require(flat.contours.size() == 1 && flat.contours.front().closed && flat.contours.front().vertices.size() == 4);
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-candidate-test";
+        std::filesystem::create_directories(root);
+        Require(WriteCandidateJson(root / "first.json",flat,scene,"{}"));
+        Require(WriteCandidateJson(root / "second.json",GenerateCandidate(scene,profile),scene,"{}"));
+        std::ifstream first(root / "first.json",std::ios::binary), second(root / "second.json",std::ios::binary);
+        Require(std::string(std::istreambuf_iterator<char>(first),{}) == std::string(std::istreambuf_iterator<char>(second),{}));
+        Require(WriteCandidateObj(root / "candidate.obj",flat));
+        auto broken = flat; broken.mesh.polygons[0].neighbors[0] = 42;
+        Require(!ValidateCandidateTopology(broken).valid);
+
+        Scene covered = scene;
+        covered.mesh.vertices.insert(covered.mesh.vertices.end(), { {0,0,80},{128,0,80},{128,128,80},{0,128,80} });
+        covered.mesh.triangles.insert(covered.mesh.triangles.end(), { {{10,11,12}},{{10,12,13}} });
+        covered.triangleProvenance.insert(covered.triangleProvenance.end(), { {1,1,{}},{1,2,{}} });
+        const auto obstructed = GenerateCandidate(covered,profile);
+        Require(obstructed.statistics.rejectedClearance == 2 && obstructed.mesh.polygons.size() == 2);
+        Require(obstructed.polygonSourceTriangles[0] >= 4 && obstructed.topology.valid);
+        Scene walled = scene;
+        walled.mesh.vertices.insert(walled.mesh.vertices.end(), { {64,-20,0},{64,150,0},{64,150,200} });
+        walled.mesh.triangles.push_back({{10,11,12}});
+        walled.triangleProvenance.push_back({1,1,{}});
+        const auto blocked = GenerateCandidate(walled,profile);
+        Require(blocked.statistics.rejectedObstruction == 2 && blocked.mesh.polygons.empty());
+        Scene bridge = scene;
+        bridge.mesh.vertices.insert(bridge.mesh.vertices.end(), { {0,0,200},{128,0,200},{128,128,200},{0,128,200} });
+        bridge.mesh.triangles.insert(bridge.mesh.triangles.end(), { {{10,11,12}},{{10,12,13}} });
+        bridge.triangleProvenance.insert(bridge.triangleProvenance.end(), { {1,1,{}},{1,2,{}} });
+        const auto stacked = GenerateCandidate(bridge,profile);
+        Require(stacked.topology.valid && stacked.mesh.polygons.size() == 4 && stacked.regions.size() == 2);
+        profile.agentRadius = 16;
+        const auto inset = GenerateCandidate(scene,profile);
+        Require(inset.topology.valid && !inset.mesh.polygons.empty());
+        for (const auto& vertex : inset.mesh.vertices) if (vertex.x < 130) Require(vertex.x >= 15.9F && vertex.y >= 15.9F && vertex.x <= 112.1F && vertex.y <= 112.1F);
+        Scene stepScene;
+        stepScene.geometrySources.push_back(scene.geometrySources[0]);
+        stepScene.mesh.vertices = { {0,0,0},{128,0,0},{128,128,0}, {128,0,10},{256,0,10},{128,128,10} };
+        stepScene.mesh.triangles = { {{0,1,2}},{{3,4,5}} };
+        stepScene.triangleProvenance = { {0,0,{}},{0,1,{}} };
+        profile.agentRadius = 0; profile.agentHeight = 5; profile.clearance = 5;
+        const auto stitched = GenerateCandidate(stepScene,profile);
+        Require(stitched.topology.valid && stitched.mesh.polygons.size() == 2 && stitched.regions.size() == 1);
+        const auto oneCell = GenerateCandidate(stepScene,profile,AABB{ .min = {0,0,-100}, .max = {128,128,300} });
+        Require(oneCell.topology.valid && oneCell.mesh.polygons.size() == 1);
+        profile.stepHeight = 0;
+        const auto separated = GenerateCandidate(stepScene,profile);
+        Require(separated.topology.valid && separated.regions.size() == 2);
+        navmesh::core::Cell cell{ .id = 0x400, .editorId = "CandidateFixture" };
+        const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
+        navmesh::core::SceneExportOptions visual{ .layers = { SceneLayer::CandidateNavmesh }, .candidateNavmesh = &flat.mesh };
+        const auto visualPath = root / "candidate.glb";
+        const auto exported = WriteCombinedGlb(visualPath,scene,{}, {},metadata,visual);
+        Require(exported.triangles == 2);
+        std::ifstream visualGlb(visualPath,std::ios::binary); std::string visualBytes(std::istreambuf_iterator<char>(visualGlb),{});
+        Require(visualBytes.contains("Candidate NAVM"));
+    }
 }
 
 int main(int argc, char** argv)
 {
     if (argc > 1 && std::string_view(argv[1]) == "--scene-only") { TestCombinedColorLayeredGlb(); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--candidate-only") { TestCandidateGeneration(); return 0; }
     TestResolvedLoadOrder();
     TestWinterholdCellOverride();
     TestMo2ProfileImport();
@@ -371,6 +451,7 @@ int main(int argc, char** argv)
     TestPackedCollisionPreferredOverRenderFixture();
     TestSceneTransforms();
     TestCombinedColorLayeredGlb();
+    TestCandidateGeneration();
     navmesh::core::Mesh mesh{ .vertices = { { -1.0F, 2.0F, 3.0F }, { 4.0F, -5.0F, 6.0F } } };
     const auto bounds = mesh.Bounds();
     assert(bounds.IsValid());

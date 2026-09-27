@@ -6,6 +6,7 @@
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
 #include "core/scene/scene_exporter.h"
+#include "core/navmesh/candidate.h"
 #include "validation/validation.h"
 
 #include <filesystem>
@@ -388,6 +389,7 @@ namespace
             else if (token == "collision") result.push_back(navmesh::core::SceneLayer::Collision);
             else if (token == "render" || token == "render_fallback") result.push_back(navmesh::core::SceneLayer::RenderFallback);
             else if (token == "diagnostics" || token == "markers") result.push_back(navmesh::core::SceneLayer::DiagnosticMarkers);
+            else if (token == "candidate") result.push_back(navmesh::core::SceneLayer::CandidateNavmesh);
         }
         return result;
     }
@@ -648,7 +650,34 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     std::vector<navmesh::core::DiagnosticMarker> sceneMarkers;
     sceneMarkers.reserve(analysisReport.polygons.size());
     for (const auto& polygon : analysisReport.polygons) sceneMarkers.push_back({ polygon.centroid, polygon.classification, polygon.index, polygon.support.found ? std::optional<std::size_t>{ polygon.support.triangleIndex } : std::nullopt, cell->navMeshes.front().id });
+    std::optional<navmesh::core::CandidateNavMesh> candidate;
+    if (options.generateCandidate) {
+        const auto profile = navmesh::core::FindNavigationProfile(options.navigationProfile);
+        if (!profile) { std::cerr << "Unknown navigation profile '" << options.navigationProfile << "'. Available: human@1.0.0, small@1.0.0.\n"; return 1; }
+        // With neighboring exterior cells selected, let matching edges on
+        // both sides of a CELL border participate in the same region.
+        try {
+            candidate = navmesh::core::GenerateCandidate(geometry.scene, *profile,
+                options.neighboringCellRadius > 0 ? std::nullopt : analysisConfig.cellBounds);
+        } catch (const std::exception& error) {
+            std::cerr << "Candidate generation failed: " << error.what() << "\n";
+            return 2;
+        }
+        const auto jsonPath = options.output / "candidate-navm.json";
+        const auto objPath = options.output / "candidate-navm.obj";
+        if (!navmesh::core::WriteCandidateJson(jsonPath, *candidate, geometry.scene, navmesh::reproducibility::ToJson(metadata, "    "))
+            || !navmesh::core::WriteCandidateObj(objPath, *candidate)
+            || !navmesh::reproducibility::WriteSidecar(objPath, metadata)) {
+            std::cerr << "Failed to write neutral candidate exports.\n"; return 2;
+        }
+        std::cout << std::format("Candidate NAVM: {} polygons, {} regions, topology {}.\n",
+            candidate->mesh.polygons.size(), candidate->regions.size(), candidate->topology.valid ? "valid" : "invalid");
+    }
     navmesh::core::SceneExportOptions sceneOptions{ .layers = ParseSceneLayers(options.geometryLayers), .detailedProvenance = options.outputDetail != "summary" };
+    if (candidate) {
+        sceneOptions.layers.push_back(navmesh::core::SceneLayer::CandidateNavmesh);
+        sceneOptions.candidateNavmesh = &candidate->mesh;
+    }
     if (options.sceneBounds) {
         const auto& bounds = *options.sceneBounds;
         if (bounds[0] > bounds[2] || bounds[1] > bounds[3]) { std::cerr << "--scene-bounds requires minX minY maxX maxY.\n"; return 1; }
@@ -658,6 +687,10 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     const auto sceneExport = navmesh::core::WriteCombinedGlb(scenePath, geometry.scene, sceneNavmeshes, sceneMarkers, metadata, sceneOptions);
     if (!navmesh::reproducibility::WriteSidecar(scenePath, metadata)) std::cerr << "Failed to write GLB metadata sidecar\n";
     std::cout << std::format("Exported combined GLB scene to {} ({} objects, {} triangles, {} geometry triangles culled)\n", scenePath.string(), sceneExport.objects, sceneExport.triangles, sceneExport.culledTriangles);
+    if (candidate && !candidate->topology.valid) {
+        std::cerr << "Candidate topology validation failed; see candidate-navm.json.\n";
+        return 2;
+    }
     update(90, "Navmesh support analyzed");
     if (wasCancelled()) return 3;
 

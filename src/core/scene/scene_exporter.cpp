@@ -32,6 +32,7 @@ namespace
         case SceneLayer::Collision: return "Collision";
         case SceneLayer::RenderFallback: return "Render fallback";
         case SceneLayer::DiagnosticMarkers: return "Diagnostic markers";
+        case SceneLayer::CandidateNavmesh: return "Candidate NAVM";
         }
         return "Unknown";
     }
@@ -40,6 +41,7 @@ namespace
         if (layer == SceneLayer::Terrain) return 1; // brown/green
         if (layer == SceneLayer::Collision) return 2; // gray
         if (layer == SceneLayer::RenderFallback) return 3; // purple
+        if (layer == SceneLayer::CandidateNavmesh) return 12; // blue-green
         if (classification.empty()) return 0; // unclassified NAVM
         if (classification == "supported") return 4;
         if (classification == "floating") return 5;
@@ -165,6 +167,19 @@ namespace navmesh::core
             }
             for (auto& [_, object] : classifiedObjects) objects.push_back(std::move(object));
         }
+        if (options.candidateNavmesh && Contains(options.layers, SceneLayer::CandidateNavmesh)) {
+            const auto& candidate = *options.candidateNavmesh;
+            Object object{ SceneLayer::CandidateNavmesh, "Candidate NAVM", "{\"kind\":\"neutral_candidate\"}" };
+            for (const auto& polygon : candidate.polygons) {
+                if (polygon.vertices[0] >= candidate.vertices.size() || polygon.vertices[1] >= candidate.vertices.size() || polygon.vertices[2] >= candidate.vertices.size()) continue;
+                AABB bounds; for (const auto vertex : polygon.vertices) bounds.Expand(candidate.vertices[vertex]);
+                if (options.bounds && !bounds.Intersects(options.bounds->world)) continue;
+                const auto base = static_cast<std::uint32_t>(object.vertices.size());
+                for (const auto vertex : polygon.vertices) object.vertices.push_back(candidate.vertices[vertex]);
+                object.triangles.push_back({ base,base+1,base+2 });
+            }
+            objects.push_back(std::move(object));
+        }
         if (Contains(options.layers, SceneLayer::DiagnosticMarkers)) {
             std::map<std::string, Object> markerObjects;
             for (const auto& marker : markers) {
@@ -176,7 +191,7 @@ namespace navmesh::core
         }
 
         std::vector<std::uint8_t> binary; std::vector<std::string> bufferViews, accessors, meshes, nodes, provenanceObjects;
-        std::array<std::vector<std::size_t>, 5> layerChildren;
+        std::array<std::vector<std::size_t>, 6> layerChildren;
         for (const auto& object : objects) {
             if (object.triangles.empty()) continue;
             Align(binary); const auto positionOffset = binary.size(); AABB bounds;
@@ -193,8 +208,8 @@ namespace navmesh::core
             else provenanceObjects.push_back(std::format("{{\"name\":\"{}\",\"layer\":\"{}\",\"triangles\":{}}}", Escape(object.name), LayerName(object.layer), object.triangles.size()));
             result.triangles += object.triangles.size(); ++result.objects;
         }
-        const std::array<const char*, 12> materialNames{ "Unclassified NAVM (cyan)", "Terrain (brown-green)", "Collision (gray)", "Render fallback (purple)", "Supported (green)", "Floating (orange)", "Buried (red)", "Too steep (yellow)", "Blocked (magenta)", "Out of coverage (blue)", "Ambiguous (violet)", "Unsupported or unknown (dark gray)" };
-        const std::array<std::array<float, 4>, 12> colors{{ {{0.0F,0.85F,0.95F,0.70F}}, {{0.35F,0.48F,0.16F,1.0F}}, {{0.46F,0.46F,0.50F,1.0F}}, {{0.58F,0.25F,0.75F,0.80F}}, {{0.10F,0.70F,0.25F,0.75F}}, {{1.0F,0.50F,0.05F,0.75F}}, {{0.90F,0.10F,0.10F,0.75F}}, {{0.95F,0.82F,0.08F,0.75F}}, {{0.85F,0.05F,0.60F,0.75F}}, {{0.08F,0.35F,0.95F,0.75F}}, {{0.48F,0.20F,0.90F,0.75F}}, {{0.25F,0.28F,0.32F,0.75F}} }};
+        const std::array<const char*, 13> materialNames{ "Unclassified NAVM (cyan)", "Terrain (brown-green)", "Collision (gray)", "Render fallback (purple)", "Supported (green)", "Floating (orange)", "Buried (red)", "Too steep (yellow)", "Blocked (magenta)", "Out of coverage (blue)", "Ambiguous (violet)", "Unsupported or unknown (dark gray)", "Candidate NAVM (blue-green)" };
+        const std::array<std::array<float, 4>, 13> colors{{ {{0.0F,0.85F,0.95F,0.70F}}, {{0.35F,0.48F,0.16F,1.0F}}, {{0.46F,0.46F,0.50F,1.0F}}, {{0.58F,0.25F,0.75F,0.80F}}, {{0.10F,0.70F,0.25F,0.75F}}, {{1.0F,0.50F,0.05F,0.75F}}, {{0.90F,0.10F,0.10F,0.75F}}, {{0.95F,0.82F,0.08F,0.75F}}, {{0.85F,0.05F,0.60F,0.75F}}, {{0.08F,0.35F,0.95F,0.75F}}, {{0.48F,0.20F,0.90F,0.75F}}, {{0.25F,0.28F,0.32F,0.75F}}, {{0.02F,0.78F,0.72F,0.8F}} }};
         std::vector<std::string> materials; for (std::size_t i{}; i < materialNames.size(); ++i) materials.push_back(std::format("{{\"name\":\"{}\",\"doubleSided\":true,\"alphaMode\":\"{}\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":[{},{},{},{}],\"metallicFactor\":0,\"roughnessFactor\":0.82}}}}", materialNames[i], colors[i][3] < 1.0F ? "BLEND" : "OPAQUE", colors[i][0], colors[i][1], colors[i][2], colors[i][3]));
         const auto join = [](const auto& values) { std::ostringstream out; for (std::size_t i{}; i < values.size(); ++i) out << (i ? "," : "") << values[i]; return out.str(); };
         // Keep a stable, visible hierarchy even when a requested layer has no
@@ -215,7 +230,7 @@ namespace navmesh::core
         const std::uint32_t magic = 0x46546C67, version = 2, length = static_cast<std::uint32_t>(12 + 8 + json.size() + 8 + binary.size()), jsonLength = static_cast<std::uint32_t>(json.size()), jsonType = 0x4E4F534A, binaryLength = static_cast<std::uint32_t>(binary.size()), binaryType = 0x004E4942;
         glb.write(reinterpret_cast<const char*>(&magic), sizeof(magic)); glb.write(reinterpret_cast<const char*>(&version), sizeof(version)); glb.write(reinterpret_cast<const char*>(&length), sizeof(length)); glb.write(reinterpret_cast<const char*>(&jsonLength), sizeof(jsonLength)); glb.write(reinterpret_cast<const char*>(&jsonType), sizeof(jsonType)); glb.write(json.data(), static_cast<std::streamsize>(json.size())); glb.write(reinterpret_cast<const char*>(&binaryLength), sizeof(binaryLength)); glb.write(reinterpret_cast<const char*>(&binaryType), sizeof(binaryType)); glb.write(reinterpret_cast<const char*>(binary.data()), static_cast<std::streamsize>(binary.size()));
         std::ofstream provenance(outputPath.string() + ".provenance.json", std::ios::trunc);
-        if (provenance) provenance << "{\n  \"metadata\": " << reproducibility::ToJson(metadata, "    ") << ",\n  \"layers\": [\"Existing NAVM\", \"Terrain\", \"Collision\", \"Render fallback\", \"Diagnostic markers\"],\n  \"selection\": {\"culledTriangles\": " << result.culledTriangles << ", \"detail\": \"" << (options.detailedProvenance ? "full" : "summary") << "\"},\n  \"objects\": [" << join(provenanceObjects) << "]\n}\n";
+        if (provenance) provenance << "{\n  \"metadata\": " << reproducibility::ToJson(metadata, "    ") << ",\n  \"layers\": [\"Existing NAVM\", \"Terrain\", \"Collision\", \"Render fallback\", \"Diagnostic markers\", \"Candidate NAVM\"],\n  \"selection\": {\"culledTriangles\": " << result.culledTriangles << ", \"detail\": \"" << (options.detailedProvenance ? "full" : "summary") << "\"},\n  \"objects\": [" << join(provenanceObjects) << "]\n}\n";
         return result;
     }
 }

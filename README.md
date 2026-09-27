@@ -2,7 +2,7 @@
 
 Offline experimental Skyrim navmesh analysis tooling.
 
-Run `navmesh-offline.exe` without arguments to open the Windows desktop UI. It exposes the same options as the command line, stores the most recently used values in `%LOCALAPPDATA%\\NavmeshGenerator\\config.ini`, shows hover help through the circular `?` controls, and reports elapsed time when a run finishes.
+Run `navmesh-offline.exe` without arguments to open the Windows desktop UI. It exposes the main command-line options, including a **Generate candidate NAVM** checkbox and versioned navigation-profile selector, stores the most recently used values in `%LOCALAPPDATA%\\NavmeshGenerator\\config.ini`, shows hover help through the circular `?` controls, and reports elapsed time when a run finishes.
 
 ## What this is
 
@@ -71,12 +71,15 @@ The CLI writes files into the target output directory:
 - `scene.glb` — one combined, color-layered scene with named Existing NAVM, terrain, collision, render-fallback, and diagnostic-marker objects. `scene.glb.provenance.json` maps each named object to its source record/model and preserves run metadata; `scene.glb.metadata.json` is the standard metadata sidecar.
 - `scene-report.html` — standalone classification report grouped by support-source and geometry-coverage status. Its support-triangle indices join `analysis.json` to `geometry.json`; this report does not change classifications.
 - `analysis.json` — stable, report-only discrepancy evidence: seven-point polygon coverage, selected source type and confidence, explicit `ambiguous`/`out_of_coverage` states, topology findings, and manual-review repair candidates. It never contains replacement NAVM geometry or a plugin write instruction.
+- With `--generate-candidate`, `candidate-navm.json` contains a neutral candidate NAVM with versioned profile parameters, triangle and region provenance, contours, adjacency, statistics, and topology validation. `candidate-navm.obj` is a simple mesh view, and `scene.glb` gains a blue-green Candidate NAVM layer beside the existing scene layers. These files do not contain plugin records.
 - `input-report.json` — MO2 profile snapshot and virtual-file winners, emitted first for every MO2 run.
 - `load-order.json` — when using `--load-order`, every winning record with its plugin and ordered origin chain.
 
 Every JSON export contains a versioned `metadata` block. OBJ and HTML exports have an adjacent `<export>.metadata.json` sidecar. The metadata identifies the tool version, input plugin, selected cell, coordinate convention, source coverage, and known limitations. Its schema is [docs/schemas/export-metadata.schema.json](docs/schemas/export-metadata.schema.json); coordinate details are in [docs/coordinate-system.md](docs/coordinate-system.md).
 
 The combined-scene workflow, material legend, provenance joins, and Online 3D Viewer instructions are in [docs/scene-inspection.md](docs/scene-inspection.md). For scalable exterior scenes, use `--neighboring-cell-radius <cells>`, `--scene-bounds <minX> <minY> <maxX> <maxY>`, `--geometry-layers <navmesh,terrain,collision,render,diagnostics>`, and `--output-detail <full|summary>`. `--export-scene <path>` changes the default `scene.glb` location. Neighboring cells are appended one at a time and bounds filtering uses a coarse world-space scene grid before GLB buffers are created.
+
+To generate an inspection candidate from the selected cell, add `--generate-candidate --navigation-profile human@1.0.0`. The other built-in profile is `small@1.0.0`; unknown names or versions fail explicitly. Profiles specify agent radius and height, slope, step, vertical clearance, cell-border policy, weld tolerance, minimum region area, and contour simplification tolerance. Candidate construction uses terrain and supported collision only. It filters slopes and obstructions, joins traversable edges, insets exposed edges, triangulates the remaining polygons, extracts contours, and validates topology before success. See [the algorithm choice and benchmark evidence](docs/candidate-surface-algorithm.md) for scope and limits. There is no plugin serialization option.
 
 Record the command inputs using [docs/run-manifest.example.json](docs/run-manifest.example.json) before a benchmark. The current CLI does not consume this file; map its fields to the existing command-line flags so milestone 0 does not alter parser input behavior.
 
@@ -94,16 +97,16 @@ The repository contains only synthetic, redistributable fixture builders; it doe
 - Archived assets are cached under `<output>/.bsa-cache`; delete that directory to rebuild the cache.
 - Exterior `LAND` decoding supports the collision-relevant VHGT height grid only: 33×33 samples per cell, 128-unit spacing, and world origin `(cellX * 4096, cellY * 4096)`. It intentionally excludes visual LOD and texture layers. Use `--terrain-only` with a resolved load order to export only that terrain diagnostic surface. Missing or malformed `LAND` records are reported and produce no replacement plane.
 - Some Skyrim record variants and non-standard modded data layouts may still be rejected or reported as unsupported.
-- Discrepancy detection is deliberately conservative. Collision support has priority over terrain, terrain has priority over render fallback, and only sufficiently consistent samples can classify a polygon. Ambiguous or out-of-coverage polygons are displayed as limitations rather than defects. Candidates are report-only/manual-review evidence; the tool does not modify NAVM records or write replacement plugins.
+- Discrepancy detection is deliberately conservative. Collision support has priority over terrain, terrain has priority over render fallback, and only sufficiently consistent samples can classify a polygon. Ambiguous or out-of-coverage polygons are displayed as limitations rather than defects. Repair candidates are report-only/manual-review evidence; the tool does not modify NAVM records or write replacement plugins.
 
 The verified NVNM prefix, preservation policy, and known trailing-layout limits are documented in [docs/navm-format-study.md](docs/navm-format-study.md). This milestone remains read-only and does not serialize plugins.
 
 ## Next milestone
 
-The next milestone after this POC is:
+The next roadmap milestone is:
 
 ```text
-report-only discrepancy detection -> candidate navmesh
+candidate NAVM -> conservative repair planning
 ```
 
 not runtime integration.
