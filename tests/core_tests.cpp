@@ -295,6 +295,13 @@ namespace
         assets.looseModels.emplace("meshes/markerx.nif", modelPath);
         const auto fromMo2 = navmesh::skyrim::offline::ExtractGeometry(emptyData, cell, {}, {}, {}, &assets);
         Require(fromMo2.modelsLoaded == 1 && fromMo2.mesh.triangles.size() == 1 && fromMo2.modelsMissing == 0);
+
+        // Placed DATA angles use the game's matrix convention. A positive Z
+        // angle moves local +X toward world -Y, including render fallbacks.
+        cell.references.front().rotation.z = 1.57079632679F;
+        const auto rotatedGeometry = navmesh::skyrim::offline::ExtractGeometry(tempRoot, cell, tempRoot);
+        Require(std::abs(rotatedGeometry.mesh.vertices[1].x - 10.0F) < 1.0e-4F);
+        Require(std::abs(rotatedGeometry.mesh.vertices[1].y - 19.0F) < 1.0e-4F);
     }
 
     // Legal synthetic fixture: Havok coordinates and rigid-body translation
@@ -337,6 +344,13 @@ namespace
         Require(exported.objects == 2 && exported.triangles == 2);
         std::ifstream glb(output, std::ios::binary); glb.seekg(12); std::uint32_t jsonLength{}; glb.read(reinterpret_cast<char*>(&jsonLength), sizeof(jsonLength)); glb.seekg(4, std::ios::cur); std::string gltf(jsonLength, '\0'); glb.read(gltf.data(), jsonLength);
         Require(gltf.contains("Collision:") && gltf.contains("Render fallback:"));
+
+        cell.references.front().rotation.z = 1.57079632679F;
+        const auto rotated = navmesh::skyrim::offline::ExtractGeometry(root, cell, root);
+        Require(std::abs(rotated.mesh.vertices[1].x) < 0.01F);
+        Require(std::abs(rotated.mesh.vertices[1].y + skyrimUnitsPerHavokUnit) < 0.01F);
+        Require(std::abs(rotated.scene.renderFallbackMesh.vertices[1].x) < 1.0e-4F);
+        Require(std::abs(rotated.scene.renderFallbackMesh.vertices[1].y + 1.0F) < 1.0e-4F);
     }
 
     void TestSceneTransforms()
@@ -349,6 +363,10 @@ namespace
         Require(scaled.x == 2 && scaled.y == -4 && scaled.z == 6);
         const auto rotated = Transform::FromEulerXYZ({}, { 0, 0, halfPi }).ApplyPoint({ 1, 0, 0 });
         Require(std::abs(rotated.x) < 1.0e-4F && std::abs(rotated.y - 1) < 1.0e-4F);
+        const auto skyrimZ = Transform::FromSkyrimReference({}, { 0, 0, halfPi }).ApplyPoint({ 1, 0, 0 });
+        Require(std::abs(skyrimZ.x) < 1.0e-4F && std::abs(skyrimZ.y + 1) < 1.0e-4F);
+        const auto skyrimMixed = Transform::FromSkyrimReference({ 10, 20, 30 }, { halfPi, 0, halfPi }, 2).ApplyPoint({ 0, 1, 0 });
+        Require(std::abs(skyrimMixed.x - 12) < 1.0e-4F && std::abs(skyrimMixed.y - 20) < 1.0e-4F && std::abs(skyrimMixed.z - 30) < 1.0e-4F);
         navmesh::core::Scene scene;
         scene.nodes.push_back({ .name = "parent", .localTransform = Transform::FromEulerXYZ({ 10, 0, 0 }, { 0, 0, halfPi }) });
         scene.nodes.push_back({ .name = "child", .parent = 0u, .localTransform = Transform::FromEulerXYZ({ 2, 0, 0 }, {}, 1.0F) });

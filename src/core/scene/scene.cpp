@@ -14,6 +14,16 @@ namespace navmesh::core
             scale * (cz * sy * cx + sz * sx), scale * (sz * sy * cx - cz * sx), scale * cy * cx, 0,
             translation.x, translation.y, translation.z, 1 } };
     }
+    Transform Transform::FromSkyrimReference(const Vec3 translation, const Vec3 radians, const float scale) noexcept
+    {
+        const auto cx = std::cos(radians.x), sx = std::sin(radians.x), cy = std::cos(radians.y), sy = std::sin(radians.y), cz = std::cos(radians.z), sz = std::sin(radians.z);
+        // Match NiMatrix3::SetEulerAnglesXYZ, then store its rows as columns
+        // for Transform's column-major ApplyPoint representation.
+        return { { scale * cy * cz, scale * (sx * sy * cz - cx * sz), scale * (cx * sy * cz + sx * sz), 0,
+            scale * cy * sz, scale * (sx * sy * sz + cx * cz), scale * (cx * sy * sz - sx * cz), 0,
+            -scale * sy, scale * sx * cy, scale * cx * cy, 0,
+            translation.x, translation.y, translation.z, 1 } };
+    }
     Transform Transform::Then(const Transform& child) const noexcept
     {
         Transform result{};

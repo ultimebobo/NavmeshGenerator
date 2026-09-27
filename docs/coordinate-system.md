@@ -9,7 +9,7 @@ OBJ is written without axis remapping: `v x y z` is Skyrim world X/Y/Z. A viewer
 Use a tolerance of 0.01 world units for synthetic fixture comparisons and 0.1 world units for visual alignment checks, allowing for float serialization and viewer display precision. Larger systematic offsets are evidence of missing transforms or coverage, not a reason to silently relax analysis thresholds.
 # Scene-transform implementation
 
-Milestone 3 uses one neutral affine transform implementation for all extracted visual geometry. Vectors are column vectors. A local transform with Euler angles `(x, y, z)` in radians applies rotations in this order: X, then Y, then Z (`Rz * Ry * Rx`), after uniform scale; translation is applied last. A child node's world transform is `parent * child`. NIF parent-node transforms are resolved into the NIF-local vertices before this neutral reference transform is applied.
+Milestone 3 uses one neutral affine transform representation for extracted geometry. Vectors are column vectors. The generic `FromEulerXYZ` constructor applies X, then Y, then Z (`Rz * Ry * Rx`), after uniform scale; translation is applied last. Placed Skyrim references use `FromSkyrimReference` instead: it matches the game's `NiMatrix3::SetEulerAnglesXYZ` matrix for the `REFR`/`ACHR` `DATA` angles in radians. In particular, a positive reference Z angle rotates model-local +X toward world -Y. A child node's world transform is `parent * child`. NIF parent-node transforms are resolved into the NIF-local vertices before the reference transform is applied.
 
 ## Exterior LAND terrain
 

@@ -405,7 +405,7 @@ namespace navmesh::skyrim::offline
                 output.references.push_back(std::move(report));
                 continue;
             }
-            const auto transform = core::Transform::FromEulerXYZ(reference.position, reference.rotation, reference.scale);
+            const auto transform = core::Transform::FromSkyrimReference(reference.position, reference.rotation, reference.scale);
             const auto appendSource = [&](const TriangleGeometry& sourceMesh, core::GeometrySource meshSource, core::Mesh& destination, std::vector<core::TriangleProvenance>& destinationProvenance) {
                 const auto sourceIndex = output.scene.geometrySources.size();
                 output.scene.geometrySources.push_back(std::move(meshSource));

@@ -17,6 +17,16 @@ namespace navmesh::core
         std::array<float, 16> matrix{};
         [[nodiscard]] static Transform Identity() noexcept;
         [[nodiscard]] static Transform FromEulerXYZ(Vec3 translation, Vec3 radians, float uniformScale = 1.0F) noexcept;
+        /** Build a placed Skyrim reference transform from DATA angles in radians.
+         * Uses the game's NiMatrix3::SetEulerAnglesXYZ convention in world X/Y/Z;
+         * the Z angle rotates +X toward -Y. Scale is uniform and applied before
+         * rotation, and translation is in world units.
+         * @param translation Reference world position in Skyrim units.
+         * @param radians Reference DATA X/Y/Z angles in radians.
+         * @param uniformScale Reference scale; callers should supply a finite value.
+         * @return Affine transform from model-local to Skyrim world coordinates.
+         */
+        [[nodiscard]] static Transform FromSkyrimReference(Vec3 translation, Vec3 radians, float uniformScale = 1.0F) noexcept;
         [[nodiscard]] Transform Then(const Transform& child) const noexcept;
         [[nodiscard]] Vec3 ApplyPoint(Vec3 point) const noexcept;
     };
