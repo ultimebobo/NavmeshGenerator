@@ -10,6 +10,8 @@
 
 namespace navmesh::core
 {
+    /// Versioned movement and surface constraints used to build a candidate navmesh.
+    /// Distances and areas use Skyrim world units; angles use degrees.
     struct NavigationProfile
     {
         std::string name{ "human" };
@@ -25,6 +27,8 @@ namespace navmesh::core
         std::string cellBorderPolicy{ "preserve_open_border" };
     };
 
+    /// Find a built-in profile by its `name@version` key.
+    /// @return The profile, or no value for an unknown name or version.
     [[nodiscard]] std::optional<NavigationProfile> FindNavigationProfile(const std::string& key);
 
     struct CandidateRegion
@@ -42,6 +46,7 @@ namespace navmesh::core
         std::size_t inputTriangles{}, eligibleTriangles{}, rejectedSlope{}, rejectedClearance{}, rejectedObstruction{}, rejectedSource{},
             rejectedDegenerate{}, rejectedSmallRegion{}, outputPolygons{};
     };
+    /// Inspection-only result; this does not encode or replace a plugin NAVM record.
     struct CandidateNavMesh
     {
         NavigationProfile profile;
@@ -54,10 +59,18 @@ namespace navmesh::core
         std::vector<std::string> warnings;
     };
 
+    /// Build a candidate from supported terrain and collision triangles in a scene.
+    /// @param scene Geometry and source evidence to inspect.
+    /// @param profile Versioned movement and surface constraints.
+    /// @param cellBounds Optional selected-cell world-space bounds for border handling.
+    /// @return Candidate geometry, source evidence, statistics, and topology findings.
     [[nodiscard]] CandidateNavMesh GenerateCandidate(const Scene& scene, const NavigationProfile& profile,
         std::optional<AABB> cellBounds = std::nullopt);
+    /// Check candidate polygon topology without modifying its geometry.
     [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh& candidate);
+    /// Write the candidate and its source evidence as JSON; returns false on output failure.
     [[nodiscard]] bool WriteCandidateJson(const std::filesystem::path& path, const CandidateNavMesh& candidate,
         const Scene& scene, const std::string& metadataJson);
+    /// Write candidate triangles as an OBJ inspection mesh; returns false on output failure.
     [[nodiscard]] bool WriteCandidateObj(const std::filesystem::path& path, const CandidateNavMesh& candidate);
 }

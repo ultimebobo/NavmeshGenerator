@@ -112,3 +112,11 @@ candidate NAVM -> conservative repair planning
 not runtime integration.
 
 See [docs/architecture.md](docs/architecture.md) for the intended pipeline and separation between parsing, extraction, neutral model, analysis, and future NAVM serialization.
+
+## Source documentation
+
+The C++ API reference is generated with Doxygen. Install Doxygen and run
+`doxygen Doxyfile` from the repository root, then open
+`build/doxygen/html/index.html`. The source guide is in [docs/api.md](docs/api.md).
+The generated site covers project-owned `src/` code and linked project guides;
+it does not include vendored dependencies.

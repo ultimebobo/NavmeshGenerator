@@ -16,10 +16,10 @@ namespace navmesh::skyrim::offline
     enum class DiagnosticKind { MissingMaster, Cycle, DuplicatePlugin, UnresolvedFormId, UnsupportedRecord, InvalidPlugin, MalformedInput, DecompressionFailure, UnsupportedVersion };
     struct Diagnostic { DiagnosticKind kind{}; std::string plugin; std::string message; };
     struct ByteRange { std::uint64_t offset{}; std::uint64_t size{}; };
-    // Raw bytes and ranges are retained for every indexed record.  For a compressed
-    // record, decodedPayload is the subrecord stream and filePayload is the exact
-    // on-disk compressed stream, allowing a future writer to preserve either form.
+    /// Loss-aware subrecord with encoded bytes and file ranges retained for
+    /// future round trips.
     struct Subrecord { std::string type; ByteRange encodedRange; ByteRange dataRange; std::vector<std::uint8_t> encodedBytes; std::vector<std::uint8_t> data; bool extendedSize{}; };
+    /// Indexed record with original file payload and decoded subrecord payload.
     struct PluginRecord { std::string type; std::uint32_t flags{}; ByteRange headerRange; ByteRange filePayloadRange; bool compressed{}; std::vector<std::uint8_t> filePayload; std::vector<std::uint8_t> decodedPayload; std::vector<Subrecord> subrecords; };
     struct RecordOrigin { std::string plugin; std::uint32_t formId{}; ByteRange headerRange; };
     struct NavmLayout {
@@ -43,7 +43,7 @@ namespace navmesh::skyrim::offline
     using LoadOrderProgressCallback = std::function<void(std::size_t completedPlugins, std::size_t totalPlugins, const std::filesystem::path& currentPlugin)>;
     struct LoadOrderInput { std::filesystem::path dataDirectory; std::vector<std::filesystem::path> plugins; bool indexReferencesAndNavmeshes{ true }; LoadOrderProgressCallback progress{}; };
 
-    // Parser boundary: a mature parser can replace DirectPluginReader without changing load-order callers.
+    /// Parser boundary for replacing the direct reader without changing load-order callers.
     class IPluginReader {
     public:
         virtual ~IPluginReader() = default;
@@ -56,11 +56,17 @@ namespace navmesh::skyrim::offline
             bool& isLight, std::vector<Diagnostic>& diagnostics, bool includeReferencesAndNavmeshes = true) const override;
     };
     [[nodiscard]] std::vector<std::filesystem::path> ReadLoadOrderManifest(const std::filesystem::path& manifest);
+    /// Resolve winning records and cells from an ordered plugin list.
+    /// @param input Data directory and plugins in load order, plus optional progress callback.
+    /// @param reader Plugin reader implementation; defaults to the direct reader.
+    /// @return Winning records, cells, and explicit diagnostics for unsupported input.
     [[nodiscard]] ResolvedLoadOrder ResolveLoadOrder(const LoadOrderInput& input, const IPluginReader& reader = DirectPluginReader{});
 
     [[nodiscard]] std::vector<core::Cell> ListCells(
         const std::filesystem::path& pluginPath);
 
+    /// Load a cell selected by form ID, editor ID, or exterior coordinates.
+    /// @return The resolved cell, or no value when the selection cannot be found.
     [[nodiscard]] std::optional<core::Cell> LoadCell(
         const std::filesystem::path& pluginPath,
         const std::string& targetCell = {},
