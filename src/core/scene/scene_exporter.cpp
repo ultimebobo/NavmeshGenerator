@@ -19,6 +19,7 @@ namespace
         SceneLayer layer{};
         std::string name;
         std::string provenance;
+        std::string classification;
         std::vector<Vec3> vertices;
         std::vector<std::array<std::uint32_t, 3>> triangles;
     };
@@ -36,14 +37,18 @@ namespace
     }
     [[nodiscard]] std::size_t MaterialIndex(SceneLayer layer, const std::string& classification = {})
     {
-        if (layer == SceneLayer::ExistingNavmesh) return 0; // cyan
         if (layer == SceneLayer::Terrain) return 1; // brown/green
         if (layer == SceneLayer::Collision) return 2; // gray
         if (layer == SceneLayer::RenderFallback) return 3; // purple
+        if (classification.empty()) return 0; // unclassified NAVM
         if (classification == "supported") return 4;
         if (classification == "floating") return 5;
         if (classification == "buried") return 6;
-        return 7; // unknown/unsupported/too steep
+        if (classification == "too_steep") return 7;
+        if (classification == "blocked") return 8;
+        if (classification == "out_of_coverage") return 9;
+        if (classification == "ambiguous") return 10;
+        return 11; // unsupported or unknown
     }
     [[nodiscard]] std::string Escape(const std::string& value)
     {
@@ -137,21 +142,34 @@ namespace navmesh::core
         };
         appendMesh(scene.mesh, scene.triangleProvenance);
         appendMesh(scene.renderFallbackMesh, scene.renderFallbackTriangleProvenance);
+        std::map<std::pair<std::uint32_t, std::size_t>, std::string> polygonClassifications;
+        for (const auto& marker : markers) if (marker.navmeshFormId) polygonClassifications.try_emplace(std::pair{ *marker.navmeshFormId, marker.navmeshPolygon }, marker.classification);
         if (Contains(options.layers, SceneLayer::ExistingNavmesh)) for (const auto& navmesh : navmeshes) {
-            Object object{ SceneLayer::ExistingNavmesh, std::format("Existing NAVM {:08X}", navmesh.id), std::format("{{\"navmeshFormId\":\"{:08X}\"}}", navmesh.id) };
-            for (const auto& polygon : navmesh.polygons) {
+            std::map<std::string, Object> classifiedObjects;
+            for (std::size_t polygonIndex{}; polygonIndex < navmesh.polygons.size(); ++polygonIndex) {
+                const auto& polygon = navmesh.polygons[polygonIndex];
                 if (polygon.vertices[0] >= navmesh.vertices.size() || polygon.vertices[1] >= navmesh.vertices.size() || polygon.vertices[2] >= navmesh.vertices.size()) continue;
                 AABB polygonBounds; for (const auto vertex : polygon.vertices) polygonBounds.Expand(navmesh.vertices[vertex]);
                 if (options.bounds && !polygonBounds.Intersects(options.bounds->world)) continue;
+                const auto found = polygonClassifications.find({ navmesh.id, polygonIndex });
+                const std::string classification = found == polygonClassifications.end() ? "" : found->second;
+                auto [it, inserted] = classifiedObjects.try_emplace(classification);
+                auto& object = it->second;
+                if (inserted) {
+                    object.layer = SceneLayer::ExistingNavmesh;
+                    object.classification = classification;
+                    object.name = std::format("Existing NAVM {:08X}: {}", navmesh.id, classification.empty() ? "unclassified" : classification);
+                    object.provenance = std::format("{{\"navmeshFormId\":\"{:08X}\",\"classification\":\"{}\"}}", navmesh.id, Escape(classification.empty() ? "unclassified" : classification));
+                }
                 const auto base = static_cast<std::uint32_t>(object.vertices.size()); for (const auto vertex : polygon.vertices) object.vertices.push_back(navmesh.vertices[vertex]); object.triangles.push_back({ base, base+1, base+2 });
             }
-            if (!object.triangles.empty()) objects.push_back(std::move(object));
+            for (auto& [_, object] : classifiedObjects) objects.push_back(std::move(object));
         }
         if (Contains(options.layers, SceneLayer::DiagnosticMarkers)) {
             std::map<std::string, Object> markerObjects;
             for (const auto& marker : markers) {
                 if (options.bounds && !options.bounds->world.Contains(marker.position)) continue;
-                auto [it, inserted] = markerObjects.try_emplace(marker.classification, SceneLayer::DiagnosticMarkers, std::format("Diagnostic: {}", marker.classification), std::format("{{\"classification\":\"{}\"}}", Escape(marker.classification)));
+                auto [it, inserted] = markerObjects.try_emplace(marker.classification, SceneLayer::DiagnosticMarkers, std::format("Diagnostic: {}", marker.classification), std::format("{{\"classification\":\"{}\"}}", Escape(marker.classification)), marker.classification);
                 AppendMarker(it->second, marker);
             }
             for (auto& [_, object] : markerObjects) objects.push_back(std::move(object));
@@ -168,15 +186,15 @@ namespace navmesh::core
             Align(binary); const auto indexOffset = binary.size(); for (const auto& tri : object.triangles) for (const auto value : tri) Append(binary, value);
             const auto indexView = bufferViews.size(); bufferViews.push_back(std::format("{{\"buffer\":0,\"byteOffset\":{},\"byteLength\":{},\"target\":34963}}", indexOffset, object.triangles.size() * 3 * sizeof(std::uint32_t)));
             const auto indexAccessor = accessors.size(); accessors.push_back(std::format("{{\"bufferView\":{},\"componentType\":5125,\"count\":{},\"type\":\"SCALAR\"}}", indexView, object.triangles.size() * 3));
-            const auto meshIndex = meshes.size(); meshes.push_back(std::format("{{\"name\":\"{}\",\"primitives\":[{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{},\"material\":{}}}]}}", Escape(object.name), positionAccessor, indexAccessor, MaterialIndex(object.layer, object.layer == SceneLayer::DiagnosticMarkers ? object.name.substr(object.name.find_last_of(' ') + 1) : "")));
+            const auto meshIndex = meshes.size(); meshes.push_back(std::format("{{\"name\":\"{}\",\"primitives\":[{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{},\"material\":{}}}]}}", Escape(object.name), positionAccessor, indexAccessor, MaterialIndex(object.layer, object.classification)));
             layerChildren[static_cast<std::size_t>(object.layer)].push_back(nodes.size());
             nodes.push_back(std::format("{{\"name\":\"{}\",\"mesh\":{},\"extras\":{{\"provenance\":{}}}}}", Escape(object.name), meshIndex, object.provenance));
             if (options.detailedProvenance) provenanceObjects.push_back(std::format("{{\"name\":\"{}\",\"layer\":\"{}\",\"triangles\":{},\"provenance\":{}}}", Escape(object.name), LayerName(object.layer), object.triangles.size(), object.provenance));
             else provenanceObjects.push_back(std::format("{{\"name\":\"{}\",\"layer\":\"{}\",\"triangles\":{}}}", Escape(object.name), LayerName(object.layer), object.triangles.size()));
             result.triangles += object.triangles.size(); ++result.objects;
         }
-        const std::array<const char*, 8> materialNames{ "Existing NAVM (cyan)", "Terrain (brown-green)", "Collision (gray)", "Render fallback (purple)", "Supported (green)", "Floating (orange)", "Buried (red)", "Unknown (gray)" };
-        const std::array<std::array<float, 4>, 8> colors{{ {{0.0F,0.85F,0.95F,0.70F}}, {{0.35F,0.48F,0.16F,1.0F}}, {{0.46F,0.46F,0.50F,1.0F}}, {{0.58F,0.25F,0.75F,0.80F}}, {{0.10F,0.70F,0.25F,1.0F}}, {{1.0F,0.50F,0.05F,1.0F}}, {{0.90F,0.10F,0.10F,1.0F}}, {{0.50F,0.50F,0.50F,1.0F}} }};
+        const std::array<const char*, 12> materialNames{ "Unclassified NAVM (cyan)", "Terrain (brown-green)", "Collision (gray)", "Render fallback (purple)", "Supported (green)", "Floating (orange)", "Buried (red)", "Too steep (yellow)", "Blocked (magenta)", "Out of coverage (blue)", "Ambiguous (violet)", "Unsupported or unknown (dark gray)" };
+        const std::array<std::array<float, 4>, 12> colors{{ {{0.0F,0.85F,0.95F,0.70F}}, {{0.35F,0.48F,0.16F,1.0F}}, {{0.46F,0.46F,0.50F,1.0F}}, {{0.58F,0.25F,0.75F,0.80F}}, {{0.10F,0.70F,0.25F,0.75F}}, {{1.0F,0.50F,0.05F,0.75F}}, {{0.90F,0.10F,0.10F,0.75F}}, {{0.95F,0.82F,0.08F,0.75F}}, {{0.85F,0.05F,0.60F,0.75F}}, {{0.08F,0.35F,0.95F,0.75F}}, {{0.48F,0.20F,0.90F,0.75F}}, {{0.25F,0.28F,0.32F,0.75F}} }};
         std::vector<std::string> materials; for (std::size_t i{}; i < materialNames.size(); ++i) materials.push_back(std::format("{{\"name\":\"{}\",\"doubleSided\":true,\"alphaMode\":\"{}\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":[{},{},{},{}],\"metallicFactor\":0,\"roughnessFactor\":0.82}}}}", materialNames[i], colors[i][3] < 1.0F ? "BLEND" : "OPAQUE", colors[i][0], colors[i][1], colors[i][2], colors[i][3]));
         const auto join = [](const auto& values) { std::ostringstream out; for (std::size_t i{}; i < values.size(); ++i) out << (i ? "," : "") << values[i]; return out.str(); };
         // Keep a stable, visible hierarchy even when a requested layer has no

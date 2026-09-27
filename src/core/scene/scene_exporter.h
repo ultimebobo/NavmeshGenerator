@@ -15,7 +15,7 @@ namespace navmesh::core
     // glTF viewers and the keys used by scene.provenance.json.
     enum class SceneLayer { ExistingNavmesh, Terrain, Collision, RenderFallback, DiagnosticMarkers };
     struct SceneBounds { AABB world; };
-    struct DiagnosticMarker { Vec3 position; std::string classification; std::size_t navmeshPolygon{}; std::optional<std::size_t> supportTriangle; };
+    struct DiagnosticMarker { Vec3 position; std::string classification; std::size_t navmeshPolygon{}; std::optional<std::size_t> supportTriangle; std::optional<std::uint32_t> navmeshFormId; };
     struct SceneExportOptions
     {
         std::vector<SceneLayer> layers{ SceneLayer::ExistingNavmesh, SceneLayer::Terrain, SceneLayer::Collision, SceneLayer::RenderFallback, SceneLayer::DiagnosticMarkers };

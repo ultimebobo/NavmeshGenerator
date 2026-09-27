@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <source_location>
+#include <string_view>
 #include <vector>
 #include <tuple>
 
@@ -157,13 +158,12 @@ namespace
         const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Terrain.esm" } }); Require(resolved.diagnostics.empty());
         const auto terrain = navmesh::skyrim::offline::ExtractTerrain(resolved, resolved.cells.front());
         Require(terrain.landRecordsDecoded == 1 && terrain.mesh.vertices.size() == 1089 && terrain.mesh.triangles.size() == 2048);
-        // LAND's stored horizontal basis is reversed from the emitted
-        // world-space terrain basis. These distinct corners catch either
-        // missed axis reversal, a transpose, or a skipped first delta.
-        Require(terrain.mesh.vertices[0].x == 12 * 4096.0F && terrain.mesh.vertices[0].y == -4 * 4096.0F && terrain.mesh.vertices[0].z == 856.0F);
-        Require(terrain.mesh.vertices[32].x == 12 * 4096.0F + 32 * 128.0F && terrain.mesh.vertices[32].z == 856.0F);
-        Require(terrain.mesh.vertices[1056].x == 12 * 4096.0F && terrain.mesh.vertices[1056].y == -4 * 4096.0F + 32 * 128.0F && terrain.mesh.vertices[1056].z == 840.0F);
-        Require(terrain.mesh.vertices[1088].x == 12 * 4096.0F + 32 * 128.0F && terrain.mesh.vertices[1088].z == 816.0F);
+        // The stored row-major LAND grid matches the world-space X/Y basis.
+        // Distinct corner heights catch a transpose or a skipped first delta.
+        Require(terrain.mesh.vertices[0].x == 12 * 4096.0F && terrain.mesh.vertices[0].y == -4 * 4096.0F && terrain.mesh.vertices[0].z == 816.0F);
+        Require(terrain.mesh.vertices[32].x == 12 * 4096.0F + 32 * 128.0F && terrain.mesh.vertices[32].z == 840.0F);
+        Require(terrain.mesh.vertices[1056].x == 12 * 4096.0F && terrain.mesh.vertices[1056].y == -4 * 4096.0F + 32 * 128.0F && terrain.mesh.vertices[1056].z == 856.0F);
+        Require(terrain.mesh.vertices[1088].x == 12 * 4096.0F + 32 * 128.0F && terrain.mesh.vertices[1088].z == 856.0F);
         Require(terrain.scene.HasCompleteTriangleProvenance()); const auto& provenance = terrain.scene.triangleProvenance.front(); Require(provenance.terrain && provenance.terrain->landFormId == 0x701 && provenance.terrain->sampleX == 0 && provenance.terrain->sampleY == 0);
         navmesh::core::Cell missing = resolved.cells.front(); missing.id = 0x799; const auto none = navmesh::skyrim::offline::ExtractTerrain(resolved, missing); Require(none.mesh.triangles.empty() && none.landRecordsMissing == 1);
     }
@@ -329,18 +329,37 @@ namespace
         navmesh::core::NavMesh navmesh{ .id = 0x99, .vertices = scene.mesh.vertices, .polygons = { { .vertices = { 0, 1, 2 } } } };
         navmesh::core::Cell cell{ .id = 0x1234, .editorId = "Fixture" }; const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
         const auto output = root / "scene.glb";
-        const auto exported = navmesh::core::WriteCombinedGlb(output, scene, { navmesh }, { { .position = { 0, 0, 2 }, .classification = "floating", .navmeshPolygon = 0 } }, metadata);
+        const auto exported = navmesh::core::WriteCombinedGlb(output, scene, { navmesh }, { { .position = { 0, 0, 2 }, .classification = "floating", .navmeshPolygon = 0, .navmeshFormId = navmesh.id } }, metadata);
         Require(exported.objects == 3 && exported.triangles == 6); Require(std::filesystem::file_size(output) > 100);
         std::ifstream glb(output, std::ios::binary); std::uint32_t magic{}; glb.read(reinterpret_cast<char*>(&magic), sizeof(magic)); Require(magic == 0x46546C67);
-        std::uint32_t version{}, length{}, jsonLength{}, jsonType{}; glb.read(reinterpret_cast<char*>(&version), sizeof(version)); glb.read(reinterpret_cast<char*>(&length), sizeof(length)); glb.read(reinterpret_cast<char*>(&jsonLength), sizeof(jsonLength)); glb.read(reinterpret_cast<char*>(&jsonType), sizeof(jsonType)); std::string gltf(jsonLength, '\0'); glb.read(gltf.data(), jsonLength); Require(gltf.contains("\"name\":\"Terrain\",\"children\":[]") && gltf.contains("\"name\":\"Collision\",\"children\":[]"));
+        std::uint32_t version{}, length{}, jsonLength{}, jsonType{}; glb.read(reinterpret_cast<char*>(&version), sizeof(version)); glb.read(reinterpret_cast<char*>(&length), sizeof(length)); glb.read(reinterpret_cast<char*>(&jsonLength), sizeof(jsonLength)); glb.read(reinterpret_cast<char*>(&jsonType), sizeof(jsonType)); std::string gltf(jsonLength, '\0'); glb.read(gltf.data(), jsonLength); Require(gltf.contains("\"name\":\"Terrain\",\"children\":[]") && gltf.contains("\"name\":\"Collision\",\"children\":["));
+        Require(gltf.contains("\"name\":\"Existing NAVM 00000099: floating\"") && gltf.contains("\"material\":5"));
+        Require(gltf.contains("\"name\":\"Too steep (yellow)\"") && gltf.contains("\"name\":\"Blocked (magenta)\"") && gltf.contains("\"name\":\"Out of coverage (blue)\"") && gltf.contains("\"name\":\"Ambiguous (violet)\""));
         std::ifstream provenance(output.string() + ".provenance.json"); std::string text((std::istreambuf_iterator<char>(provenance)), {}); Require(text.contains("Collision") && text.contains("Fixture.esp") && text.contains("Diagnostic: floating"));
+        const std::array<std::pair<const char*, std::size_t>, 7> classifications{{ { "supported", 4 }, { "floating", 5 }, { "buried", 6 }, { "too_steep", 7 }, { "blocked", 8 }, { "out_of_coverage", 9 }, { "ambiguous", 10 } }};
+        navmesh.polygons.resize(classifications.size() + 1, navmesh.polygons.front());
+        std::vector<navmesh::core::DiagnosticMarker> classMarkers;
+        for (std::size_t i{}; i < classifications.size(); ++i) classMarkers.push_back({ .classification = classifications[i].first, .navmeshPolygon = i, .navmeshFormId = navmesh.id });
+        navmesh::core::SceneExportOptions navmeshOnly{ .layers = { navmesh::core::SceneLayer::ExistingNavmesh } };
+        const auto classifiedPath = root / "classified.glb";
+        const auto classified = navmesh::core::WriteCombinedGlb(classifiedPath, scene, { navmesh }, classMarkers, metadata, navmeshOnly);
+        Require(classified.objects == classifications.size() + 1 && classified.triangles == classifications.size() + 1);
+        std::ifstream classifiedGlb(classifiedPath, std::ios::binary); classifiedGlb.seekg(12); classifiedGlb.read(reinterpret_cast<char*>(&jsonLength), sizeof(jsonLength)); classifiedGlb.seekg(4, std::ios::cur); std::string classifiedJson(jsonLength, '\0'); classifiedGlb.read(classifiedJson.data(), jsonLength);
+        for (const auto& [name, material] : classifications) {
+            const auto start = classifiedJson.find(std::format("\"name\":\"Existing NAVM 00000099: {}\",\"primitives\"", name));
+            Require(start != std::string::npos);
+            const auto end = classifiedJson.find("}]}", start);
+            Require(end != std::string::npos && classifiedJson.substr(start, end - start).contains(std::format("\"material\":{}", material)));
+        }
+        Require(classifiedJson.contains("\"name\":\"Existing NAVM 00000099: unclassified\""));
         navmesh::core::SceneExportOptions cull{ .layers = { navmesh::core::SceneLayer::Collision }, .bounds = navmesh::core::SceneBounds{ .world = { .min = { 100, 100, -1 }, .max = { 101, 101, 1 } } } };
         const auto culled = navmesh::core::WriteCombinedGlb(root / "culled.glb", scene, {}, {}, metadata, cull); Require(culled.triangles == 0 && culled.culledTriangles == 1);
     }
 }
 
-int main()
+int main(int argc, char** argv)
 {
+    if (argc > 1 && std::string_view(argv[1]) == "--scene-only") { TestCombinedColorLayeredGlb(); return 0; }
     TestResolvedLoadOrder();
     TestWinterholdCellOverride();
     TestMo2ProfileImport();

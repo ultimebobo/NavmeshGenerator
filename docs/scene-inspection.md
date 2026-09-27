@@ -6,16 +6,21 @@ manually joining the OBJ exports:
 
 | Layer/object name | Color | Meaning |
 | --- | --- | --- |
-| `Existing NAVM` | cyan | decoded NAVM polygons |
+| `Existing NAVM ...: unclassified` | cyan | decoded NAVM polygons without an analysis result, including neighboring cells |
 | `Terrain` | brown-green | decoded `LAND` height surface |
 | `Collision` | gray | packed Havok support geometry |
 | `Render fallback` | purple | visual geometry: low-confidence support where collision was absent, plus display-only render meshes retained beside authoritative collision |
-| `Diagnostic: supported` | green | existing classifier result |
-| `Diagnostic: floating` | orange | existing classifier result |
-| `Diagnostic: buried` | red | existing classifier result |
-| `Diagnostic: ...` | gray | unsupported, too-steep, or unknown result |
+| `Existing NAVM ...: supported` / `Diagnostic: supported` | green | supported polygons and their centroid markers |
+| `Existing NAVM ...: floating` / `Diagnostic: floating` | orange | floating polygons and markers |
+| `Existing NAVM ...: buried` / `Diagnostic: buried` | red | buried polygons and markers |
+| `Existing NAVM ...: too_steep` / `Diagnostic: too_steep` | yellow | polygons with overly steep support |
+| `Existing NAVM ...: blocked` / `Diagnostic: blocked` | magenta | blocked polygons |
+| `Existing NAVM ...: out_of_coverage` / `Diagnostic: out_of_coverage` | blue | polygons outside extracted support coverage |
+| `Existing NAVM ...: ambiguous` / `Diagnostic: ambiguous` | violet | polygons with conflicting support evidence |
+| `Existing NAVM ...: unsupported` / `Diagnostic: unsupported` | dark gray | unsupported or unknown classification |
 
-The GLB contains the geometry and colors. Its adjacent
+Each analyzed NAVM is split into named objects by polygon classification under
+the `Existing NAVM` layer. The GLB contains the geometry and colors. Its adjacent
 `scene.glb.provenance.json` contains the reproducibility metadata, named GLB
 objects, and source record/model provenance. `analysis.json` links each NAVM
 classification to its selected world-triangle index; `geometry.json` resolves

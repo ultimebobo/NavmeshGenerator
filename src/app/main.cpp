@@ -647,7 +647,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     for (const auto& sceneCell : sceneCells) sceneNavmeshes.insert(sceneNavmeshes.end(), sceneCell.navMeshes.begin(), sceneCell.navMeshes.end());
     std::vector<navmesh::core::DiagnosticMarker> sceneMarkers;
     sceneMarkers.reserve(analysisReport.polygons.size());
-    for (const auto& polygon : analysisReport.polygons) sceneMarkers.push_back({ polygon.centroid, polygon.classification, polygon.index, polygon.support.found ? std::optional<std::size_t>{ polygon.support.triangleIndex } : std::nullopt });
+    for (const auto& polygon : analysisReport.polygons) sceneMarkers.push_back({ polygon.centroid, polygon.classification, polygon.index, polygon.support.found ? std::optional<std::size_t>{ polygon.support.triangleIndex } : std::nullopt, cell->navMeshes.front().id });
     navmesh::core::SceneExportOptions sceneOptions{ .layers = ParseSceneLayers(options.geometryLayers), .detailedProvenance = options.outputDetail != "summary" };
     if (options.sceneBounds) {
         const auto& bounds = *options.sceneBounds;
