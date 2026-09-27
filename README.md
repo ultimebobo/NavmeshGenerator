@@ -70,6 +70,7 @@ The CLI writes files into the target output directory:
 - `geometry.json` — machine-readable triangle provenance plus geometry-coverage failures. Every triangle has `sourceType` (`terrain`, `collision`, or `render_fallback`), `collisionType`, and confidence. Terrain triangles also name their winning `LAND` record, exterior cell, and lower-left VHGT sample coordinate.
 - `scene.glb` — one combined, color-layered scene with named Existing NAVM, terrain, collision, render-fallback, and diagnostic-marker objects. `scene.glb.provenance.json` maps each named object to its source record/model and preserves run metadata; `scene.glb.metadata.json` is the standard metadata sidecar.
 - `scene-report.html` — standalone classification report grouped by support-source and geometry-coverage status. Its support-triangle indices join `analysis.json` to `geometry.json`; this report does not change classifications.
+- `analysis.json` — stable, report-only discrepancy evidence: seven-point polygon coverage, selected source type and confidence, explicit `ambiguous`/`out_of_coverage` states, topology findings, and manual-review repair candidates. It never contains replacement NAVM geometry or a plugin write instruction.
 - `input-report.json` — MO2 profile snapshot and virtual-file winners, emitted first for every MO2 run.
 - `load-order.json` — when using `--load-order`, every winning record with its plugin and ordered origin chain.
 
@@ -93,6 +94,7 @@ The repository contains only synthetic, redistributable fixture builders; it doe
 - Archived assets are cached under `<output>/.bsa-cache`; delete that directory to rebuild the cache.
 - Exterior `LAND` decoding supports the collision-relevant VHGT height grid only: 33×33 samples per cell, 128-unit spacing, and world origin `(cellX * 4096, cellY * 4096)`. It intentionally excludes visual LOD and texture layers. Use `--terrain-only` with a resolved load order to export only that terrain diagnostic surface. Missing or malformed `LAND` records are reported and produce no replacement plane.
 - Some Skyrim record variants and non-standard modded data layouts may still be rejected or reported as unsupported.
+- Discrepancy detection is deliberately conservative. Collision support has priority over terrain, terrain has priority over render fallback, and only sufficiently consistent samples can classify a polygon. Ambiguous or out-of-coverage polygons are displayed as limitations rather than defects. Candidates are report-only/manual-review evidence; the tool does not modify NAVM records or write replacement plugins.
 
 The verified NVNM prefix, preservation policy, and known trailing-layout limits are documented in [docs/navm-format-study.md](docs/navm-format-study.md). This milestone remains read-only and does not serialize plugins.
 
@@ -101,7 +103,7 @@ The verified NVNM prefix, preservation policy, and known trailing-layout limits 
 The next milestone after this POC is:
 
 ```text
-geometry -> walkability analysis -> candidate navmesh
+report-only discrepancy detection -> candidate navmesh
 ```
 
 not runtime integration.

@@ -18,8 +18,10 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <source_location>
 #include <vector>
 #include <tuple>
 
@@ -27,7 +29,7 @@
 
 namespace
 {
-    void Require(const bool condition) { if (!condition) std::abort(); }
+    void Require(const bool condition, const std::source_location location = std::source_location::current()) { if (!condition) { std::fprintf(stderr, "Requirement failed at %s:%u\n", location.file_name(), location.line()); std::abort(); } }
     void PutU16(std::vector<std::uint8_t>& bytes, std::uint16_t value) { bytes.push_back(static_cast<std::uint8_t>(value)); bytes.push_back(static_cast<std::uint8_t>(value >> 8)); }
     void PutU32(std::vector<std::uint8_t>& bytes, std::uint32_t value) { for (auto shift = 0; shift < 32; shift += 8) bytes.push_back(static_cast<std::uint8_t>(value >> shift)); }
     void PutFloat(std::vector<std::uint8_t>& bytes, float value) { const auto* raw = reinterpret_cast<const std::uint8_t*>(&value); bytes.insert(bytes.end(), raw, raw + sizeof(value)); }
@@ -92,13 +94,13 @@ namespace
         const auto root = std::filesystem::temp_directory_path() / "navmesh-load-order-test"; std::filesystem::remove_all(root); std::filesystem::create_directories(root);
         WritePlugin(root / "Base.esm", {}, false, { { "CELL", 0x123, CellPayload("BaseCell", true, 0x10) }, { "NAVM", 0x456, {} }, { "LAND", 0x789, LandPayload(42.0F) } });
         WritePlugin(root / "Light.esl", {}, true, { { "CELL", 0x800, CellPayload("LightCell") } });
-        WritePlugin(root / "Patch.esp", { "Base.esm", "Light.esl" }, false, { { "CELL", 0x01000123, CellPayload("PatchedCell", true, 0x10) }, { "NAVM", 0x01000456, {} }, { "LAND", 0x01000789, {} }, { "REFR", 0xFE000800, {} } });
+        WritePlugin(root / "Patch.esp", { "Base.esm", "Light.esl" }, false, { { "CELL", 0x00000123, CellPayload("PatchedCell", true, 0x10) }, { "NAVM", 0x00000456, {} }, { "LAND", 0x00000789, {} }, { "REFR", 0x02000800, {} } });
         const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Base.esm", "Light.esl", "Patch.esp" } });
         assert(resolved.diagnostics.empty());
         const auto* cell = resolved.FindWinning(0x123); assert(cell && cell->editorId == "PatchedCell" && cell->origins.size() == 2 && cell->winning.plugin == "Patch.esp");
         const auto* navm = resolved.FindWinning(0x456); assert(navm && navm->origins.size() == 2 && navm->winning.plugin == "Patch.esp");
         const auto* inheritedLand = resolved.FindWinning(0x789); Require(inheritedLand && inheritedLand->winning.plugin == "Patch.esp" && inheritedLand->raw && std::any_of(inheritedLand->raw->subrecords.begin(), inheritedLand->raw->subrecords.end(), [](const auto& sub) { return sub.type == "VHGT"; }));
-        Require(resolved.FindWinning(0xFE000800) != nullptr); Require(!resolved.cells.front().isInterior && resolved.cells.front().exteriorCoordinates->at(0) == 12);
+        Require(resolved.FindWinning(0x01000800) != nullptr); Require(!resolved.cells.front().isInterior && resolved.cells.front().exteriorCoordinates->at(0) == 12);
         WritePlugin(root / "Broken.esp", { "Absent.esm" }, false, {});
         const auto broken = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Broken.esp" } });
         assert(std::any_of(broken.diagnostics.begin(), broken.diagnostics.end(), [](const auto& d) { return d.kind == navmesh::skyrim::offline::DiagnosticKind::MissingMaster; }));
@@ -112,6 +114,38 @@ namespace
         assert(persistentRecord && persistentRecord->cellFormId == 0x400 && persistentRecord->worldspaceFormId == 0x300 && persistentRecord->persistent);
         assert(temporaryRecord && temporaryRecord->cellFormId == 0x400 && temporaryRecord->worldspaceFormId == 0x300 && temporaryRecord->temporary);
         Require(indexed.cells.size() == 1 && indexed.cells.front().navMeshes.size() == 1 && indexed.cells.front().navMeshes.front().polygons.size() == 1);
+    }
+    void TestWinterholdCellOverride()
+    {
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-winterhold-override-test";
+        std::filesystem::create_directories(root);
+        WritePlugin(root / "Skyrim.esm", {}, false, { { "CELL", 0x123, CellPayload("WinterholdExterior01", true) } });
+
+        std::vector<std::uint8_t> header;
+        PutText(header, "MAST", { 'S', 'k', 'y', 'r', 'i', 'm', '.', 'e', 's', 'm', 0 });
+        std::vector<std::uint8_t> patch;
+        PutRecord(patch, "CELL", 0x00000123, CellPayload("WinterholdExterior01", true));
+        std::vector<std::uint8_t> model;
+        PutText(model, "MODL", { 'm', 'e', 's', 'h', 'e', 's', '/', 'w', 'i', 'n', 't', 'e', 'r', 'h', 'o', 'l', 'd', '.', 'n', 'i', 'f', 0 });
+        PutRecord(patch, "STAT", 0x01000300, model);
+        std::vector<std::uint8_t> reference;
+        std::vector<std::uint8_t> baseId; PutU32(baseId, 0x01000300); PutText(reference, "NAME", baseId);
+        std::vector<std::uint8_t> child; PutRecord(child, "REFR", 0x01000400, reference);
+        PutGroup(patch, 0x00000123, 6, child);
+        std::vector<std::uint8_t> bytes;
+        PutRecord(bytes, "TES4", 0, header);
+        bytes.insert(bytes.end(), patch.begin(), patch.end());
+        std::ofstream output(root / "WinterholdPatch.esp", std::ios::binary);
+        output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())); output.close();
+
+        const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Skyrim.esm", "WinterholdPatch.esp" } });
+        Require(resolved.diagnostics.empty());
+        const auto* winner = resolved.FindWinning(0x123);
+        Require(winner && winner->winning.plugin == "WinterholdPatch.esp" && winner->origins.size() == 2);
+        Require(resolved.cells.size() == 1 && resolved.cells.front().references.size() == 1);
+        const auto& placed = resolved.cells.front().references.front();
+        Require(placed.id == 0x01000400 && placed.baseObjectId == 0x01000300 && placed.sourcePlugin == "WinterholdPatch.esp");
+        Require(placed.modelPath == "meshes/winterhold.nif");
     }
     void TestExteriorLandTerrain()
     {
@@ -162,7 +196,9 @@ namespace
         WriteTextFile(qtRoot / "ModOrganizer.ini", "gamePath=@ByteArray(D:\\\\SteamLibrary\\\\steamapps\\\\common\\\\Skyrim Special Edition)\nprofiles_directory=profiles\nmods_directory=mods\n");
         WriteTextFile(qtRoot / "profiles" / "Default" / "modlist.txt", ""); WriteTextFile(qtRoot / "profiles" / "Default" / "plugins.txt", ""); WriteTextFile(qtRoot / "profiles" / "Default" / "loadorder.txt", "");
         const auto qtPaths = navmesh::skyrim::offline::ImportMo2Profile(qtRoot, "Default");
-        Require(qtPaths.gameData == std::filesystem::path("D:/SteamLibrary/steamapps/common/Skyrim Special Edition"));
+        const auto expectedGame = std::filesystem::path("D:/SteamLibrary/steamapps/common/Skyrim Special Edition");
+        const auto expectedData = std::filesystem::is_directory(expectedGame / "Data") ? expectedGame / "Data" : expectedGame;
+        Require(qtPaths.gameData == expectedData);
 
         const auto utf16Root = root / "Utf16PathInstance"; std::filesystem::create_directories(utf16Root / "profiles" / "Default");
         const std::string utf16Ini = "[General]\r\ngamePath=@ByteArray(D:\\\\SteamLibrary\\\\steamapps\\\\common\\\\Skyrim Special Edition)\r\nprofiles_directory=profiles\r\nmods_directory=mods\r\n";
@@ -170,7 +206,7 @@ namespace
         std::ofstream utf16Output(utf16Root / "ModOrganizer.ini", std::ios::binary); utf16Output.write(reinterpret_cast<const char*>(utf16Bytes.data()), static_cast<std::streamsize>(utf16Bytes.size())); utf16Output.close();
         WriteTextFile(utf16Root / "profiles" / "Default" / "modlist.txt", ""); WriteTextFile(utf16Root / "profiles" / "Default" / "plugins.txt", ""); WriteTextFile(utf16Root / "profiles" / "Default" / "loadorder.txt", "");
         const auto utf16Paths = navmesh::skyrim::offline::ImportMo2Profile(utf16Root, "Default");
-        Require(utf16Paths.gameData == std::filesystem::path("D:/SteamLibrary/steamapps/common/Skyrim Special Edition"));
+        Require(utf16Paths.gameData == expectedData);
     }
 }
 
@@ -306,6 +342,7 @@ namespace
 int main()
 {
     TestResolvedLoadOrder();
+    TestWinterholdCellOverride();
     TestMo2ProfileImport();
     TestLossAwareRecordReader();
     TestExteriorLandTerrain();
@@ -382,5 +419,37 @@ int main()
     assert(wallSelection.polygons.front().support.found);
     assert(wallSelection.polygons.front().support.triangleIndex == 0u);
     assert(wallSelection.polygons.front().classification == "floating");
+
+    // Milestone 7: collision wins over terrain for a bridge/floor, and the
+    // result carries agreement/confidence rather than centroid-only evidence.
+    navmesh::core::Mesh priorityGeometry{ .vertices = {
+        { 0, 0, 0 }, { 2, 0, 0 }, { 0, 2, 0 },
+        { 0, 0, 2 }, { 2, 0, 2 }, { 0, 2, 2 }
+    }, .triangles = { { { 0, 1, 2 } }, { { 3, 4, 5 } } } };
+    const std::vector<navmesh::analysis::TriangleSource> prioritySources{
+        { navmesh::analysis::SupportSourceType::Terrain, 1.0F, "land" },
+        { navmesh::analysis::SupportSourceType::Collision, 1.0F, "bridge" }
+    };
+    const auto priorityReport = navmesh::analysis::AnalyzeNavMeshPolygons(syntheticMesh, priorityGeometry, prioritySources, { .surfaceSearchRadius = 64, .maxSupportDistance = 2, .maxSlope = 45 });
+    assert(priorityReport.polygons.front().classification == "supported");
+    assert(priorityReport.polygons.front().support.sourceType == "collision");
+    assert(priorityReport.polygons.front().support.samplesTotal == 7u);
+    assert(priorityReport.polygons.front().support.samplesCovered >= 5u);
+
+    const auto noCoverage = navmesh::analysis::AnalyzeNavMeshPolygons(syntheticMesh, {}, { .surfaceSearchRadius = 64, .maxSupportDistance = 2, .maxSlope = 45 });
+    assert(noCoverage.polygons.front().classification == "out_of_coverage");
+    assert(noCoverage.summary.outOfCoverage == 1u && noCoverage.repairCandidates.empty());
+
+    navmesh::core::Mesh competingGeometry{ .vertices = {
+        { 0, 0, 0 }, { 2, 0, 0 }, { 0, 2, 0 },
+        { 0, 0, 20 }, { 2, 0, 20 }, { 0, 2, 20 }
+    }, .triangles = { { { 0, 1, 2 } }, { { 3, 4, 5 } } } };
+    navmesh::core::NavMesh highMesh = syntheticMesh; for (auto& vertex : highMesh.vertices) vertex.z = 25;
+    const auto ambiguous = navmesh::analysis::AnalyzeNavMeshPolygons(highMesh, competingGeometry, {
+        { navmesh::analysis::SupportSourceType::Collision, 1.0F, "floor-a" },
+        { navmesh::analysis::SupportSourceType::Collision, 1.0F, "floor-b" }
+    }, { .surfaceSearchRadius = 64, .maxSupportDistance = 32, .maxSlope = 45 });
+    assert(ambiguous.polygons.front().classification == "ambiguous");
+    assert(ambiguous.repairCandidates.empty());
     return 0;
 }

@@ -131,16 +131,23 @@ namespace
         stream << "    \"configuration\": {\n";
         stream << std::format("      \"surfaceSearchRadius\": {},\n", analysisReport.configuration.surfaceSearchRadius);
         stream << std::format("      \"maxSupportDistance\": {},\n", analysisReport.configuration.maxSupportDistance);
-        stream << std::format("      \"maxSlope\": {}\n", analysisReport.configuration.maxSlope);
+        stream << std::format("      \"maxSlope\": {},\n", analysisReport.configuration.maxSlope);
+        stream << std::format("      \"minimumCoverage\": {},\n", analysisReport.configuration.minimumCoverage);
+        stream << std::format("      \"obstructionClearance\": {},\n", analysisReport.configuration.obstructionClearance);
+        stream << std::format("      \"ambiguityHeightDelta\": {}\n", analysisReport.configuration.ambiguityHeightDelta);
         stream << "    },\n";
         stream << "    \"summary\": {\n";
         stream << std::format("      \"polygonsAnalyzed\": {},\n", analysisReport.summary.polygonsAnalyzed);
         stream << std::format("      \"supportFound\": {},\n", analysisReport.summary.supportFound);
-        stream << std::format("      \"unsupported\": {},\n", analysisReport.summary.unsupported);
         stream << std::format("      \"supported\": {},\n", analysisReport.summary.supported);
         stream << std::format("      \"floating\": {},\n", analysisReport.summary.floating);
         stream << std::format("      \"buried\": {},\n", analysisReport.summary.buried);
-        stream << std::format("      \"tooSteep\": {}\n", analysisReport.summary.tooSteep);
+        stream << std::format("      \"tooSteep\": {},\n", analysisReport.summary.tooSteep);
+        stream << std::format("      \"blocked\": {},\n", analysisReport.summary.blocked);
+        stream << std::format("      \"outOfCoverage\": {},\n", analysisReport.summary.outOfCoverage);
+        stream << std::format("      \"ambiguous\": {},\n", analysisReport.summary.ambiguous);
+        stream << std::format("      \"repairCandidates\": {},\n", analysisReport.summary.repairCandidates);
+        stream << std::format("      \"topologyFindings\": {}\n", analysisReport.summary.topologyFindings);
         stream << "    },\n";
         stream << "    \"heightDelta\": {\n";
         stream << std::format("      \"min\": {},\n", analysisReport.heightDeltaStats.min);
@@ -175,6 +182,10 @@ namespace
                 stream << std::format("          \"sourceType\": \"{}\",\n", JsonEscape(polygon.support.sourceType));
                 stream << std::format("          \"collisionType\": \"{}\",\n", JsonEscape(polygon.support.collisionType));
                 stream << std::format("          \"sourceConfidence\": {},\n", polygon.support.sourceConfidence);
+                stream << std::format("          \"confidence\": {},\n", polygon.support.confidence);
+                stream << std::format("          \"samplesTotal\": {},\n", polygon.support.samplesTotal);
+                stream << std::format("          \"samplesCovered\": {},\n", polygon.support.samplesCovered);
+                stream << std::format("          \"sampleAgreement\": {},\n", polygon.support.sampleAgreement);
                 stream << std::format("          \"sourceNifPath\": \"{}\",\n", JsonEscape(polygon.support.sourceNifPath));
                 if (polygon.support.sourceTriangleIndex) stream << std::format("          \"sourceTriangleIndex\": {}\n", *polygon.support.sourceTriangleIndex);
                 else stream << "          \"sourceTriangleIndex\": null\n";
@@ -182,6 +193,21 @@ namespace
             stream << "        },\n";
             stream << std::format("        \"classification\": \"{}\"\n", polygon.classification);
             stream << "      }" << (index + 1 == analysisReport.polygons.size() ? "" : ",") << "\n";
+        }
+        stream << "    ],\n";
+        stream << "    \"topology\": [\n";
+        for (std::size_t index{}; index < analysisReport.topology.size(); ++index) {
+            const auto& finding = analysisReport.topology[index];
+            stream << std::format("      {{\"kind\":\"{}\",\"confidence\":{},\"evidence\":\"{}\",\"polygons\":[", JsonEscape(finding.kind), finding.confidence, JsonEscape(finding.evidence));
+            for (std::size_t polygon{}; polygon < finding.polygons.size(); ++polygon) stream << finding.polygons[polygon] << (polygon + 1 == finding.polygons.size() ? "" : ",");
+            stream << "]}" << (index + 1 == analysisReport.topology.size() ? "" : ",") << "\n";
+        }
+        stream << "    ],\n    \"repairCandidates\": [\n";
+        for (std::size_t index{}; index < analysisReport.repairCandidates.size(); ++index) {
+            const auto& candidate = analysisReport.repairCandidates[index];
+            stream << std::format("      {{\"id\":\"{}\",\"kind\":\"{}\",\"confidence\":{},\"disposition\":\"{}\",\"evidence\":\"{}\",\"polygons\":[", JsonEscape(candidate.id), JsonEscape(candidate.kind), candidate.confidence, JsonEscape(candidate.disposition), JsonEscape(candidate.evidence));
+            for (std::size_t polygon{}; polygon < candidate.polygons.size(); ++polygon) stream << candidate.polygons[polygon] << (polygon + 1 == candidate.polygons.size() ? "" : ",");
+            stream << "]}" << (index + 1 == analysisReport.repairCandidates.size() ? "" : ",") << "\n";
         }
         stream << "    ]\n";
         stream << "  }\n";
@@ -269,7 +295,7 @@ namespace
         std::ofstream stream(outputPath, std::ios::trunc);
         if (!stream) return;
         std::vector<const navmesh::analysis::PolygonAnalysisResult*> selected;
-        const std::vector<std::string> classes = { "supported", "floating", "buried", "too_steep", "unsupported" };
+        const std::vector<std::string> classes = { "supported", "floating", "buried", "too_steep", "blocked", "ambiguous", "out_of_coverage" };
         for (const auto& classification : classes) {
             std::size_t limit = classification == "buried" ? 10U : 1U;
             for (const auto& polygon : report.polygons) if (polygon.classification == classification && limit-- > 0) selected.push_back(&polygon);
@@ -277,8 +303,8 @@ namespace
         const auto missingModels = extraction.modelsMissing > 0 || !extraction.terrainSupported || !extraction.collisionGeometrySupported;
         stream << "<!doctype html><html><head><meta charset=\"utf-8\"><title>NAVM support diagnostics</title><style>body{font:14px system-ui,sans-serif;color:#252422;background:#f1eee7;margin:2rem}h1{font-family:Georgia,serif}table{border-collapse:collapse;background:#fff}th,td{border:1px solid #d8d2c6;padding:.45rem;text-align:left;vertical-align:top}th{background:#283618;color:#fff}tr.buried{background:#fff0e1}svg{width:360px;max-width:100%;height:auto}code{white-space:nowrap}</style></head><body>";
         stream << std::format("<h1>NAVM support diagnostics</h1><p>Cell <code>{:08X}</code> &middot; {} &middot; polygons analyzed: {} &middot; geometry triangles: {}</p>", cell.id, HtmlEscape(cell.editorId.empty() ? cell.name : cell.editorId), report.summary.polygonsAnalyzed, geometry.triangles.size());
-        stream << std::format("<p><strong>Counts:</strong> supported {} &middot; floating {} &middot; buried {} &middot; too steep {} &middot; unsupported {}.</p>", report.summary.supported, report.summary.floating, report.summary.buried, report.summary.tooSteep, report.summary.unsupported);
-        stream << "<h2>Diagnostic assessment</h2><p>Each support shown is the nearest upward-facing triangle selected by the existing downward-centroid ray. No thresholds were changed.</p>";
+        stream << std::format("<p><strong>Counts:</strong> supported {} &middot; floating {} &middot; buried {} &middot; too steep {} &middot; blocked {} &middot; ambiguous {} &middot; out of coverage {}.</p>", report.summary.supported, report.summary.floating, report.summary.buried, report.summary.tooSteep, report.summary.blocked, report.summary.ambiguous, report.summary.outOfCoverage);
+        stream << "<h2>Diagnostic assessment</h2><p>Seven interior and edge-aware samples are queried through the spatial index. Collision takes priority over terrain, which takes priority over render fallback. Ambiguous and out-of-coverage states are evidence limitations, never defects.</p>";
         stream << (missingModels ? "<p><strong>Geometry limitation:</strong> terrain or collision geometry is not included, or one or more model NIFs could not be loaded; buried counts may be incomplete or misleading where those surfaces are missing.</p>" : "<p><strong>Geometry coverage:</strong> extracted model geometry is available for the analyzed cell; the examples below can be inspected as actual world-space support triangles.</p>");
         stream << "<p><strong>Interpretation:</strong> a buried result is supported by a concrete selected triangle and a negative height delta. When the triangle has NIF provenance and the two views show the NAVM above that triangle, it is consistent with genuinely buried NAVM. A missing source, visibly displaced triangle, or a systematic offset is evidence for geometry/transform limitations and should be investigated before changing thresholds.</p>";
         std::map<std::string, std::size_t> supportSources, coverage;
@@ -316,14 +342,34 @@ namespace
         std::cout << std::format("Polygons analyzed: {}\n", analysis.summary.polygonsAnalyzed);
         std::cout << std::format("Support found:     {}\n", analysis.summary.supportFound);
         std::cout << std::format("Supported:         {}\n", analysis.summary.supported);
-        std::cout << std::format("Unsupported:       {}\n", analysis.summary.unsupported);
+        std::cout << std::format("Out of coverage:   {}\n", analysis.summary.outOfCoverage);
+        std::cout << std::format("Ambiguous:         {}\n", analysis.summary.ambiguous);
         std::cout << std::format("Floating:          {}\n", analysis.summary.floating);
         std::cout << std::format("Buried:            {}\n", analysis.summary.buried);
         std::cout << std::format("Too steep:         {}\n", analysis.summary.tooSteep);
+        std::cout << std::format("Blocked:           {}\n", analysis.summary.blocked);
+        std::cout << std::format("Repair candidates: {} (report-only)\n", analysis.summary.repairCandidates);
         std::cout << "\nHeight delta:\n";
         std::cout << std::format("  min:    {}\n  max:    {}\n  mean:   {}\n  median: {}\n  p95:    {}\n", analysis.heightDeltaStats.min, analysis.heightDeltaStats.max, analysis.heightDeltaStats.mean, analysis.heightDeltaStats.median, analysis.heightDeltaStats.p95);
         std::cout << "\nSlope:\n";
         std::cout << std::format("  min:    {}\n  max:    {}\n  mean:   {}\n  median: {}\n  p95:    {}\n", analysis.slopeStats.min, analysis.slopeStats.max, analysis.slopeStats.mean, analysis.slopeStats.median, analysis.slopeStats.p95);
+    }
+
+    [[nodiscard]] std::vector<navmesh::analysis::TriangleSource> BuildTriangleSources(const navmesh::skyrim::offline::GeometryExtraction& geometry)
+    {
+        std::vector<navmesh::analysis::TriangleSource> result(geometry.mesh.triangles.size());
+        for (std::size_t index{}; index < result.size() && index < geometry.scene.triangleProvenance.size(); ++index) {
+            const auto& provenance = geometry.scene.triangleProvenance[index];
+            if (provenance.geometrySource >= geometry.scene.geometrySources.size()) continue;
+            const auto& source = geometry.scene.geometrySources[provenance.geometrySource];
+            using Type = navmesh::core::GeometrySourceType;
+            result[index] = {
+                .type = source.sourceType == Type::Collision ? navmesh::analysis::SupportSourceType::Collision : source.sourceType == Type::Terrain ? navmesh::analysis::SupportSourceType::Terrain : navmesh::analysis::SupportSourceType::RenderFallback,
+                .confidence = source.confidence,
+                .id = std::format("{}:{:08X}:{}", source.reference.plugin, source.reference.formId, source.modelPath)
+            };
+        }
+        return result;
     }
 
     [[nodiscard]] bool EqualsIgnoreCase(const std::string& left, const std::string& right)
@@ -589,8 +635,13 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
 
     const auto geometrySummary = navmesh::analysis::AnalyzeGeometry(geometry.mesh);
     const auto meshSummary = navmesh::analysis::AnalyzeNavMesh(cell->navMeshes.empty() ? navmesh::core::NavMesh{} : cell->navMeshes.front());
-    const auto analysisConfig = navmesh::analysis::AnalysisConfiguration{ .surfaceSearchRadius = options.surfaceSearchRadius, .maxSupportDistance = options.maxSupportDistance, .maxSlope = options.maxSlope };
-    auto analysisReport = cell->navMeshes.empty() ? navmesh::analysis::AnalysisReport{} : navmesh::analysis::AnalyzeNavMeshPolygons(cell->navMeshes.front(), geometry.mesh, analysisConfig);
+    auto analysisConfig = navmesh::analysis::AnalysisConfiguration{ .surfaceSearchRadius = options.surfaceSearchRadius, .maxSupportDistance = options.maxSupportDistance, .maxSlope = options.maxSlope };
+    if (cell->exteriorCoordinates) {
+        const auto [x, y] = *cell->exteriorCoordinates;
+        analysisConfig.cellBounds = navmesh::core::AABB{ .min = { x * 4096.0F, y * 4096.0F, std::numeric_limits<float>::lowest() }, .max = { (x + 1) * 4096.0F, (y + 1) * 4096.0F, std::numeric_limits<float>::max() } };
+    }
+    const auto triangleSources = BuildTriangleSources(geometry);
+    auto analysisReport = cell->navMeshes.empty() ? navmesh::analysis::AnalysisReport{} : navmesh::analysis::AnalyzeNavMeshPolygons(cell->navMeshes.front(), geometry.mesh, triangleSources, analysisConfig);
     AnnotateSupportSources(analysisReport, geometry);
     std::vector<navmesh::core::NavMesh> sceneNavmeshes;
     for (const auto& sceneCell : sceneCells) sceneNavmeshes.insert(sceneNavmeshes.end(), sceneCell.navMeshes.begin(), sceneCell.navMeshes.end());

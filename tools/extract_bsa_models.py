@@ -1,10 +1,41 @@
 import argparse
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import sys
 
 
 def normalize(path: object) -> str:
     return str(path).replace("/", "\\").lower()
+
+
+def iter_requested_files(archive: object, requested: set[str]):
+    """Read only matching records; unrelated BSA entries may use other payloads."""
+    header = archive.container.header
+    file_index = 0
+    for directory in archive.container.directory_blocks:
+        directory_path = PureWindowsPath(directory.name.rstrip("\x00"))
+        for record in directory.file_records:
+            name = archive.container.file_names[file_index]
+            file_index += 1
+            filepath = directory_path / name
+            if normalize(filepath) not in requested:
+                continue
+
+            size = record.size & archive.SIZE_MASK
+            payload = archive.content[record.offset : record.offset + size]
+            if len(payload) != size:
+                raise ValueError(f"truncated BSA entry: {filepath}")
+            if header.archive_flags.files_prefixed:
+                if not payload or len(payload) < payload[0] + 1:
+                    raise ValueError(f"invalid filename prefix: {filepath}")
+                payload = payload[payload[0] + 1 :]
+
+            compressed = bool(header.archive_flags.files_compressed) != bool(
+                record.size & 0x40000000
+            )
+            file_struct = (
+                archive.compressed_file_struct if compressed else archive.uncompressed_file_struct
+            )
+            yield filepath, file_struct.parse(payload).data
 
 
 def main() -> int:
@@ -38,13 +69,11 @@ def main() -> int:
             continue
         try:
             archive = BSAArchive.parse_file(archive_path)
-            for archive_file in archive.iter_files():
-                archive_name = normalize(archive_file.filepath)
-                if archive_name not in remaining:
-                    continue
-                destination = args.output / Path(str(archive_file.filepath).replace("\\", "/"))
+            for filepath, data in iter_requested_files(archive, remaining):
+                archive_name = normalize(filepath)
+                destination = args.output / Path(str(filepath).replace("\\", "/"))
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(archive_file.data)
+                destination.write_bytes(data)
                 remaining.remove(archive_name)
         except Exception as error:
             print(f"BSA extraction: skipped {archive_path.name}: {error}", file=sys.stderr)

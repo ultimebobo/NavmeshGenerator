@@ -7,7 +7,9 @@ set_version("0.1.0")
 set_license("GPL-3.0-or-later")
 set_languages("c++23")
 set_warnings("allextra")
-add_requires("zlib")
+-- Pin the static package used by both parser compression and fixture builders.
+-- This keeps the test target independent of an ambient SDK zlib installation.
+add_requires("zlib 1.3.2", { configs = { shared = false } })
 
 -- add common rules
 add_rules("mode.debug", "mode.releasedbg")

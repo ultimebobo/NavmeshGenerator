@@ -190,10 +190,16 @@ namespace navmesh::skyrim::offline
         for (std::size_t i = 0; i < sources.size(); ++i) { if (sources[i].light) light[i] = nextLight++; else full[i] = nextFull++; }
         const auto resolve = [&](std::size_t owner, std::uint32_t raw) -> std::optional<std::uint32_t> {
             const auto hi = raw >> 24;
-            if (hi == 0) return sources[owner].light ? 0xFE000000U | (light[owner] << 12) | (raw & 0xFFFU) : full[owner] << 24 | (raw & 0xFFFFFFU);
-            if (hi == 0xFE) return raw; // light IDs already carry the global light ordinal in a plugin record.
-            if (hi <= sources[owner].masters.size()) { const auto it = byName.find(Lower(sources[owner].masters[hi - 1])); if (it != byName.end()) { const auto target = it->second; return sources[target].light ? 0xFE000000U | (light[target] << 12) | (raw & 0xFFFU) : full[target] << 24 | (raw & 0xFFFFFFU); } }
-            return std::nullopt;
+            // A file's FormID prefix indexes its master table from zero. New
+            // records use the index immediately after the last master.
+            std::size_t target = owner;
+            if (hi < sources[owner].masters.size()) {
+                const auto it = byName.find(Lower(sources[owner].masters[hi]));
+                if (it == byName.end()) return std::nullopt;
+                target = it->second;
+            } else if (hi != sources[owner].masters.size()) return std::nullopt;
+            if (sources[target].light) return 0xFE000000U | (light[target] << 12) | (raw & 0xFFFU);
+            return full[target] << 24 | (raw & 0xFFFFFFU);
         };
         std::unordered_map<std::uint32_t, std::size_t> winners;
         for (std::size_t i = 0; i < sources.size(); ++i) for (auto record : sources[i].records) {
