@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -61,7 +62,23 @@ namespace navmesh::skyrim::offline
         bool collisionGeometrySupported{};
     };
 
-    [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path& dataDirectory, const core::Cell& cell, const std::filesystem::path& cacheDirectory = {}, const GeometryProgressCallback& progress = {}, const GeometryCancellationCallback& cancelled = {});
+    /// Physical MO2 asset winners and archives in increasing mod priority.
+    /// Logical paths use lowercase forward slashes and begin with meshes/.
+    struct ModelAssetSources
+    {
+        std::unordered_map<std::string, std::filesystem::path> looseModels;
+        std::vector<std::filesystem::path> archives;
+    };
+
+    /// Extract placed model geometry using MO2 assets when provided.
+    /// @param dataDirectory Game Data directory for direct input and vanilla BSAs.
+    /// @param cell Cell whose references are decoded in world coordinates.
+    /// @param cacheDirectory Writable cache for requested archived NIFs.
+    /// @param progress Optional per-reference progress callback.
+    /// @param cancelled Optional cancellation callback; returns partial geometry if true.
+    /// @param assets Optional MO2 loose winners and archive paths.
+    /// @return Extracted support and render geometry with per-reference failures.
+    [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path& dataDirectory, const core::Cell& cell, const std::filesystem::path& cacheDirectory = {}, const GeometryProgressCallback& progress = {}, const GeometryCancellationCallback& cancelled = {}, const ModelAssetSources* assets = nullptr);
     [[nodiscard]] bool WriteGeometryObj(const std::filesystem::path& outputPath, const GeometryExtraction& geometry);
     [[nodiscard]] bool WriteGeometryJson(const std::filesystem::path& outputPath, const core::Cell& cell, const GeometryExtraction& geometry, const reproducibility::ExportMetadata& metadata);
 }

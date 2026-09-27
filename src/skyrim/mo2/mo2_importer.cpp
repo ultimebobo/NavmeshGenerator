@@ -72,11 +72,11 @@ namespace
     std::filesystem::path ConfigPath(const std::map<std::string, std::string>& ini, const std::string& key, const std::filesystem::path& root, const std::filesystem::path& base, const std::filesystem::path& fallback)
     {
         const auto found = ini.find(Lower(key)); if (found == ini.end() || found->second.empty()) return fallback;
-        const std::filesystem::path value(found->second); if (value.is_absolute()) return value;
+        const std::filesystem::path value(found->second); if (value.is_absolute()) return value.lexically_normal();
         const auto rootRelative = root / value; const auto baseRelative = base / value;
         // MO2 portable roots resolve paths from the executable; split instances often use base_directory.
-        if (std::filesystem::exists(rootRelative) || !std::filesystem::exists(baseRelative)) return rootRelative;
-        return baseRelative;
+        if (std::filesystem::exists(rootRelative) || !std::filesystem::exists(baseRelative)) return rootRelative.lexically_normal();
+        return baseRelative.lexically_normal();
     }
     std::uint64_t Fnv(std::uint64_t value, const std::string& text) { for (const auto c : text) { value ^= static_cast<unsigned char>(c); value *= 1099511628211ULL; } return value; }
     void AddSnapshot(std::uint64_t& hash, const std::filesystem::path& path)
@@ -208,13 +208,27 @@ namespace navmesh::skyrim::offline
             AddFiles(winners, result.gameData, "game Data"); for (const auto& mod : result.enabledMods) AddFiles(winners, mod.path, mod.name); AddFiles(winners, overwrite, "Overwrite");
         }
         AddTopLevelPluginAndArchiveFiles(winners, result.gameData, "game Data"); for (const auto& mod : result.enabledMods) AddTopLevelPluginAndArchiveFiles(winners, mod.path, mod.name); AddTopLevelPluginAndArchiveFiles(winners, overwrite, "Overwrite");
-        std::size_t archiveCount{};
         for (const auto& [logical, file] : winners) {
-            if (Lower(PathUtf8(file.physicalPath.extension())) == ".bsa") { ++archiveCount; continue; }
+            if (Lower(PathUtf8(file.physicalPath.extension())) == ".bsa") continue;
             if (PluginName(file.physicalPath)) continue;
             if (!cacheLoaded) result.looseAssetWinners.push_back(file);
         }
-        if (archiveCount != 0) result.diagnostics.push_back({ DiagnosticKind::UnsupportedRecord, "MO2 virtual file map", std::to_string(archiveCount) + " BSA archives were found. Their contained assets are not indexed in milestone 1; only loose-file winners are reported." });
+        // Preserve archive priority for on-demand model extraction. The winner
+        // map alone is sorted by logical name, which loses MO2 mod priority.
+        const auto addArchives = [&](const std::filesystem::path& directory) {
+            if (!std::filesystem::is_directory(directory)) return;
+            std::vector<std::filesystem::path> matched;
+            for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+                if (!entry.is_regular_file() || Lower(PathUtf8(entry.path().extension())) != ".bsa") continue;
+                const auto winner = winners.find(Lower(PathUtf8(entry.path().filename())));
+                if (winner != winners.end() && winner->second.physicalPath == entry.path()) matched.push_back(entry.path());
+            }
+            std::sort(matched.begin(), matched.end(), [](const auto& a, const auto& b) { return Lower(PathUtf8(a.filename())) < Lower(PathUtf8(b.filename())); });
+            result.archivePaths.insert(result.archivePaths.end(), matched.begin(), matched.end());
+        };
+        addArchives(result.gameData);
+        for (const auto& mod : result.enabledMods) addArchives(mod.path);
+        addArchives(overwrite);
         // Skyrim's core masters may be implicit in an MO2 profile. Derive the
         // complete master closure from on-disk TES4 headers and place each master
         // before its dependant without changing the profile or its files.

@@ -15,7 +15,10 @@ namespace navmesh::skyrim::offline
         std::filesystem::path instanceRoot; std::string profile;
         std::filesystem::path gameData; std::filesystem::path profileDirectory; std::filesystem::path modsDirectory;
         std::vector<EnabledMod> enabledMods; std::vector<std::filesystem::path> pluginPaths;
-        std::vector<VirtualFile> looseAssetWinners; std::vector<Diagnostic> diagnostics;
+        std::vector<VirtualFile> looseAssetWinners;
+        /// Physical winning BSAs from game Data and enabled mods, in increasing MO2 priority.
+        std::vector<std::filesystem::path> archivePaths;
+        std::vector<Diagnostic> diagnostics;
         std::string snapshotHash; bool looseAssetCacheUsed{};
     };
 

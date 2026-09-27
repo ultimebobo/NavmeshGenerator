@@ -8,6 +8,7 @@
 #include <format>
 #include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <unordered_set>
 
 namespace
@@ -313,7 +314,14 @@ namespace
         }
     }
 
-    void ExtractBsaModels(const std::filesystem::path& dataDirectory, const std::filesystem::path& cacheDirectory, const navmesh::core::Cell& cell)
+    [[nodiscard]] std::string AssetKey(const std::filesystem::path& path)
+    {
+        auto key = path.generic_string();
+        std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return key;
+    }
+
+    void ExtractBsaModels(const std::filesystem::path& dataDirectory, const std::filesystem::path& cacheDirectory, const navmesh::core::Cell& cell, const navmesh::skyrim::offline::ModelAssetSources* assets)
     {
         if (cacheDirectory.empty()) return;
         std::filesystem::create_directories(cacheDirectory);
@@ -322,23 +330,44 @@ namespace
         if (!manifestStream) return;
         std::size_t modelCount = 0;
         for (const auto& reference : cell.references) {
-            if (!reference.modelPath.empty()) { manifestStream << ModelRelativePath(reference.modelPath).string() << "\n"; ++modelCount; }
+            if (reference.modelPath.empty()) continue;
+            const auto relative = ModelRelativePath(reference.modelPath);
+            if (assets && assets->looseModels.contains(AssetKey(relative))) continue;
+            if (std::filesystem::exists(dataDirectory / relative)) continue;
+            if (std::filesystem::exists(cacheDirectory / relative)) continue;
+            manifestStream << relative.string() << "\n"; ++modelCount;
         }
         manifestStream.close();
         if (modelCount == 0) return;
         const auto script = std::filesystem::current_path() / "tools" / "extract_bsa_models.py";
         if (!std::filesystem::exists(script)) return;
-        const auto command = "python " + QuoteShell(script) + " --data " + QuoteShell(dataDirectory) + " --output " + QuoteShell(cacheDirectory) + " --manifest " + QuoteShell(manifest);
-        std::system(command.c_str());
+        std::string python = "python";
+#ifdef _WIN32
+        char* configuredPython{};
+        std::size_t configuredSize{};
+        if (_dupenv_s(&configuredPython, &configuredSize, "NAVMESH_PYTHON") == 0 && configuredPython && *configuredPython) python = QuoteShell(configuredPython);
+        std::free(configuredPython);
+#else
+        if (const auto* configuredPython = std::getenv("NAVMESH_PYTHON"); configuredPython && *configuredPython) python = QuoteShell(configuredPython);
+#endif
+        std::string command = python + " " + QuoteShell(script) + " --data " + QuoteShell(dataDirectory) + " --output " + QuoteShell(cacheDirectory) + " --manifest " + QuoteShell(manifest);
+        if (assets) {
+            const auto archiveManifest = cacheDirectory / "archives.txt";
+            std::ofstream archives(archiveManifest, std::ios::trunc);
+            for (const auto& path : assets->archives) archives << path.string() << "\n";
+            archives.close();
+            command += " --archives " + QuoteShell(archiveManifest);
+        }
+        if (std::system(command.c_str()) != 0) std::cerr << "BSA model extraction failed; install the Python dependencies in tools/requirements.txt or set NAVMESH_PYTHON.\n";
     }
 }
 
 namespace navmesh::skyrim::offline
 {
-    GeometryExtraction ExtractGeometry(const std::filesystem::path& dataDirectory, const core::Cell& cell, const std::filesystem::path& cacheDirectory, const GeometryProgressCallback& progress, const GeometryCancellationCallback& cancelled)
+    GeometryExtraction ExtractGeometry(const std::filesystem::path& dataDirectory, const core::Cell& cell, const std::filesystem::path& cacheDirectory, const GeometryProgressCallback& progress, const GeometryCancellationCallback& cancelled, const ModelAssetSources* assets)
     {
         GeometryExtraction output;
-        ExtractBsaModels(dataDirectory, cacheDirectory, cell);
+        ExtractBsaModels(dataDirectory, cacheDirectory, cell, assets);
         const auto totalReferences = cell.references.size();
         for (std::size_t referenceIndex{}; referenceIndex < totalReferences; ++referenceIndex) {
             if (cancelled && cancelled()) return output;
@@ -351,7 +380,8 @@ namespace navmesh::skyrim::offline
             ++output.referencesWithModels; const auto relativePath = ModelRelativePath(reference.modelPath);
             const auto loosePath = dataDirectory / relativePath;
             const auto cachedPath = cacheDirectory.empty() ? loosePath : cacheDirectory / relativePath;
-            const auto modelPath = std::filesystem::exists(loosePath) ? loosePath : cachedPath;
+            const auto looseWinner = assets ? assets->looseModels.find(AssetKey(relativePath)) : std::unordered_map<std::string, std::filesystem::path>::const_iterator{};
+            const auto modelPath = assets && looseWinner != assets->looseModels.end() ? looseWinner->second : std::filesystem::exists(loosePath) ? loosePath : cachedPath;
             const auto nifGeometry = LoadNif(modelPath);
             const auto& mesh = !nifGeometry.collision.triangles.empty() ? nifGeometry.collision : nifGeometry.render;
             const bool hasCollision = !nifGeometry.collision.triangles.empty();
@@ -359,7 +389,7 @@ namespace navmesh::skyrim::offline
             if (nifGeometry.version.empty() || mesh.vertices.empty() || mesh.triangles.empty()) {
                 const auto exists = std::filesystem::exists(modelPath);
                 const auto status = !exists ? core::GeometryCoverage::Missing : nifGeometry.version.empty() ? core::GeometryCoverage::Unreadable : core::GeometryCoverage::Unsupported;
-                report.failure = status == core::GeometryCoverage::Missing ? "missing loose NIF" : status == core::GeometryCoverage::Unreadable ? "NIF could not be read" : "NIF contains no supported triangle geometry";
+                report.failure = status == core::GeometryCoverage::Missing ? (assets ? "model not found in MO2 loose assets or enabled BSAs" : "missing loose NIF") : status == core::GeometryCoverage::Unreadable ? "NIF could not be read" : "NIF contains no supported triangle geometry";
                 if (status == core::GeometryCoverage::Unsupported) ++output.modelsUnsupported;
                 else if (status == core::GeometryCoverage::Unreadable) ++output.modelsUnreadable;
                 else ++output.modelsMissing;

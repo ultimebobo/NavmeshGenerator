@@ -43,6 +43,7 @@ def main() -> int:
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--archives", type=Path, help="Archive paths in increasing MO2 priority")
     args = parser.parse_args()
 
     package_root = Path(__file__).resolve().parent / "BSAFileExtractor"
@@ -62,7 +63,10 @@ def main() -> int:
     remaining = set(requested)
     args.output.mkdir(parents=True, exist_ok=True)
 
-    for archive_path in sorted(args.data.glob("*.bsa")):
+    archives = ([Path(line) for line in args.archives.read_text(encoding="utf-8").splitlines() if line]
+                if args.archives else sorted(args.data.glob("*.bsa")))
+    # Later enabled mods win. A loose winner is omitted from the request list.
+    for archive_path in reversed(archives):
         if not remaining:
             break
         if not BSAArchive.can_handle(archive_path):

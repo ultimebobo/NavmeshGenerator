@@ -15,3 +15,11 @@
 - Keep `docs/api.md` and `Doxyfile` current when adding a major module. If
   Doxygen is installed, run `doxygen Doxyfile` and resolve new documentation
   warnings before finishing.
+- When changing a user-visible analysis or export option, trace every entry
+  point that calls `app::Run`, including the Windows UI and CLI. Expose the
+  setting in the UI when operators need it, persist and validate its value,
+  and verify that the UI passes it to the shared run path. Build the desktop
+  executable and test the actual UI workflow, not only a CLI invocation.
+- Treat named cells and mods supplied as bug examples as reproduction data.
+  Keep behavior, UI help, and synthetic fixture names location independent
+  unless a location-specific rule is explicitly required.

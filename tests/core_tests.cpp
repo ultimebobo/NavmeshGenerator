@@ -117,18 +117,18 @@ namespace
         assert(temporaryRecord && temporaryRecord->cellFormId == 0x400 && temporaryRecord->worldspaceFormId == 0x300 && temporaryRecord->temporary);
         Require(indexed.cells.size() == 1 && indexed.cells.front().navMeshes.size() == 1 && indexed.cells.front().navMeshes.front().polygons.size() == 1);
     }
-    void TestWinterholdCellOverride()
+    void TestCellOverrideAcrossPlugins()
     {
-        const auto root = std::filesystem::temp_directory_path() / "navmesh-winterhold-override-test";
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-cell-override-test";
         std::filesystem::create_directories(root);
-        WritePlugin(root / "Skyrim.esm", {}, false, { { "CELL", 0x123, CellPayload("WinterholdExterior01", true) } });
+        WritePlugin(root / "Base.esm", {}, false, { { "CELL", 0x123, CellPayload("ExampleExteriorCell", true) } });
 
         std::vector<std::uint8_t> header;
-        PutText(header, "MAST", { 'S', 'k', 'y', 'r', 'i', 'm', '.', 'e', 's', 'm', 0 });
+        PutText(header, "MAST", { 'B', 'a', 's', 'e', '.', 'e', 's', 'm', 0 });
         std::vector<std::uint8_t> patch;
-        PutRecord(patch, "CELL", 0x00000123, CellPayload("WinterholdExterior01", true));
+        PutRecord(patch, "CELL", 0x00000123, CellPayload("ExampleExteriorCell", true));
         std::vector<std::uint8_t> model;
-        PutText(model, "MODL", { 'm', 'e', 's', 'h', 'e', 's', '/', 'w', 'i', 'n', 't', 'e', 'r', 'h', 'o', 'l', 'd', '.', 'n', 'i', 'f', 0 });
+        PutText(model, "MODL", { 'm', 'e', 's', 'h', 'e', 's', '/', 'f', 'i', 'x', 't', 'u', 'r', 'e', '.', 'n', 'i', 'f', 0 });
         PutRecord(patch, "STAT", 0x01000300, model);
         std::vector<std::uint8_t> reference;
         std::vector<std::uint8_t> baseId; PutU32(baseId, 0x01000300); PutText(reference, "NAME", baseId);
@@ -137,17 +137,17 @@ namespace
         std::vector<std::uint8_t> bytes;
         PutRecord(bytes, "TES4", 0, header);
         bytes.insert(bytes.end(), patch.begin(), patch.end());
-        std::ofstream output(root / "WinterholdPatch.esp", std::ios::binary);
+        std::ofstream output(root / "FixturePatch.esp", std::ios::binary);
         output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())); output.close();
 
-        const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Skyrim.esm", "WinterholdPatch.esp" } });
+        const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Base.esm", "FixturePatch.esp" } });
         Require(resolved.diagnostics.empty());
         const auto* winner = resolved.FindWinning(0x123);
-        Require(winner && winner->winning.plugin == "WinterholdPatch.esp" && winner->origins.size() == 2);
+        Require(winner && winner->winning.plugin == "FixturePatch.esp" && winner->origins.size() == 2);
         Require(resolved.cells.size() == 1 && resolved.cells.front().references.size() == 1);
         const auto& placed = resolved.cells.front().references.front();
-        Require(placed.id == 0x01000400 && placed.baseObjectId == 0x01000300 && placed.sourcePlugin == "WinterholdPatch.esp");
-        Require(placed.modelPath == "meshes/winterhold.nif");
+        Require(placed.id == 0x01000400 && placed.baseObjectId == 0x01000300 && placed.sourcePlugin == "FixturePatch.esp");
+        Require(placed.modelPath == "meshes/fixture.nif");
     }
     void TestExteriorLandTerrain()
     {
@@ -177,9 +177,11 @@ namespace
         WritePlugin(root / "Game" / "Data" / "Base.esm", {}, false, {}); WritePlugin(root / "mods" / "Patch" / "Patch.esp", { "Base.esm" }, false, {});
         WriteTextFile(root / "profiles" / "Default" / "modlist.txt", "+Patch\n"); WriteTextFile(root / "profiles" / "Default" / "plugins.txt", "*Base.esm\n*Patch.esp\n"); WriteTextFile(root / "profiles" / "Default" / "loadorder.txt", "Base.esm\nPatch.esp\n");
         WriteTextFile(root / "Game" / "Data" / "meshes.txt", "base"); WriteTextFile(root / "overwrite" / "meshes" / "marker.nif", "winner");
+        WriteTextFile(root / "mods" / "Patch" / "Patch - Meshes.bsa", "archive fixture path");
         const auto imported = navmesh::skyrim::offline::ImportMo2Profile(root, "Default");
         assert(imported.diagnostics.empty()); assert(imported.pluginPaths.size() == 2u && imported.pluginPaths[1].filename() == "Patch.esp"); assert(imported.enabledMods.size() == 1u && imported.enabledMods.front().priority == 0u); assert(!imported.snapshotHash.empty());
         assert(std::any_of(imported.looseAssetWinners.begin(), imported.looseAssetWinners.end(), [](const auto& file) { return file.logicalPath == "meshes/marker.nif" && file.source == "Overwrite"; }));
+        Require(imported.archivePaths.size() == 1 && imported.archivePaths.front().filename() == "Patch - Meshes.bsa");
         const auto overridden = navmesh::skyrim::offline::ImportMo2Profile(root, "Default", root / "mods");
         Require(overridden.diagnostics.empty() && overridden.modsDirectory == root / "mods" && overridden.pluginPaths.size() == 2u);
         WriteTextFile(root / "profiles" / "Default" / "plugins.txt", "*Patch.esp\n"); WriteTextFile(root / "profiles" / "Default" / "loadorder.txt", "Patch.esp\n");
@@ -247,8 +249,8 @@ namespace
         nif.Create({ nifly::V20_2_0_7, 12, 130 });
         const std::vector<nifly::Vector3> vertices = { { 0.0F, 0.0F, 0.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F } };
         const std::vector<nifly::Triangle> triangles = { { 0, 1, 2 } };
-        assert(nif.CreateShapeFromData("MarkerX", &vertices, &triangles, nullptr) != nullptr);
-        assert(nif.Save(modelPath) == 0);
+        Require(nif.CreateShapeFromData("MarkerX", &vertices, &triangles, nullptr) != nullptr);
+        Require(nif.Save(modelPath) == 0);
 
         navmesh::core::Cell cell;
         cell.references.push_back({ .id = 1, .baseObjectId = 2, .recordType = "REFR", .modelPath = "MarkerX.nif", .position = { 10.0F, 20.0F, 30.0F }, .scale = 1.0F, .sourcePlugin = "Patch.esp", .basePlugin = "Base.esm", .baseRecordType = "STAT" });
@@ -261,6 +263,15 @@ namespace
         assert(geometry.scene.HasCompleteTriangleProvenance());
         const auto& provenance = geometry.scene.triangleProvenance.front();
         assert(provenance.sourceTriangle == 0u && geometry.scene.geometrySources[provenance.geometrySource].reference.plugin == "Patch.esp");
+
+        // The game Data directory lacks this mesh. An MO2 loose winner must
+        // still load the placed model, including its render geometry.
+        const auto emptyData = tempRoot / "empty-data";
+        std::filesystem::create_directories(emptyData);
+        navmesh::skyrim::offline::ModelAssetSources assets;
+        assets.looseModels.emplace("meshes/markerx.nif", modelPath);
+        const auto fromMo2 = navmesh::skyrim::offline::ExtractGeometry(emptyData, cell, {}, {}, {}, &assets);
+        Require(fromMo2.modelsLoaded == 1 && fromMo2.mesh.triangles.size() == 1 && fromMo2.modelsMissing == 0);
     }
 
     // Legal synthetic fixture: Havok coordinates and rigid-body translation
@@ -441,7 +452,7 @@ int main(int argc, char** argv)
     if (argc > 1 && std::string_view(argv[1]) == "--scene-only") { TestCombinedColorLayeredGlb(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--candidate-only") { TestCandidateGeneration(); return 0; }
     TestResolvedLoadOrder();
-    TestWinterholdCellOverride();
+    TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();
     TestLossAwareRecordReader();
     TestExteriorLandTerrain();

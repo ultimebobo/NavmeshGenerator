@@ -2,7 +2,7 @@
 
 ## Evidence and decision
 
-The local Winterhold exterior benchmark is the existing `output/default` export
+The local exterior benchmark is the existing `output/default` export
 for CELL `00008EA2` at (26, 25). Its saved `geometry.json` identifies the
 winning LAND and collision sources and contains 98,558 source triangles:
 2,048 LAND, 17,748 collision, and 78,762 render fallback. The run reports

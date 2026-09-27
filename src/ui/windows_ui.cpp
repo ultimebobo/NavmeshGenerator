@@ -52,6 +52,7 @@ namespace
         Field{"radius", "Surface search radius", "Maximum horizontal search radius for support geometry, in game units."},
         Field{"support", "Max support distance", "Maximum vertical distance to a support surface, in game units."},
         Field{"slope", "Max slope", "Maximum support-surface slope in degrees."},
+        Field{"neighboring_cell_radius", "Neighboring cells", "Exterior CELL radius around the selected cell; use 1 to include references placed in adjacent cells."},
     };
     constexpr std::array Checks{
         Field{"list", "List cells only", "Discover and export cells without extracting geometry or analysis."},
@@ -133,24 +134,24 @@ namespace
             if (index < 6) y = 130 + (index / 3) * 57;
             else if (index < 9) y = 276;
             else if (index < 15) y = 365 + ((index - 9) / 3) * 57;
-            else y = 534;
+            else y = 534 + ((index - 15) / 3) * 57;
             const int x = columns[index % 3];
             Move(state.fieldLabels[index], x, y, columnWidth - helpWidth - 8, 18);
             Move(GetDlgItem(state.window, FieldBase + index), x, y + 19, columnWidth - helpWidth - 8, 29);
             Move(state.fieldHelps[index], x + columnWidth - helpWidth, y + 21, helpWidth, helpWidth);
         }
-        Move(state.lookupLabel, margin, 597, 120, 20);
+        Move(state.lookupLabel, margin, 654, 120, 20);
         const int selectionX = margin + 127;
-        for (int index{}; index < 3; ++index) Move(GetDlgItem(state.window, TargetBase + index), selectionX + index * 125, 595, 116, 24);
+        for (int index{}; index < 3; ++index) Move(GetDlgItem(state.window, TargetBase + index), selectionX + index * 125, 652, 116, 24);
         for (int index{}; index < static_cast<int>(Checks.size()); ++index) {
-            const int x = columns[index % 3], y = index < 3 ? 628 : 662;
+            const int x = columns[index % 3], y = index < 3 ? 685 : 719;
             Move(GetDlgItem(state.window, CheckBase + index), x, y, columnWidth - 30, 24);
             Move(state.checkHelps[index], x + columnWidth - 25, y, 22, 22);
         }
-        Move(state.profileLabel, columns[1], 665, 118, 18);
-        Move(GetDlgItem(state.window, NavigationProfileBox), columns[1] + 120, 658, columnWidth - 153, 150);
-        Move(state.profileHelp, columns[1] + columnWidth - 25, 661, 22, 22);
-        const int footerTop = std::max(715, height - 150);
+        Move(state.profileLabel, columns[1], 722, 118, 18);
+        Move(GetDlgItem(state.window, NavigationProfileBox), columns[1] + 120, 715, columnWidth - 153, 150);
+        Move(state.profileHelp, columns[1] + columnWidth - 25, 718, 22, 22);
+        const int footerTop = std::max(772, height - 145);
         Move(state.progress, margin, footerTop, std::max(300, width - margin * 2 - 75), 20);
         Move(state.percent, width - margin - 60, footerTop, 60, 20);
         Move(state.status, margin, footerTop + 29, width - margin * 2, 22);
@@ -175,7 +176,9 @@ namespace
             }
             else if (SendMessageA(GetDlgItem(window, TargetBase + 2), BM_GETCHECK, 0, 0) == BST_CHECKED) { result.cellX = std::stoi(Text(window, FieldBase + 13)); result.cellY = std::stoi(Text(window, FieldBase + 14)); }
             result.surfaceSearchRadius = std::stof(Text(window, FieldBase + 15)); result.maxSupportDistance = std::stof(Text(window, FieldBase + 16)); result.maxSlope = std::stof(Text(window, FieldBase + 17));
-        } catch (...) { throw std::runtime_error("Cell coordinates and analysis thresholds must be valid numbers."); }
+            result.neighboringCellRadius = std::stoi(Text(window, FieldBase + 18));
+            if (result.neighboringCellRadius < 0) throw std::invalid_argument("negative neighboring-cell radius");
+        } catch (...) { throw std::runtime_error("Cell coordinates, analysis thresholds, and neighboring-cell radius must be valid numbers. Neighboring cells cannot be negative."); }
         result.listCells = listOnly || SendMessageA(GetDlgItem(window, CheckBase), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.diagnostics = SendMessageA(GetDlgItem(window, CheckBase + 1), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.terrainOnly = SendMessageA(GetDlgItem(window, CheckBase + 2), BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -238,22 +241,23 @@ namespace
             for (int i{}; i < 6; ++i) AddField(*state, i + 9, columns[i % 3], 365 + (i / 3) * 57);
             AddSection(*state, 3, "ANALYSIS THRESHOLDS", 511);
             for (int i{}; i < 3; ++i) AddField(*state, i + 15, columns[i], 534);
-            state->lookupLabel = CreateWindowA("STATIC", "LOOK UP CELL BY", WS_CHILD | WS_VISIBLE, 30, 597, 120, 20, window, nullptr, nullptr, nullptr); Font(state->lookupLabel, state->label);
+            AddField(*state, 18, columns[0], 591);
+            state->lookupLabel = CreateWindowA("STATIC", "LOOK UP CELL BY", WS_CHILD | WS_VISIBLE, 30, 654, 120, 20, window, nullptr, nullptr, nullptr); Font(state->lookupLabel, state->label);
             const char* targets[] = {"Form ID", "Editor ID", "Coordinates"};
-            for (int i{}; i < 3; ++i) { auto button = CreateWindowA("BUTTON", targets[i], WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | (i == 0 ? WS_GROUP : 0), 157 + i * 125, 595, 116, 24, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(TargetBase + i)), nullptr, nullptr); Theme(button); Font(button, state->body); AddTooltip(*state, button, i == 0 ? "Select exactly one cell-lookup method." : i == 1 ? "Use this method to select a CELL by editor ID." : "Use this method to select an exterior CELL by X/Y coordinates."); }
-            for (size_t i{}; i < Checks.size(); ++i) { auto check = CreateWindowA("BUTTON", Checks[i].label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 535 + static_cast<int>(i) * 125, 628, 104, 24, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(CheckBase + static_cast<int>(i))), nullptr, nullptr); Theme(check); Font(check, state->body); auto help = CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 640 + static_cast<int>(i) * 125, 628, 22, 22, window, nullptr, nullptr, nullptr); state->checkHelps[i] = help; AddTooltip(*state, help, Checks[i].hint); }
-            state->profileLabel = Label(*state, "Navigation profile", 340, 665, 118);
-            auto profileBox = CreateWindowA("COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 460, 658, 160, 150, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(NavigationProfileBox)), nullptr, nullptr);
+            for (int i{}; i < 3; ++i) { auto button = CreateWindowA("BUTTON", targets[i], WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | (i == 0 ? WS_GROUP : 0), 157 + i * 125, 652, 116, 24, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(TargetBase + i)), nullptr, nullptr); Theme(button); Font(button, state->body); AddTooltip(*state, button, i == 0 ? "Select exactly one cell-lookup method." : i == 1 ? "Use this method to select a CELL by editor ID." : "Use this method to select an exterior CELL by X/Y coordinates."); }
+            for (size_t i{}; i < Checks.size(); ++i) { auto check = CreateWindowA("BUTTON", Checks[i].label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 535 + static_cast<int>(i) * 125, 685, 104, 24, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(CheckBase + static_cast<int>(i))), nullptr, nullptr); Theme(check); Font(check, state->body); auto help = CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 640 + static_cast<int>(i) * 125, 685, 22, 22, window, nullptr, nullptr, nullptr); state->checkHelps[i] = help; AddTooltip(*state, help, Checks[i].hint); }
+            state->profileLabel = Label(*state, "Navigation profile", 340, 722, 118);
+            auto profileBox = CreateWindowA("COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 460, 715, 160, 150, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(NavigationProfileBox)), nullptr, nullptr);
             Font(profileBox, state->body); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("human@1.0.0")); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("small@1.0.0"));
-            state->profileHelp = CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 632, 661, 22, 22, window, nullptr, nullptr, nullptr);
+            state->profileHelp = CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 632, 718, 22, 22, window, nullptr, nullptr, nullptr);
             AddTooltip(*state, state->profileHelp, "Versioned agent size, slope, step, clearance, border, and simplification settings for candidate NAVM generation.");
-            state->progress = CreateWindowExA(0, PROGRESS_CLASSA, nullptr, WS_CHILD | WS_VISIBLE, 30, 680, 770, 20, window, nullptr, nullptr, nullptr); Theme(state->progress); SendMessageA(state->progress, PBM_SETRANGE32, 0, 100);
-            state->percent = Label(*state, "0%", 815, 680, 90, state->label);
-            state->status = CreateWindowA("STATIC", "Ready to analyze", WS_CHILD | WS_VISIBLE, 30, 709, 860, 22, window, nullptr, nullptr, nullptr); Font(state->status, state->body);
-            auto list = CreateWindowA("BUTTON", "List cells", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 480, 748, 130, 38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ListButton)), nullptr, nullptr); Font(list, state->body);
-            auto cancel = CreateWindowA("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 620, 748, 120, 38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(CancelButton)), nullptr, nullptr); Font(cancel, state->body); EnableWindow(cancel, FALSE);
-            auto run = CreateWindowA("BUTTON", "Run analysis", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 760, 748, 145, 38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(RunButton)), nullptr, nullptr); Font(run, state->body);
-            for (size_t i{}; i < Fields.size(); ++i) SetText(window, FieldBase + static_cast<int>(i), ReadConfig(state->config, Fields[i].key, i == 6 ? "." : i == 15 ? "64" : i == 16 ? "32" : i == 17 ? "45" : ""));
+            state->progress = CreateWindowExA(0, PROGRESS_CLASSA, nullptr, WS_CHILD | WS_VISIBLE, 30, 772, 770, 20, window, nullptr, nullptr, nullptr); Theme(state->progress); SendMessageA(state->progress, PBM_SETRANGE32, 0, 100);
+            state->percent = Label(*state, "0%", 815, 772, 90, state->label);
+            state->status = CreateWindowA("STATIC", "Ready to analyze", WS_CHILD | WS_VISIBLE, 30, 801, 860, 22, window, nullptr, nullptr, nullptr); Font(state->status, state->body);
+            auto list = CreateWindowA("BUTTON", "List cells", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 480, 840, 130, 38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ListButton)), nullptr, nullptr); Font(list, state->body);
+            auto cancel = CreateWindowA("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 620, 840, 120, 38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(CancelButton)), nullptr, nullptr); Font(cancel, state->body); EnableWindow(cancel, FALSE);
+            auto run = CreateWindowA("BUTTON", "Run analysis", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 760, 840, 145, 38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(RunButton)), nullptr, nullptr); Font(run, state->body);
+            for (size_t i{}; i < Fields.size(); ++i) SetText(window, FieldBase + static_cast<int>(i), ReadConfig(state->config, Fields[i].key, i == 6 ? "." : i == 15 ? "64" : i == 16 ? "32" : i == 17 ? "45" : i == 18 ? "1" : ""));
             for (size_t i{}; i < Checks.size(); ++i) SendMessageA(GetDlgItem(window, CheckBase + static_cast<int>(i)), BM_SETCHECK, ReadConfig(state->config, Checks[i].key) == "1" ? BST_CHECKED : BST_UNCHECKED, 0);
             const auto savedProfile = ReadConfig(state->config, "navigation_profile", "human@1.0.0");
             SendMessageA(profileBox, CB_SETCURSEL, savedProfile == "small@1.0.0" ? 1 : 0, 0);
@@ -262,7 +266,7 @@ namespace
             return 0;
         }
         case WM_GETMINMAXINFO: {
-            auto* info = reinterpret_cast<MINMAXINFO*>(lParam); info->ptMinTrackSize.x = 960; info->ptMinTrackSize.y = 900; return 0;
+            auto* info = reinterpret_cast<MINMAXINFO*>(lParam); info->ptMinTrackSize.x = 960; info->ptMinTrackSize.y = 960; return 0;
         }
         case WM_SIZE: if (state && state->progress) { Layout(*state); InvalidateRect(window, nullptr, TRUE); } return 0;
         case WM_ERASEBKGND: return TRUE;
@@ -303,6 +307,6 @@ int navmesh::ui::RunWindowsUi(const navmesh::app::Options&)
 {
     INITCOMMONCONTROLSEX controls{.dwSize = sizeof(controls), .dwICC = ICC_PROGRESS_CLASS | ICC_WIN95_CLASSES}; InitCommonControlsEx(&controls);
     const WNDCLASSA klass{.lpfnWndProc = Procedure, .hInstance = GetModuleHandleA(nullptr), .hCursor = LoadCursor(nullptr, IDC_ARROW), .hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1), .lpszClassName = "NavmeshGeneratorWindow"}; RegisterClassA(&klass);
-    auto window = CreateWindowExA(0, klass.lpszClassName, "Navmesh Generator", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1040, 900, nullptr, nullptr, klass.hInstance, nullptr);
+    auto window = CreateWindowExA(0, klass.lpszClassName, "Navmesh Generator", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1040, 980, nullptr, nullptr, klass.hInstance, nullptr);
     ShowWindow(window, SW_SHOW); UpdateWindow(window); MSG message; while (GetMessageA(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageA(&message); } return static_cast<int>(message.wParam);
 }

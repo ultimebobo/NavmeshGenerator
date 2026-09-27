@@ -32,6 +32,13 @@ child mesh. An empty `Terrain`, `Collision`, or `Existing NAVM` group therefore
 means the selected input did not provide that source; consult the metadata
 warnings and coverage report rather than treating it as fallback geometry.
 
+MO2 scene extraction uses the profile's winning loose meshes and enabled mod
+archives. A CELL records the origin of each reference, but its NIF may be in
+another enabled mod. For an exterior structure whose reference origin falls in
+a neighboring CELL, use `--neighboring-cell-radius 1` in the CLI or set
+**Neighboring cells** to `1` in the Windows UI (the UI default). Set it to `0`
+for an exact single-CELL scene.
+
 When a model has supported collision and a render mesh, collision remains the
 only geometry used for navmesh analysis. Its render mesh is additionally placed
 in `Render fallback` for visual comparison in the 3D viewer; it is display-only

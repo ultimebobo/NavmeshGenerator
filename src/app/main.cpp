@@ -479,6 +479,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
 
     std::optional<navmesh::skyrim::offline::ResolvedLoadOrder> resolved;
     std::optional<navmesh::skyrim::offline::Mo2ProfileInput> mo2Input;
+    navmesh::skyrim::offline::ModelAssetSources modelAssets;
     if (!options.mo2.empty()) {
         std::filesystem::create_directories(options.output);
         update(5, "Reading MO2 profile");
@@ -497,6 +498,10 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
         std::cerr << "Effective MO2 mods directory: " << mo2Input->modsDirectory.string() << "\n";
         for (const auto& diagnostic : mo2Input->diagnostics) std::cerr << diagnostic.plugin << ": " << diagnostic.message << "\n";
         if (mo2Input->pluginPaths.empty()) { std::cerr << "MO2 import found no usable active plugin paths; see input-report.json.\n"; return 2; }
+        for (const auto& file : mo2Input->looseAssetWinners) {
+            if (std::filesystem::path(file.logicalPath).extension() == ".nif") modelAssets.looseModels.emplace(file.logicalPath, file.physicalPath);
+        }
+        modelAssets.archives = std::move(mo2Input->archivePaths);
         mo2Input->looseAssetWinners.clear(); mo2Input->looseAssetWinners.shrink_to_fit(); mo2Input->enabledMods.clear(); mo2Input->enabledMods.shrink_to_fit();
         options.data = mo2Input->gameData;
         update(20, "Resolving active plugin load order");
@@ -583,17 +588,22 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     // provenance. This keeps selection/indexing scalable instead of first
     // materializing every neighbouring cell's meshes in a single extraction.
     std::vector<navmesh::core::Cell> sceneCells{ *cell };
-    if (resolved && cell->exteriorCoordinates && options.neighboringCellRadius > 0) for (const auto& candidate : resolved->cells) {
-        if (!candidate.exteriorCoordinates || candidate.id == cell->id) continue;
-        const auto dx = std::abs((*candidate.exteriorCoordinates)[0] - (*cell->exteriorCoordinates)[0]);
-        const auto dy = std::abs((*candidate.exteriorCoordinates)[1] - (*cell->exteriorCoordinates)[1]);
-        if (dx <= options.neighboringCellRadius && dy <= options.neighboringCellRadius) sceneCells.push_back(candidate);
+    if (resolved && cell->exteriorCoordinates && options.neighboringCellRadius > 0) {
+        const auto* selectedRecord = resolved->FindWinning(cell->id);
+        for (const auto& candidate : resolved->cells) {
+            if (!candidate.exteriorCoordinates || candidate.id == cell->id) continue;
+            const auto dx = std::abs((*candidate.exteriorCoordinates)[0] - (*cell->exteriorCoordinates)[0]);
+            const auto dy = std::abs((*candidate.exteriorCoordinates)[1] - (*cell->exteriorCoordinates)[1]);
+            if (dx > options.neighboringCellRadius || dy > options.neighboringCellRadius) continue;
+            const auto* candidateRecord = resolved->FindWinning(candidate.id);
+            if (selectedRecord && candidateRecord && candidateRecord->worldspaceFormId == selectedRecord->worldspaceFormId) sceneCells.push_back(candidate);
+        }
     }
     navmesh::skyrim::offline::GeometryExtraction geometry;
     for (std::size_t cellIndex{}; cellIndex < sceneCells.size(); ++cellIndex) {
         auto extracted = options.terrainOnly ? navmesh::skyrim::offline::GeometryExtraction{} : navmesh::skyrim::offline::ExtractGeometry(
             resolved ? options.data : options.plugin.parent_path(), sceneCells[cellIndex], options.output / ".bsa-cache",
-            [&](std::size_t completed, std::size_t total) { const auto percent = total == 0 ? 65 : 45 + static_cast<int>((20 * completed) / total); update(percent, std::format("Extracting scene cell {}/{}: reference {} of {}", cellIndex + 1, sceneCells.size(), completed, total)); }, wasCancelled);
+            [&](std::size_t completed, std::size_t total) { const auto percent = total == 0 ? 65 : 45 + static_cast<int>((20 * completed) / total); update(percent, std::format("Extracting scene cell {}/{}: reference {} of {}", cellIndex + 1, sceneCells.size(), completed, total)); }, wasCancelled, mo2Input ? &modelAssets : nullptr);
         if (resolved) {
             auto terrain = navmesh::skyrim::offline::ExtractTerrain(*resolved, sceneCells[cellIndex]);
             navmesh::skyrim::offline::GeometryExtraction terrainGeometry;
