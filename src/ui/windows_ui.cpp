@@ -58,7 +58,7 @@ namespace
         Field{"list", "List cells only", "Discover and export cells without extracting geometry or analysis."},
         Field{"diagnostics", "Write diagnostics HTML", "Create an HTML report with representative support examples."},
         Field{"terrain", "Terrain only", "Skip reference-model geometry and export decoded exterior terrain only."},
-        Field{"candidate", "Generate candidate NAVM", "Export a neutral candidate NAVM as JSON and OBJ, and show it in the scene GLB. No plugin is written."},
+        Field{"candidate", "Generate candidate NAVM", "Find placed door exits, connect close and partial walkable seams across levels, and keep regions reaching a door or cell border. Export neutral JSON/OBJ and show the result in the scene GLB; no plugin is written."},
     };
 
     struct WindowState {

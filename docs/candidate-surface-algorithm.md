@@ -31,11 +31,24 @@ that same world coordinate system. This run measures the whole parser/export
 path, not just generation, and excludes collision by request. Its fragmented
 regions are a review signal, not evidence of playable navigation.
 
+The local Riverwood CELL reproduction uses the five supported collision
+placements beneath the existing elevated walkway NAVM. Before the region and
+inset fixes, that walkway had no candidate polygons. In a 2026-09-28 run with
+one neighboring-cell ring and `human@1.0.0`, the candidate had 83 walkway
+polygons in one region; all 18 existing walkway NAVM polygon centroids lay on
+those candidate polygons at the same height. Candidate topology was valid.
+This checks coverage of one known structure, not navigation quality across all
+bridges or stairs. The local asset cache supplied 755 models; 222 referenced
+models remained unavailable in that run.
+
 Choose **polygon-based construction** for this milestone. Filter original
-terrain/collision triangles, weld edge coordinates with a fixed tolerance,
+terrain/collision triangles, canonicalize near-coincident placed-mesh seams
+within 0.25 world units, split partial edges at compatible T junctions,
 form regions through traversable shared edges, inset exposed edges by agent
-radius, then triangulate the clipped polygons. This retains vertical layers,
-exact source coordinates, and a direct source-triangle audit trail. Runtime
+radius, split partial edges created by that inset, then triangulate the clipped
+polygons. This retains vertical layers
+and a direct source-triangle audit trail; seam vertices may move by at most
+0.25 world units. Runtime
 and memory scaling are tied primarily to source triangle and edge counts.
 The measured source distribution above is evidence for that choice, not a
 performance result for the new generator. Re-run this comparison with real
@@ -53,19 +66,40 @@ regions, contours, polygon neighbors, and topology findings.
 `geometry_sources[]`. It does not assign a Bethesda FormID or serialize NVNM.
 The candidate is reproducible for identical scene geometry, source order, and
 profile. Triangle order from the resolved load order is part of the input.
+Placed, enabled DOOR references in the selected worldspace are identified as
+exits before filtering regions. A door anchors only a nearby polygon on the
+same vertical level. A region also survives when it reaches any exterior cell
+grid border, including a triangle that crosses the border without an edge
+lying exactly on it. Substantial collision regions also survive when their
+walkable area is at least the larger of 16,384 square world units or 64 squared
+agent radii. They carry a warning because a route to a door or border has not
+been established. Smaller isolated regions are removed and counted as
+`rejected_unreachable` or `rejected_small_region`. If there is no identified
+exit or reachable border, the largest connected region is retained for review
+and a warning is emitted. JSON records exits, their matched region, and each
+region's border/exit evidence. These are candidate reachability checks, not
+Bethesda door portal links.
 
 Only LAND and supported Havok collision are eligible by default. Render
 fallback remains diagnostic evidence and is never silently promoted to
 walkable ground or an authoritative obstruction. Unsupported collision,
 missing meshes, and incomplete LAND can leave real walkable areas absent.
 Clearance uses vertical triangle intersections at triangle vertices, edge
-midpoints, and centroid. Steep collision triangles crossing a floor
-triangle's interior are obstructions. These discrete tests cannot prove
+midpoints, and centroid. A steep wall from another collision placement that
+traverses a floor triangle from side to side is an obstruction. Rails and
+posts in the same placed mesh do not discard the entire floor triangle;
+local obstacle trimming is still incomplete. These discrete tests cannot prove
 continuous capsule clearance or door semantics. The agent-radius inset
 addresses exposed region edges, but complex corners and very thin triangles
 may be removed. Exterior selection without neighbors uses triangle centroids
 within the selected cell, and the border policy preserves its outer edges.
 With `--neighboring-cell-radius`, the generator includes extracted neighbor
 cells and welds matching border edges into the same region when their height
-difference fits the step profile. It does not invent a link across unavailable
-neighbors or geometrically clip triangles that cross the selection border.
+difference fits the step profile. Candidate surfaces are clipped to the outer
+bounds of the extracted exterior area, including triangles that merely cross
+those bounds; a missing neighbor never becomes an invented link.
+Independent surfaces on different levels remain separate unless a traversable
+step or ramp provides a shared edge; matching XY coordinates alone do not join
+stacked floors. Supported collision missing from a walkway can still leave it
+uncovered, and unsupported crossings require inspection rather than a guessed
+bridge.

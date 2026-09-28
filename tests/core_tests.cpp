@@ -449,17 +449,19 @@ namespace
         Require(obstructed.statistics.rejectedClearance == 2 && obstructed.mesh.polygons.size() == 2);
         Require(obstructed.polygonSourceTriangles[0] >= 4 && obstructed.topology.valid);
         Scene walled = scene;
-        walled.mesh.vertices.insert(walled.mesh.vertices.end(), { {64,-20,0},{64,150,0},{64,150,200} });
-        walled.mesh.triangles.push_back({{10,11,12}});
-        walled.triangleProvenance.push_back({1,1,{}});
+        walled.mesh.vertices.insert(walled.mesh.vertices.end(), { {64,-20,0},{64,150,0},{64,150,200},{64,-20,200} });
+        walled.mesh.triangles.insert(walled.mesh.triangles.end(), { {{10,11,12}},{{10,12,13}} });
+        walled.triangleProvenance.insert(walled.triangleProvenance.end(), { {1,1,{}},{1,2,{}} });
         const auto blocked = GenerateCandidate(walled,profile);
         Require(blocked.statistics.rejectedObstruction == 2 && blocked.mesh.polygons.empty());
         Scene bridge = scene;
         bridge.mesh.vertices.insert(bridge.mesh.vertices.end(), { {0,0,200},{128,0,200},{128,128,200},{0,128,200} });
         bridge.mesh.triangles.insert(bridge.mesh.triangles.end(), { {{10,11,12}},{{10,12,13}} });
         bridge.triangleProvenance.insert(bridge.triangleProvenance.end(), { {1,1,{}},{1,2,{}} });
-        const auto stacked = GenerateCandidate(bridge,profile);
+        const auto stacked = GenerateCandidate(bridge,profile,std::nullopt,
+            { { .referenceId = 0x401, .position = {64,64,0} }, { .referenceId = 0x402, .position = {64,64,200} } });
         Require(stacked.topology.valid && stacked.mesh.polygons.size() == 4 && stacked.regions.size() == 2);
+        Require(stacked.exits[0].region && stacked.exits[1].region && stacked.exits[0].region != stacked.exits[1].region);
         profile.agentRadius = 16;
         const auto inset = GenerateCandidate(scene,profile);
         Require(inset.topology.valid && !inset.mesh.polygons.empty());
@@ -475,8 +477,92 @@ namespace
         const auto oneCell = GenerateCandidate(stepScene,profile,AABB{ .min = {0,0,-100}, .max = {128,128,300} });
         Require(oneCell.topology.valid && oneCell.mesh.polygons.size() == 1);
         profile.stepHeight = 0;
-        const auto separated = GenerateCandidate(stepScene,profile);
+        const auto separated = GenerateCandidate(stepScene,profile,std::nullopt,
+            { { .referenceId = 0x403, .position = {80,40,0} }, { .referenceId = 0x404, .position = {170,40,10} } });
         Require(separated.topology.valid && separated.regions.size() == 2);
+        Scene junction;
+        junction.geometrySources.push_back(scene.geometrySources[0]);
+        junction.mesh.vertices = { {0,0,0},{128,0,0},{128,128,0},{256,0,0},{128,64,0} };
+        junction.mesh.triangles = { {{0,1,2}},{{1,3,4}},{{4,3,2}} };
+        junction.triangleProvenance = { {0,0,{}},{0,1,{}},{0,2,{}} };
+        const auto joined = GenerateCandidate(junction,profile,std::nullopt,
+            { { .referenceId = 0x405, .position = {64,32,0} } });
+        Require(joined.topology.valid && joined.regions.size() == 1 && joined.mesh.polygons.size() == 4);
+        Require(joined.regions[0].exitFormIds == std::vector<std::uint32_t>{0x405});
+        Scene seamed = junction;
+        seamed.mesh.vertices = { {0,0,0},{128,0,0},{128,128,0},
+            {128.08F,0,0},{256,0,0},{128.08F,64,0},{128.08F,128,0} };
+        seamed.mesh.triangles = { {{0,1,2}},{{3,4,5}},{{5,4,6}} };
+        const auto joinedSeam = GenerateCandidate(seamed,profile,std::nullopt,
+            { { .referenceId = 0x405, .position = {64,32,0} } });
+        Require(joinedSeam.topology.valid && joinedSeam.regions.size() == 1 && joinedSeam.mesh.polygons.size() == 4);
+        Scene ramp;
+        ramp.geometrySources.push_back(scene.geometrySources[1]);
+        ramp.mesh.vertices = { {0,0,0},{128,0,0},{128,128,0},{0,128,0},
+            {256,0,100},{256,128,100},{384,0,100},{384,128,100} };
+        ramp.mesh.triangles = { {{0,1,2}},{{0,2,3}},{{1,4,5}},{{1,5,2}},{{4,6,7}},{{4,7,5}} };
+        for (std::size_t i{}; i < ramp.mesh.triangles.size(); ++i) ramp.triangleProvenance.push_back({0,i,{}});
+        profile.stepHeight = 18; profile.agentHeight = 128; profile.clearance = 128;
+        const auto layered = GenerateCandidate(ramp,profile,std::nullopt,
+            { { .referenceId = 0x406, .position = {320,64,100} } });
+        Require(layered.topology.valid && layered.regions.size() == 1 && layered.mesh.polygons.size() == 6);
+        Require(layered.exits[0].region == 0);
+        Scene island = junction;
+        island.mesh.vertices.insert(island.mesh.vertices.end(),{{600,0,0},{728,0,0},{600,128,0}});
+        island.mesh.triangles.push_back({{5,6,7}}); island.triangleProvenance.push_back({0,3,{}});
+        const auto reachable = GenerateCandidate(island,profile,std::nullopt,
+            { { .referenceId = 0x407, .position = {64,32,0} } });
+        Require(reachable.topology.valid && reachable.regions.size() == 1 && reachable.statistics.rejectedUnreachable == 1);
+        Scene crossing;
+        crossing.geometrySources.push_back(scene.geometrySources[0]);
+        crossing.mesh.vertices = { {100,0,0},{150,0,0},{100,100,0} };
+        crossing.mesh.triangles = { {{0,1,2}} };
+        crossing.triangleProvenance = { {0,0,{}} };
+        profile.agentRadius = 8;
+        const auto clippedBorder = GenerateCandidate(crossing,profile,AABB{ .min = {0,0,-100}, .max = {128,128,100} });
+        Require(clippedBorder.topology.valid && clippedBorder.regions.size() == 1 && clippedBorder.regions[0].reachesBorder);
+        Require(std::any_of(clippedBorder.mesh.vertices.begin(),clippedBorder.mesh.vertices.end(),
+            [](Vec3 vertex){ return std::abs(vertex.x-128.0F) < 0.01F; }));
+        Scene overlap;
+        overlap.geometrySources.push_back(scene.geometrySources[1]);
+        overlap.mesh.vertices = { {0,0,0},{128,0,0},{128,128,0},{0,128,0},
+            {120,0,0},{248,0,0},{248,128,0},{120,128,0} };
+        overlap.mesh.triangles = { {{0,1,2}},{{0,2,3}},{{4,5,6}},{{4,6,7}} };
+        for (std::size_t i{}; i < overlap.mesh.triangles.size(); ++i) overlap.triangleProvenance.push_back({0,i,{}});
+        profile.agentRadius = 16;
+        const auto bridged = GenerateCandidate(overlap,profile,std::nullopt,
+            { { .referenceId = 0x408, .position = {64,64,0} } });
+        Require(bridged.topology.valid && bridged.regions.size() == 1 && bridged.mesh.polygons.size() >= 6);
+        Scene gap = overlap;
+        for (std::size_t i = 4; i < 8; ++i) gap.mesh.vertices[i].x += 20;
+        const auto unsupportedGap = GenerateCandidate(gap,profile,std::nullopt,
+            { { .referenceId = 0x408, .position = {64,64,0} } });
+        Require(unsupportedGap.topology.valid && unsupportedGap.regions.size() == 1 && unsupportedGap.statistics.rejectedUnreachable >= 2);
+        Scene raised;
+        raised.geometrySources = { scene.geometrySources[0], scene.geometrySources[1] };
+        raised.mesh.vertices = { {0,0,0},{128,0,0},{128,128,0},{0,128,0},
+            {400,400,160},{1000,400,160},{1000,600,160},{400,600,160},
+            {1200,400,160},{1264,400,160},{1264,464,160},{1200,464,160} };
+        raised.mesh.triangles = { {{0,1,2}},{{0,2,3}},{{4,5,6}},{{4,6,7}},{{8,9,10}},{{8,10,11}} };
+        raised.triangleProvenance = { {0,0,{}},{0,1,{}},{1,0,{}},{1,1,{}},{1,2,{}},{1,3,{}} };
+        const auto raisedCandidate = GenerateCandidate(raised,profile,
+            AABB{ .min = {0,0,-100}, .max = {2048,2048,300} });
+        Require(raisedCandidate.topology.valid && raisedCandidate.regions.size() == 2);
+        Require(std::any_of(raisedCandidate.mesh.vertices.begin(),raisedCandidate.mesh.vertices.end(),
+            [](Vec3 vertex){ return std::abs(vertex.z-160.0F) < 0.01F && vertex.x > 400 && vertex.x < 1000; }));
+        Require(std::none_of(raisedCandidate.mesh.vertices.begin(),raisedCandidate.mesh.vertices.end(),
+            [](Vec3 vertex){ return vertex.x > 1200 && vertex.x < 1264; }));
+        Scene overlappingLevels;
+        overlappingLevels.geometrySources.push_back(scene.geometrySources[1]);
+        overlappingLevels.mesh.vertices = { {0,0,0},{128,0,0},{0,128,0},
+            {0,0,10},{128,0,10},{0,128,10} };
+        overlappingLevels.mesh.triangles = { {{0,1,2}},{{3,4,5}} };
+        overlappingLevels.triangleProvenance = { {0,0,{}},{0,1,{}} };
+        profile.agentRadius = 0;
+        const auto independentLevels = GenerateCandidate(overlappingLevels,profile,std::nullopt,
+            { { .referenceId = 0x410, .position = {32,32,0} },
+              { .referenceId = 0x411, .position = {32,32,10} } });
+        Require(independentLevels.topology.valid && independentLevels.regions.size() == 2);
         navmesh::core::Cell cell{ .id = 0x400, .editorId = "CandidateFixture" };
         const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
         navmesh::core::SceneExportOptions visual{ .layers = { SceneLayer::CandidateNavmesh }, .candidateNavmesh = &flat.mesh };

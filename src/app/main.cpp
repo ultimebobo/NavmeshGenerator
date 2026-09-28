@@ -21,6 +21,7 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace
@@ -664,11 +665,47 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     if (options.generateCandidate) {
         const auto profile = navmesh::core::FindNavigationProfile(options.navigationProfile);
         if (!profile) { std::cerr << "Unknown navigation profile '" << options.navigationProfile << "'. Available: human@1.0.0, small@1.0.0.\n"; return 1; }
-        // With neighboring exterior cells selected, let matching edges on
-        // both sides of a CELL border participate in the same region.
+        std::vector<navmesh::core::CandidateExit> exits;
+        std::optional<navmesh::core::AABB> candidateBounds;
+        for (const auto& sceneCell : sceneCells) {
+            for (const auto& reference : sceneCell.references)
+                if (reference.recordType == "REFR" && reference.baseRecordType == "DOOR"
+                    && !reference.deleted && !reference.initiallyDisabled)
+                    exits.push_back({ .referenceId = reference.id, .position = reference.position });
+            if (sceneCell.exteriorCoordinates) {
+                const auto [x,y] = *sceneCell.exteriorCoordinates;
+                if (!candidateBounds) candidateBounds = navmesh::core::AABB{
+                    .min = { x*4096.0F,y*4096.0F,std::numeric_limits<float>::lowest() },
+                    .max = { (x+1)*4096.0F,(y+1)*4096.0F,std::numeric_limits<float>::max() } };
+                else {
+                    candidateBounds->min.x = std::min(candidateBounds->min.x,x*4096.0F);
+                    candidateBounds->min.y = std::min(candidateBounds->min.y,y*4096.0F);
+                    candidateBounds->max.x = std::max(candidateBounds->max.x,(x+1)*4096.0F);
+                    candidateBounds->max.y = std::max(candidateBounds->max.y,(y+1)*4096.0F);
+                }
+            }
+        }
+        if (resolved && candidateBounds) {
+            const auto* selectedRecord = resolved->FindWinning(cell->id);
+            std::unordered_map<std::uint32_t,std::optional<std::uint32_t>> worldspaceByCell;
+            for (const auto& record : resolved->records) if (record.type == "CELL")
+                worldspaceByCell.emplace(record.formId,record.worldspaceFormId);
+            for (const auto& worldCell : resolved->cells) {
+                const auto owner = worldspaceByCell.find(worldCell.id);
+                if (!selectedRecord || owner == worldspaceByCell.end() || !selectedRecord->worldspaceFormId
+                    || owner->second != selectedRecord->worldspaceFormId) continue;
+                for (const auto& reference : worldCell.references)
+                    if (reference.recordType == "REFR" && reference.baseRecordType == "DOOR"
+                        && !reference.deleted && !reference.initiallyDisabled
+                        && reference.position.x >= candidateBounds->min.x && reference.position.x <= candidateBounds->max.x
+                        && reference.position.y >= candidateBounds->min.y && reference.position.y <= candidateBounds->max.y)
+                        exits.push_back({ .referenceId = reference.id, .position = reference.position });
+            }
+        }
+        std::sort(exits.begin(),exits.end(),[](const auto& a, const auto& b){return a.referenceId < b.referenceId;});
+        exits.erase(std::unique(exits.begin(),exits.end(),[](const auto& a, const auto& b){return a.referenceId == b.referenceId;}),exits.end());
         try {
-            candidate = navmesh::core::GenerateCandidate(geometry.scene, *profile,
-                options.neighboringCellRadius > 0 ? std::nullopt : analysisConfig.cellBounds);
+            candidate = navmesh::core::GenerateCandidate(geometry.scene, *profile,candidateBounds,std::move(exits));
         } catch (const std::exception& error) {
             std::cerr << "Candidate generation failed: " << error.what() << "\n";
             return 2;
