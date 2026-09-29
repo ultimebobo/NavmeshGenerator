@@ -8,6 +8,9 @@ this reference.
 
 - `navmesh::core`: neutral geometry, world and navmesh data, scene provenance,
   candidate generation, and exports.
+- `navmesh::core::CandidateGenerator`: interchangeable scene-to-candidate
+  interface. `RecastCandidateGenerator` is the application implementation and
+  links against the Recast Navigation submodule under `lib/recastnavigation`.
 - `navmesh::skyrim::offline`: plugin/load-order reading, Mod Organizer 2 input,
   and terrain/model extraction.
 - `navmesh::analysis`: spatial queries and navmesh discrepancy analysis.

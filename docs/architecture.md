@@ -43,7 +43,22 @@ The analysis layer is intentionally small but useful.
 
 The goal is to make a real downstream generation pass possible without hard-coding Skyrim-specific assumptions into the algorithmic layer.
 
-## 5. Future NAVM serialization
+## 5. Candidate generation
+
+`core::CandidateGenerator` is the replaceable boundary between extracted scene
+geometry and a neutral candidate navmesh. The shared CLI/Windows run path uses
+`RecastCandidateGenerator` from the Recast Navigation submodule. It accepts only
+terrain and supported collision triangles, converts Skyrim Z-up world positions
+to Recast Y-up coordinates, rasterizes and filters walkable spans, erodes them by
+agent radius, then builds regions, contours, and a polygon mesh. Recast polygons
+are triangulated into the project's neutral model for JSON, OBJ, and the
+`Candidate NAVM` GLB layer. Generated geometry remains an inspection candidate;
+it is not encoded as a Bethesda NAVM record.
+
+The previous polygon-based `GenerateCandidate` function remains for historical
+fixture comparisons. Application runs use the Recast implementation.
+
+## 6. Future NAVM serialization
 
 The next milestone is not runtime integration but a future serialization layer that can convert neutral navmesh data back into a Bethesda-compatible record layout when the generation step is ready.
 
@@ -56,7 +71,8 @@ The critical architecture boundary is:
 Skyrim plugin data
   -> offline extraction
   -> neutral model
-  -> analysis/repair planning
+  -> analysis and replaceable candidate generator (currently Recast)
+  -> repair planning
   -> future NAVM serialization
 
 This keeps the codebase testable, portable, and independent from a live Skyrim process.

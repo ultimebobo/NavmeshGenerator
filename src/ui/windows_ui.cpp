@@ -58,7 +58,7 @@ namespace
         Field{"list", "List cells only", "Discover and export cells without extracting geometry or analysis."},
         Field{"diagnostics", "Write diagnostics HTML", "Create an HTML report with representative support examples."},
         Field{"terrain", "Terrain only", "Skip reference-model geometry and export decoded exterior terrain only."},
-        Field{"candidate", "Generate candidate NAVM", "Find placed door exits, connect close and partial walkable seams across levels, and keep regions reaching a door or cell border. Export neutral JSON/OBJ and show the result in the scene GLB; no plugin is written."},
+        Field{"candidate", "Generate candidate NAVM", "Use Recast Navigation to rasterize terrain and supported collision, then export neutral JSON/OBJ and show generated navmeshes in the scene GLB. No plugin is written."},
     };
 
     struct WindowState {
@@ -254,7 +254,7 @@ namespace
             auto profileBox = CreateWindowA("COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 460, 715, 160, 150, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(NavigationProfileBox)), nullptr, nullptr);
             Font(profileBox, state->body); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("human@1.0.0")); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("small@1.0.0"));
             state->profileHelp = CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 632, 718, 22, 22, window, nullptr, nullptr, nullptr);
-            AddTooltip(*state, state->profileHelp, "Versioned agent size, slope, step, clearance, border, and simplification settings for candidate NAVM generation.");
+            AddTooltip(*state, state->profileHelp, "Versioned agent size, slope, step, clearance, and region settings for Recast candidate generation.");
             state->progress = CreateWindowExA(0, PROGRESS_CLASSA, nullptr, WS_CHILD | WS_VISIBLE, 30, 772, 770, 20, window, nullptr, nullptr, nullptr); Theme(state->progress); SendMessageA(state->progress, PBM_SETRANGE32, 0, 100);
             state->percent = Label(*state, "0%", 815, 772, 90, state->label);
             state->status = CreateWindowA("STATIC", "Ready to analyze", WS_CHILD | WS_VISIBLE, 30, 801, 860, 22, window, nullptr, nullptr, nullptr); Font(state->status, state->body);

@@ -7,6 +7,7 @@
 #include "skyrim/extraction/terrain_extractor.h"
 #include "core/scene/scene_exporter.h"
 #include "core/navmesh/candidate.h"
+#include "core/navmesh/generator.h"
 #include "validation/validation.h"
 
 #include <filesystem>
@@ -705,7 +706,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
         std::sort(exits.begin(),exits.end(),[](const auto& a, const auto& b){return a.referenceId < b.referenceId;});
         exits.erase(std::unique(exits.begin(),exits.end(),[](const auto& a, const auto& b){return a.referenceId == b.referenceId;}),exits.end());
         try {
-            candidate = navmesh::core::GenerateCandidate(geometry.scene, *profile,candidateBounds,std::move(exits));
+            candidate = navmesh::core::RecastCandidateGenerator{}.Generate(geometry.scene, *profile,candidateBounds,std::move(exits));
         } catch (const std::exception& error) {
             std::cerr << "Candidate generation failed: " << error.what() << "\n";
             return 2;
@@ -717,18 +718,14 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
             || !navmesh::reproducibility::WriteSidecar(objPath, metadata)) {
             std::cerr << "Failed to write neutral candidate exports.\n"; return 2;
         }
-        std::cout << std::format("Candidate NAVM: {} polygons, {} regions, topology {}.\n",
-            candidate->mesh.polygons.size(), candidate->regions.size(), candidate->topology.valid ? "valid" : "invalid");
     }
     std::size_t existingSelectedPolygons{};
     for (const auto& navmesh : cell->navMeshes) existingSelectedPolygons += navmesh.polygons.size();
-    std::size_t existingScenePolygons{};
-    for (const auto& navmesh : sceneNavmeshes) existingScenePolygons += navmesh.polygons.size();
     const auto generatedPolygons = candidate ? candidate->mesh.polygons.size() : 0U;
     const auto navmeshCounts = std::format(
-        "Existing NAVM polygons: {} in selected cell; {} across extracted scene.\n"
-        "Generated candidate polygons: {}.\n",
-        existingSelectedPolygons, existingScenePolygons, generatedPolygons);
+        "Number of original navmesh polygons (selected cell): {}\n"
+        "Number of generated navmesh polygons: {}\n",
+        existingSelectedPolygons, generatedPolygons);
     std::ofstream countLog(options.output / "navmesh-counts.txt", std::ios::trunc);
     countLog << navmeshCounts;
     countLog.close();
@@ -816,7 +813,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
 
     std::cout << "Wrote report to " << reportPath << "\n";
     std::cout << std::format("References: {}\nReferences with models: {}\nModels loaded: {}\nModels missing: {}\nGeometry vertices: {}\nGeometry triangles: {}\nExported geometry: {}\n", cell->references.size(), geometry.referencesWithModels, geometry.modelsLoaded, geometry.modelsMissing, geometry.mesh.vertices.size(), geometry.mesh.triangles.size(), geometryPath.string());
-    update(100, std::format("Existing polygons: {} selected / {} scene; generated: {}",
-        existingSelectedPolygons, existingScenePolygons, generatedPolygons));
+    update(100, std::format("Original navmesh polygons: {}; generated navmesh polygons: {}",
+        existingSelectedPolygons, generatedPolygons));
     return 0;
 }

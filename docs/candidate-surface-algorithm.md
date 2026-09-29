@@ -1,5 +1,32 @@
 # Candidate surface algorithm spike (milestone 8)
 
+## Current generator
+
+The application now uses Recast Navigation for candidate generation. The
+polygon-based measurements and decisions below document the previous spike and
+remain useful as comparison evidence; they do not describe the active run path.
+The Recast adapter consumes supported terrain and collision, converts Skyrim
+world Z-up to Recast Y-up, and runs Recast's voxel rasterization, walkability
+filters, radius erosion, monotone region partition, contour construction, and
+polygon mesh construction. It triangulates Recast polygons for the neutral
+candidate JSON/OBJ and combined GLB. The voxel cell size is at least 16 Skyrim
+units and increases for wide extracted areas so neither horizontal grid axis
+exceeds roughly 1024 columns. Vertical cell height is 4 world units.
+
+Source-triangle provenance is recovered by the closest source height at each
+generated triangle's XY centroid. This is an approximate audit join after
+voxelization. Recast's smoothing and erosion can remove small supported areas;
+output is still an inspection candidate and is not Bethesda NAVM serialization.
+The profile's agent dimensions, clearance, slope, step height, radius, and
+minimum region area feed the Recast build. Weld tolerance, contour tolerance,
+and cell-border policy remain in the versioned profile for historical output
+compatibility but do not control this voxel-based build.
+
+A Windows UI terrain-only run on a local exterior CELL on 2026-09-29 produced
+516 Recast candidate triangles in two connected regions. Its candidate topology
+validated and `scene.glb` contained a `Candidate NAVM` object with 516 triangles.
+The named CELL is reproduction data rather than a special-case rule.
+
 ## Evidence and decision
 
 The local exterior benchmark is the existing `output/default` export

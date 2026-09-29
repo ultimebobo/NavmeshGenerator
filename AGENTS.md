@@ -19,7 +19,7 @@
   point that calls `app::Run`, including the Windows UI and CLI. Expose the
   setting in the UI when operators need it, persist and validate its value,
   and verify that the UI passes it to the shared run path. Build the desktop
-  executable and test the actual UI workflow, not only a CLI invocation.
+  executable but do not test the actual UI workflow, only CLI invocation.
 - Treat named cells and mods supplied as bug examples as reproduction data.
   Keep behavior, UI help, and synthetic fixture names location independent
   unless a location-specific rule is explicitly required.

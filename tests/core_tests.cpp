@@ -8,6 +8,7 @@
 #include "skyrim/extraction/terrain_extractor.h"
 #include "core/scene/scene_exporter.h"
 #include "core/navmesh/candidate.h"
+#include "core/navmesh/generator.h"
 #include "validation/validation.h"
 
 #include <array>
@@ -640,12 +641,37 @@ namespace
         std::ifstream visualGlb(visualPath,std::ios::binary); std::string visualBytes(std::istreambuf_iterator<char>(visualGlb),{});
         Require(visualBytes.contains("Candidate NAVM"));
     }
+    void TestRecastSceneGeneration()
+    {
+        using namespace navmesh::core;
+        Scene scene;
+        scene.geometrySources.push_back({ .sourceType = GeometrySourceType::Terrain, .confidence = 1.0F,
+            .reference = { "Fixture.esm", 0x100, "LAND" } });
+        scene.mesh.vertices = {{0,0,0},{512,0,0},{512,512,0},{0,512,0}};
+        scene.mesh.triangles = {{{0,1,2}},{{0,2,3}}};
+        scene.triangleProvenance = {{0,0,{}},{0,1,{}}};
+        const auto profile = *FindNavigationProfile("human@1.0.0");
+        const CandidateGenerator& generator = RecastCandidateGenerator{};
+        const auto generated = generator.Generate(scene,profile,std::nullopt,{});
+        Require(!generated.mesh.polygons.empty());
+        Require(generated.topology.valid);
+        Require(generated.statistics.eligibleTriangles == 2);
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-recast-scene-test";
+        std::filesystem::create_directories(root);
+        Require(WriteCandidateJson(root / "candidate.json",generated,scene,"{}"));
+        SceneExportOptions options{ .layers = {SceneLayer::CandidateNavmesh}, .candidateNavmesh = &generated.mesh };
+        Cell cell{ .id = 0x100, .editorId = "Fixture" };
+        const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
+        const auto exported = WriteCombinedGlb(root / "scene.glb",scene,{}, {},metadata,options);
+        Require(exported.triangles == generated.mesh.polygons.size());
+    }
 }
 
 int main(int argc, char** argv)
 {
     if (argc > 1 && std::string_view(argv[1]) == "--scene-only") { TestCombinedColorLayeredGlb(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--candidate-only") { TestCandidateGeneration(); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--recast-only") { TestRecastSceneGeneration(); return 0; }
     TestResolvedLoadOrder();
     TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();
@@ -658,6 +684,7 @@ int main(int argc, char** argv)
     TestSceneTransforms();
     TestCombinedColorLayeredGlb();
     TestCandidateGeneration();
+    TestRecastSceneGeneration();
     navmesh::core::Mesh mesh{ .vertices = { { -1.0F, 2.0F, 3.0F }, { 4.0F, -5.0F, 6.0F } } };
     const auto bounds = mesh.Bounds();
     assert(bounds.IsValid());

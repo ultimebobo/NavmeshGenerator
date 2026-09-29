@@ -7,3 +7,6 @@
 [submodule "lib/nifly"]
 	path = lib/nifly
 	url = https://github.com/ousnius/nifly.git
+[submodule "lib/recastnavigation"]
+	path = lib/recastnavigation
+	url = https://github.com/recastnavigation/recastnavigation.git
