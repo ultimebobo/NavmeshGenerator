@@ -11,12 +11,27 @@ filters, radius erosion, monotone region partition, contour construction, and
 polygon mesh construction. It triangulates Recast polygons for the neutral
 candidate JSON/OBJ and combined GLB. The horizontal voxel cell size is at least
 4 Skyrim units and increases for wide extracted areas so neither grid axis
-exceeds roughly 2048 columns. Vertical cell height is 2 world units. This
-resolves 12-unit stair treads in a single cell. A three-cell-wide footprint
+exceeds roughly 2048 columns. Vertical cell height is 2 world units. At the
+minimum cell size, a 12-unit stair tread spans three horizontal cells. A three-cell-wide footprint
 uses about 6-unit horizontal voxels, although collision extending outside
 those cells can make the extracted bounds and voxels larger. Larger extracted
 areas may still lose narrow stairs. The fixed human settings allow a 28-unit
 climb. Historical runs used an 18-unit climb for comparison. A local Riverwood03 `WalkwayStairs15` collision sample has tread rises near 25 units.
+Contour edges are no longer subdivided by a maximum edge length (`maxEdgeLen = 0`),
+and contour simplification allows 1.3 horizontal voxels of deviation. Monotone
+regions smaller than four times the profile's minimum region area are eligible
+for merging, measured in horizontal voxel cells. The 4-unit minimum cell size
+is retained to resolve narrow treads; raising it would also reduce precision and
+can remove narrow walkable surfaces during radius erosion. Long contour edges
+can produce thin triangles on irregular boundaries, so scene exports still need
+inspection.
+
+A synthetic 16-step straight staircase with 12-unit
+treads and 24-unit rises produces one connected region and two output triangles
+from 32 source triangles. With a 12-voxel maximum contour edge, it produced ten
+output triangles. A flat square of two source triangles produces two output
+triangles instead of 62. Both fixtures pass candidate topology validation.
+
 With the old climb, Recast split the isolated stair collision into five
 regions. The 28-unit setting joined it into one region, including when the test
 uses the wider extracted scene bounds. The slope and radius settings were

@@ -129,10 +129,11 @@ namespace navmesh::core
         config.walkableHeight = std::max(3,static_cast<int>(std::ceil(std::max(profile.agentHeight,profile.clearance)/ch)));
         config.walkableClimb = static_cast<int>(std::floor(profile.stepHeight/ch));
         config.walkableRadius = static_cast<int>(std::ceil(profile.agentRadius/cs));
-        config.maxEdgeLen = 12;
+        config.maxEdgeLen = 0;
         config.maxSimplificationError = 1.3F;
         config.minRegionArea = static_cast<int>(std::ceil(profile.minimumRegionArea/(cs*cs)));
-        config.mergeRegionArea = 0;
+        // Scale the merge threshold with the profile's physical minimum area.
+        config.mergeRegionArea = static_cast<int>(std::ceil(4.0F*profile.minimumRegionArea/(cs*cs)));
         config.maxVertsPerPoly = 6;
         config.bmin[0] = bounds.min.x-cs*2; config.bmin[1] = bounds.min.z-ch*2; config.bmin[2] = bounds.min.y-cs*2;
         config.bmax[0] = bounds.max.x+cs*2; config.bmax[1] = bounds.max.z+profile.agentHeight+ch*2; config.bmax[2] = bounds.max.y+cs*2;

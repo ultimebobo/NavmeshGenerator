@@ -654,7 +654,7 @@ namespace
         Require(profile.name == "human" && profile.stepHeight == 28.0F);
         const CandidateGenerator& generator = RecastCandidateGenerator{};
         const auto generated = generator.Generate(scene,profile,std::nullopt,{});
-        Require(!generated.mesh.polygons.empty());
+        Require(generated.mesh.polygons.size() == 2);
         Require(generated.topology.valid);
         Require(generated.statistics.eligibleTriangles == 2);
         const auto root = std::filesystem::temp_directory_path() / "navmesh-recast-scene-test";
@@ -668,6 +668,26 @@ namespace
         const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
         const auto exported = WriteCombinedGlb(root / "scene.glb",scene,{}, {},metadata,options);
         Require(exported.triangles == generated.mesh.polygons.size());
+
+        Scene stairs;
+        stairs.geometrySources = scene.geometrySources;
+        for (std::uint32_t step = 0; step < 16; ++step) {
+            const auto base = static_cast<std::uint32_t>(stairs.mesh.vertices.size());
+            const float x = static_cast<float>(step) * 12.0F;
+            const float z = static_cast<float>(step) * 24.0F;
+            stairs.mesh.vertices.insert(stairs.mesh.vertices.end(),
+                {{x,0,z},{x+12,0,z},{x+12,96,z},{x,96,z}});
+            stairs.mesh.triangles.push_back({{base,base+1,base+2}});
+            stairs.mesh.triangles.push_back({{base,base+2,base+3}});
+            stairs.triangleProvenance.push_back({0,stairs.triangleProvenance.size(),{}});
+            stairs.triangleProvenance.push_back({0,stairs.triangleProvenance.size(),{}});
+        }
+        const auto stepped = generator.Generate(stairs,profile,std::nullopt,{});
+        Require(stepped.topology.valid && stepped.regions.size() == 1);
+        Require(stepped.mesh.polygons.size() == 2);
+        const auto [low,high] = std::minmax_element(stepped.mesh.vertices.begin(),stepped.mesh.vertices.end(),
+            [](Vec3 a, Vec3 b){ return a.z < b.z; });
+        Require(high->z-low->z > 200.0F);
     }
     bool TestLocalStairCollision(const std::filesystem::path& geometryObj, const std::string& groupName)
     {
