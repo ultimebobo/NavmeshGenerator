@@ -720,6 +720,20 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
         std::cout << std::format("Candidate NAVM: {} polygons, {} regions, topology {}.\n",
             candidate->mesh.polygons.size(), candidate->regions.size(), candidate->topology.valid ? "valid" : "invalid");
     }
+    std::size_t existingSelectedPolygons{};
+    for (const auto& navmesh : cell->navMeshes) existingSelectedPolygons += navmesh.polygons.size();
+    std::size_t existingScenePolygons{};
+    for (const auto& navmesh : sceneNavmeshes) existingScenePolygons += navmesh.polygons.size();
+    const auto generatedPolygons = candidate ? candidate->mesh.polygons.size() : 0U;
+    const auto navmeshCounts = std::format(
+        "Existing NAVM polygons: {} in selected cell; {} across extracted scene.\n"
+        "Generated candidate polygons: {}.\n",
+        existingSelectedPolygons, existingScenePolygons, generatedPolygons);
+    std::ofstream countLog(options.output / "navmesh-counts.txt", std::ios::trunc);
+    countLog << navmeshCounts;
+    countLog.close();
+    if (!countLog) { std::cerr << "Failed to write navmesh-counts.txt.\n"; return 2; }
+    std::cout << navmeshCounts;
     navmesh::core::SceneExportOptions sceneOptions{ .layers = ParseSceneLayers(options.geometryLayers), .detailedProvenance = options.outputDetail != "summary" };
     if (candidate) {
         sceneOptions.layers.push_back(navmesh::core::SceneLayer::CandidateNavmesh);
@@ -802,6 +816,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
 
     std::cout << "Wrote report to " << reportPath << "\n";
     std::cout << std::format("References: {}\nReferences with models: {}\nModels loaded: {}\nModels missing: {}\nGeometry vertices: {}\nGeometry triangles: {}\nExported geometry: {}\n", cell->references.size(), geometry.referencesWithModels, geometry.modelsLoaded, geometry.modelsMissing, geometry.mesh.vertices.size(), geometry.mesh.triangles.size(), geometryPath.string());
-    update(100, "Completed");
+    update(100, std::format("Existing polygons: {} selected / {} scene; generated: {}",
+        existingSelectedPolygons, existingScenePolygons, generatedPolygons));
     return 0;
 }

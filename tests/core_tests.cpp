@@ -563,6 +563,74 @@ namespace
             { { .referenceId = 0x410, .position = {32,32,0} },
               { .referenceId = 0x411, .position = {32,32,10} } });
         Require(independentLevels.topology.valid && independentLevels.regions.size() == 2);
+        Scene steppedFan;
+        steppedFan.geometrySources.push_back(scene.geometrySources[0]);
+        steppedFan.mesh.vertices = { {0,0,0}, {64,0,0}, {0,64,0}, {0,64,10}, {-64,0,0},
+            {-64,0,10}, {0,-64,0}, {0,-64,10}, {64,0,10} };
+        steppedFan.mesh.triangles = { {{0,1,2}}, {{0,3,4}}, {{0,5,6}}, {{0,7,8}} };
+        for (std::size_t i{}; i < steppedFan.mesh.triangles.size(); ++i)
+            steppedFan.triangleProvenance.push_back({0,i,{}});
+        profile.stepHeight = 18;
+        const auto stepRing = GenerateCandidate(steppedFan,profile,std::nullopt,
+            { { .referenceId = 0x412, .position = {0,0,0} } });
+        Require(stepRing.topology.valid && stepRing.mesh.polygons.size() == 4 && stepRing.regions.size() == 1);
+        const auto makeTerrainGrid = [&](bool peak, bool opening, bool ripple = false) {
+            Scene grid;
+            grid.geometrySources.push_back(scene.geometrySources[0]);
+            for (std::uint32_t y{}; y <= 6; ++y) for (std::uint32_t x{}; x <= 6; ++x)
+                grid.mesh.vertices.push_back({x*64.0F,y*64.0F,
+                    peak && x == 3 && y == 3 ? 32.0F : ripple && (x+y)%2 ? 4.0F : 0.0F});
+            for (std::uint32_t y{}; y < 6; ++y) for (std::uint32_t x{}; x < 6; ++x) {
+                if (opening && x == 2 && y == 2) continue;
+                const auto a = y*7+x, b = a+1, d = a+7, c = d+1;
+                grid.mesh.triangles.push_back({{a,b,c}});
+                grid.triangleProvenance.push_back({0,grid.triangleProvenance.size(),{}});
+                grid.mesh.triangles.push_back({{a,c,d}});
+                grid.triangleProvenance.push_back({0,grid.triangleProvenance.size(),{}});
+            }
+            return grid;
+        };
+        const auto flatGrid = makeTerrainGrid(false,false);
+        const auto simpler = GenerateCandidate(flatGrid,profile);
+        Require(simpler.topology.valid && simpler.regions.size() == 1);
+        Require(simpler.mesh.polygons.size() < flatGrid.mesh.triangles.size()/2);
+        Require(simpler.statistics.polygonsBeforeSimplification == flatGrid.mesh.triangles.size());
+        Require(simpler.regions[0].sourceTriangles.size() == flatGrid.mesh.triangles.size());
+        Require(std::abs(simpler.regions[0].area-384.0F*384.0F) < 0.1F);
+        Require(std::any_of(simpler.polygonContributingTriangles.begin(),simpler.polygonContributingTriangles.end(),
+            [](const auto& sources){ return sources.size() > 1; }));
+        const auto rippleGrid = makeTerrainGrid(false,false,true);
+        const auto smoothed = GenerateCandidate(rippleGrid,profile);
+        Require(smoothed.topology.valid && smoothed.mesh.polygons.size() < rippleGrid.mesh.triangles.size());
+        for (const auto& original : rippleGrid.mesh.vertices) {
+            bool sampleCovered{};
+            for (const auto& polygon : smoothed.mesh.polygons) {
+                const auto a = smoothed.mesh.vertices[polygon.vertices[0]];
+                const auto b = smoothed.mesh.vertices[polygon.vertices[1]];
+                const auto c = smoothed.mesh.vertices[polygon.vertices[2]];
+                const auto area = (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+                const auto u = ((b.x-original.x)*(c.y-original.y)-(b.y-original.y)*(c.x-original.x))/area;
+                const auto v = ((original.x-a.x)*(c.y-a.y)-(original.y-a.y)*(c.x-a.x))/area;
+                const auto w = 1.0F-u-v;
+                if (u < -1.0e-4F || v < -1.0e-4F || w < -1.0e-4F) continue;
+                Require(std::abs(original.z-(u*a.z+v*b.z+w*c.z)) <= 16.001F);
+                sampleCovered = true;
+                break;
+            }
+            Require(sampleCovered);
+        }
+        const auto peaked = GenerateCandidate(makeTerrainGrid(true,false),profile);
+        Require(peaked.topology.valid && std::any_of(peaked.mesh.vertices.begin(),peaked.mesh.vertices.end(),
+            [](Vec3 vertex){ return vertex.x == 192.0F && vertex.y == 192.0F && vertex.z == 32.0F; }));
+        const auto withOpening = GenerateCandidate(makeTerrainGrid(false,true),profile);
+        Require(withOpening.topology.valid && std::abs(withOpening.regions[0].area-35.0F*64.0F*64.0F) < 0.1F);
+        Require(std::none_of(withOpening.mesh.polygons.begin(),withOpening.mesh.polygons.end(),[&](const NavPolygon& polygon) {
+            const auto& a = withOpening.mesh.vertices[polygon.vertices[0]];
+            const auto& b = withOpening.mesh.vertices[polygon.vertices[1]];
+            const auto& c = withOpening.mesh.vertices[polygon.vertices[2]];
+            const auto center = (a+b+c)/3.0F;
+            return center.x > 128.0F && center.x < 192.0F && center.y > 128.0F && center.y < 192.0F;
+        }));
         navmesh::core::Cell cell{ .id = 0x400, .editorId = "CandidateFixture" };
         const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
         navmesh::core::SceneExportOptions visual{ .layers = { SceneLayer::CandidateNavmesh }, .candidateNavmesh = &flat.mesh };

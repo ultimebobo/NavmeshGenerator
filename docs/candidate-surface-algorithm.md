@@ -41,6 +41,15 @@ This checks coverage of one known structure, not navigation quality across all
 bridges or stairs. The local asset cache supplied 755 models; 222 referenced
 models remained unavailable in that run.
 
+A 2026-09-28 terrain-only rerun of the local exterior benchmark with the
+interior simplifier and `human@1.0.0` had 2,202 polygons after filtering and
+edge splitting, then 1,984 after simplification (218 fewer, 9.9%). It kept
+four connected regions and passed candidate topology validation. This
+resolved load order selected an exterior CELL override, so its counts differ
+from the earlier vanilla run above. A synthetic flat grid of 72 source
+triangles produces fewer than 36 candidate polygons with identical area;
+peak, opening, stacked-level, and ripple fixtures check the guarded cases.
+
 Choose **polygon-based construction** for this milestone. Filter original
 terrain/collision triangles, canonicalize near-coincident placed-mesh seams
 within 0.25 world units, split partial edges at compatible T junctions,
@@ -48,7 +57,16 @@ form regions through traversable shared edges, inset exposed edges by agent
 radius, split partial edges created by that inset, then triangulate the clipped
 polygons. This retains vertical layers
 and a direct source-triangle audit trail; seam vertices may move by at most
-0.25 world units. Runtime
+0.25 world units. After region filtering, interior vertices of convex,
+connected fans are removed when all contributing source triangles and the
+replacement triangles stay within half a profile-bounded height tolerance
+of the same fitted plane. The total vertical difference is at most the
+smaller of 16 world units or the profile's step height. The
+replacement triangles must still satisfy the profile slope, clearance, and
+wall-obstruction checks. Fan boundaries, including obstacle openings, cell
+borders, and distinct height levels, are retained exactly. This reduces
+surface detail without relaxing
+source eligibility or create links. Runtime
 and memory scaling are tied primarily to source triangle and edge counts.
 The measured source distribution above is evidence for that choice, not a
 performance result for the new generator. Re-run this comparison with real
@@ -61,9 +79,12 @@ Generation is opt-in and emits a neutral JSON candidate plus OBJ and GLB
 inspection views. The JSON includes the profile name/version, all parameter
 values, source-triangle provenance (including LAND sample coordinates),
 regions, contours, polygon neighbors, and topology findings.
-`polygons[].source_triangle` and `regions[].source_triangles` join to
+`polygons[].source_triangles` and `regions[].source_triangles` join to
 `source_triangles[].input_index`; each `geometry_source` joins to
-`geometry_sources[]`. It does not assign a Bethesda FormID or serialize NVNM.
+`geometry_sources[]`. `polygons[].source_triangle` remains a primary source
+index for simple joins; a simplified polygon can cover several input triangles,
+all of which appear in its `source_triangles` list. It does not assign a
+Bethesda FormID or serialize NVNM.
 The candidate is reproducible for identical scene geometry, source order, and
 profile. Triangle order from the resolved load order is part of the input.
 Placed, enabled DOOR references in the selected worldspace are identified as

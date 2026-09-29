@@ -53,17 +53,26 @@ namespace navmesh::core
     };
     struct CandidateContour { std::uint32_t region{}; bool closed{}; std::vector<std::uint32_t> vertices; };
     struct CandidateTopology { bool valid{ true }; std::vector<std::string> findings; };
+    /// Input filter counts and output triangle counts for a candidate run.
     struct CandidateStatistics
     {
         std::size_t inputTriangles{}, eligibleTriangles{}, rejectedSlope{}, rejectedClearance{}, rejectedObstruction{}, rejectedSource{},
-            rejectedDegenerate{}, rejectedSmallRegion{}, rejectedUnreachable{}, outputPolygons{};
+            rejectedDegenerate{}, rejectedSmallRegion{}, rejectedUnreachable{};
+        /// Polygon count after filtering and before conservative interior simplification.
+        std::size_t polygonsBeforeSimplification{};
+        /// Final candidate triangle count after interior simplification.
+        std::size_t outputPolygons{};
     };
     /// Inspection-only result; this does not encode or replace a plugin NAVM record.
     struct CandidateNavMesh
     {
         NavigationProfile profile;
         NavMesh mesh;
+        /// Primary input triangle for each output polygon, retained for simple source joins.
         std::vector<std::size_t> polygonSourceTriangles;
+        /// All input triangles covered by each polygon after interior simplification.
+        /// Indices refer to Scene::triangleProvenance in the input scene.
+        std::vector<std::vector<std::size_t>> polygonContributingTriangles;
         std::vector<CandidateRegion> regions;
         std::vector<CandidateExit> exits;
         std::vector<CandidateContour> contours;

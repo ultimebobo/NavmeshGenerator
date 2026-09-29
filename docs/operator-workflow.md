@@ -42,6 +42,12 @@ The commands below are the target command contract. A command is introduced only
 
 `00012ABC`, `10`, and `-5` are placeholders. The operator obtains real cell IDs and coordinates from milestone 1's `cells.json` or by using `--list-cells`; they are not expected to discover or edit files manually.
 
+For a current analysis run, `navmesh-counts.txt` records existing NAVM polygon
+totals in the selected CELL and across the extracted scene, including
+neighboring cells. It also records the generated candidate polygon total. The
+CLI prints these numbers, and the desktop UI shows a compact summary after
+completion.
+
 ## Immediate correction to milestone 1
 
 The current milestone-1 parser/resolver is useful internal work, but its normal command takes a manually prepared load-order manifest. That does not meet this product's input contract.

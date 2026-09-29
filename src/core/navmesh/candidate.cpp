@@ -8,6 +8,7 @@
 #include <cmath>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -273,6 +274,162 @@ namespace
                 match = j;
             }
             if (match) mesh.polygons[uses[i].first].neighbors[uses[i].second] = uses[*match].first;
+        }
+    }
+    [[nodiscard]] bool HasClearance(const Scene& scene, const navmesh::analysis::SpatialIndex& index,
+        std::size_t sourceTriangle, const std::array<Vec3,3>& points, float height, float stepHeight);
+    [[nodiscard]] bool HasWallObstruction(const Scene& scene, const navmesh::analysis::SpatialIndex& index,
+        std::size_t sourceTriangle, const std::array<Vec3,3>& floor, const NavigationProfile& profile);
+    /** Remove interior fan vertices only when their entire supported source
+     * patch is nearly planar. A convex fan has the same XY footprint and
+     * boundary after retriangulation; the source-plane test bounds cumulative
+     * height error even when several passes simplify the same area.
+     */
+    void SimplifyInteriorSurface(CandidateNavMesh& candidate, const Scene& scene)
+    {
+        const auto maximumHeightError = std::min(16.0F,candidate.profile.stepHeight);
+        constexpr std::size_t maximumPasses = 12;
+        auto& mesh = candidate.mesh;
+        auto& primary = candidate.polygonSourceTriangles;
+        auto& contributors = candidate.polygonContributingTriangles;
+        navmesh::analysis::SpatialIndex spatial;
+        spatial.Build(scene.mesh.triangles,scene.mesh.vertices);
+        for (std::size_t pass{}; pass < maximumPasses; ++pass) {
+            std::vector<std::vector<std::uint32_t>> incident(mesh.vertices.size());
+            for (std::uint32_t face{}; face < mesh.polygons.size(); ++face)
+                for (const auto vertex : mesh.polygons[face].vertices) incident[vertex].push_back(face);
+            std::vector<bool> removed(mesh.polygons.size()), blocked(mesh.vertices.size());
+            struct Replacement { std::array<std::uint32_t,3> vertices; std::size_t source; std::vector<std::size_t> contributors; std::uint16_t flags; };
+            std::vector<Replacement> replacements;
+            std::size_t removedVertices{};
+            for (std::uint32_t center{}; center < incident.size(); ++center) {
+                const auto& faces = incident[center];
+                if (blocked[center] || faces.size() < 3) continue;
+                const auto geometrySource = scene.triangleProvenance[primary[faces.front()]].geometrySource;
+                const auto flags = mesh.polygons[faces.front()].flags;
+                std::map<std::uint32_t,std::uint32_t> next;
+                std::set<std::uint32_t> incoming;
+                std::set<std::size_t> sources;
+                bool eligible = true;
+                for (const auto faceIndex : faces) {
+                    const auto& face = mesh.polygons[faceIndex];
+                    if (removed[faceIndex] || face.flags != flags
+                        || scene.triangleProvenance[primary[faceIndex]].geometrySource != geometrySource) { eligible = false; break; }
+                    const auto at = std::find(face.vertices.begin(),face.vertices.end(),center)-face.vertices.begin();
+                    const auto from = face.vertices[(at+1)%3], to = face.vertices[(at+2)%3];
+                    if (face.neighbors[at] == NoNeighbor || face.neighbors[(at+2)%3] == NoNeighbor
+                        || !next.emplace(from,to).second || !incoming.insert(to).second) { eligible = false; break; }
+                    sources.insert(contributors[faceIndex].begin(),contributors[faceIndex].end());
+                }
+                if (!eligible || next.size() != faces.size() || incoming.size() != faces.size()) continue;
+                // A traversable step can join equal XY edges whose outer
+                // endpoints have distinct vertex IDs. Such a fan has no
+                // closed vertex ring and must remain unchanged.
+                std::vector<std::uint32_t> ring;
+                auto current = next.begin()->first;
+                do {
+                    ring.push_back(current);
+                    const auto edge = next.find(current);
+                    if (edge == next.end()) { eligible = false; break; }
+                    current = edge->second;
+                } while (current != ring.front() && ring.size() <= faces.size());
+                if (!eligible || current != ring.front() || ring.size() != faces.size()) continue;
+                if (std::any_of(ring.begin(),ring.end(),[&](auto vertex){ return blocked[vertex]; })) continue;
+                const auto& points = mesh.vertices;
+                const auto minimumArea = candidate.profile.weldTolerance*candidate.profile.weldTolerance;
+                for (std::size_t i{}; i < ring.size(); ++i)
+                    if (Cross2(points[ring[i]],points[ring[(i+1)%ring.size()]],points[ring[(i+2)%ring.size()]]) <= minimumArea) {
+                        eligible = false; break;
+                    }
+                if (!eligible) continue;
+                // Fit the local surface rather than using an arbitrary three
+                // points; the latter exaggerates error on a smooth hillside.
+                // Every original source vertex must remain close to this plane.
+                // Both the source surface and the replacement triangles are
+                // linear, so each can differ from that plane by at most half
+                // the total permitted height error throughout this patch.
+                Vec3 mean = points[center];
+                for (const auto vertex : ring) mean = mean+points[vertex];
+                mean = mean/static_cast<float>(ring.size()+1);
+                double xx{}, xy{}, yy{}, xz{}, yz{};
+                const auto accumulate = [&](Vec3 point) {
+                    const auto x = static_cast<double>(point.x-mean.x);
+                    const auto y = static_cast<double>(point.y-mean.y);
+                    const auto z = static_cast<double>(point.z-mean.z);
+                    xx += x*x; xy += x*y; yy += y*y; xz += x*z; yz += y*z;
+                };
+                accumulate(points[center]);
+                for (const auto vertex : ring) accumulate(points[vertex]);
+                const auto determinant = xx*yy-xy*xy;
+                if (determinant <= 1.0e-6) continue;
+                const auto dzdx = (xz*yy-yz*xy)/determinant;
+                const auto dzdy = (yz*xx-xz*xy)/determinant;
+                const auto nearPlane = [&](Vec3 point) {
+                    const auto expected = static_cast<double>(mean.z)+dzdx*(point.x-mean.x)+dzdy*(point.y-mean.y);
+                    return std::abs(static_cast<double>(point.z)-expected) <= maximumHeightError*0.5;
+                };
+                if (!nearPlane(points[center])) continue;
+                for (const auto vertex : ring) if (!nearPlane(points[vertex])) { eligible = false; break; }
+                for (const auto source : sources) {
+                    if (source >= scene.mesh.triangles.size() || scene.triangleProvenance[source].geometrySource != geometrySource) { eligible = false; break; }
+                    const auto& original = scene.mesh.triangles[source];
+                    for (const auto vertex : original.vertices)
+                        if (vertex >= scene.mesh.vertices.size() || !nearPlane(scene.mesh.vertices[vertex])) { eligible = false; break; }
+                    if (!eligible) break;
+                }
+                if (!eligible) continue;
+                std::vector<Replacement> proposed;
+                for (std::size_t corner = 1; corner+1 < ring.size(); ++corner) {
+                    const auto first = points[ring[0]], second = points[ring[corner]], third = points[ring[corner+1]];
+                    const auto area = Cross2(first,second,third);
+                    const auto u = second-first, v = third-first;
+                    const auto vertical = std::hypot(u.y*v.z-u.z*v.y,u.z*v.x-u.x*v.z);
+                    const auto slope = std::atan2(vertical,area)*180.0F/3.14159265358979323846F;
+                    if (area <= minimumArea || slope > candidate.profile.maxSlopeDegrees) { eligible = false; break; }
+                    const std::array<Vec3,3> triangle{first,second,third};
+                    if (!HasClearance(scene,spatial,*sources.begin(),triangle,candidate.profile.clearance,candidate.profile.stepHeight)
+                        || HasWallObstruction(scene,spatial,*sources.begin(),triangle,candidate.profile)) { eligible = false; break; }
+                    proposed.push_back({{ring[0],ring[corner],ring[corner+1]},*sources.begin(),
+                        {sources.begin(),sources.end()},flags});
+                }
+                if (!eligible) continue;
+                for (const auto face : faces) removed[face] = true;
+                blocked[center] = true;
+                for (const auto vertex : ring) blocked[vertex] = true;
+                replacements.insert(replacements.end(),std::make_move_iterator(proposed.begin()),std::make_move_iterator(proposed.end()));
+                ++removedVertices;
+            }
+            if (!removedVertices) break;
+            NavMesh nextMesh;
+            std::vector<std::size_t> nextPrimary;
+            std::vector<std::vector<std::size_t>> nextContributors;
+            std::vector<std::uint32_t> remap(mesh.vertices.size(),NoNeighbor);
+            const auto makeVertex = [&](std::uint32_t old) {
+                if (remap[old] == NoNeighbor) {
+                    remap[old] = static_cast<std::uint32_t>(nextMesh.vertices.size());
+                    nextMesh.vertices.push_back(mesh.vertices[old]);
+                }
+                return remap[old];
+            };
+            for (std::size_t i{}; i < mesh.polygons.size(); ++i) if (!removed[i]) {
+                auto face = mesh.polygons[i];
+                for (auto& vertex : face.vertices) vertex = makeVertex(vertex);
+                nextMesh.polygons.push_back(face);
+                nextPrimary.push_back(primary[i]);
+                nextContributors.push_back(std::move(contributors[i]));
+            }
+            for (auto& replacement : replacements) {
+                NavPolygon face;
+                for (std::size_t i{}; i < 3; ++i) face.vertices[i] = makeVertex(replacement.vertices[i]);
+                face.flags = replacement.flags;
+                nextMesh.polygons.push_back(face);
+                nextPrimary.push_back(replacement.source);
+                nextContributors.push_back(std::move(replacement.contributors));
+            }
+            mesh = std::move(nextMesh);
+            primary = std::move(nextPrimary);
+            contributors = std::move(nextContributors);
+            BuildAdjacency(mesh,candidate.profile.weldTolerance,candidate.profile.stepHeight);
         }
     }
     /** Split inset triangle edges at nearby vertices on the same traversable
@@ -850,14 +1007,20 @@ namespace navmesh::core
             result.mesh = std::move(filtered); result.polygonSourceTriangles = std::move(sources);
             BuildAdjacency(result.mesh,profile.weldTolerance,profile.stepHeight);
         }
+        result.statistics.polygonsBeforeSimplification = result.mesh.polygons.size();
+        result.polygonContributingTriangles.reserve(result.polygonSourceTriangles.size());
+        for (const auto source : result.polygonSourceTriangles) result.polygonContributingTriangles.push_back({source});
+        SimplifyInteriorSurface(result,scene);
         for (const auto& component : Components(result.mesh)) {
             CandidateRegion region; region.id = static_cast<std::uint32_t>(result.regions.size()); region.polygons = component;
             std::set<std::size_t> sourceTriangles, geometrySources;
             for (const auto index : component) {
                 const auto& tri = result.mesh.polygons[index];
                 region.area += Area2(result.mesh.vertices[tri.vertices[0]],result.mesh.vertices[tri.vertices[1]],result.mesh.vertices[tri.vertices[2]])*0.5F;
-                const auto source = result.polygonSourceTriangles[index]; sourceTriangles.insert(source);
-                geometrySources.insert(scene.triangleProvenance[source].geometrySource);
+                for (const auto source : result.polygonContributingTriangles[index]) {
+                    sourceTriangles.insert(source);
+                    geometrySources.insert(scene.triangleProvenance[source].geometrySource);
+                }
             }
             region.sourceTriangles.assign(sourceTriangles.begin(),sourceTriangles.end());
             region.geometrySources.assign(geometrySources.begin(),geometrySources.end());
@@ -906,11 +1069,14 @@ namespace navmesh::core
         CandidateTopology result;
         const auto& mesh = candidate.mesh;
         if (candidate.polygonSourceTriangles.size() != mesh.polygons.size()) result.findings.push_back("polygon provenance count mismatch");
+        if (candidate.polygonContributingTriangles.size() != mesh.polygons.size()) result.findings.push_back("polygon contributor count mismatch");
         std::map<Edge,std::vector<std::pair<std::size_t,std::size_t>>> edges;
         std::set<std::array<std::uint32_t,3>> faces;
         std::vector<bool> used(mesh.vertices.size());
         for (std::size_t i{}; i < mesh.polygons.size(); ++i) {
             const auto& tri = mesh.polygons[i];
+            if (i < candidate.polygonContributingTriangles.size() && candidate.polygonContributingTriangles[i].empty())
+                result.findings.push_back(std::format("polygon {} has no source contributors",i));
             for (const auto vertex : tri.vertices) if (vertex >= mesh.vertices.size()) result.findings.push_back(std::format("polygon {} has invalid vertex",i)); else used[vertex] = true;
             if (std::any_of(tri.vertices.begin(),tri.vertices.end(),[&](auto vertex){return vertex >= mesh.vertices.size();})) continue;
             if (Cross2(mesh.vertices[tri.vertices[0]],mesh.vertices[tri.vertices[1]],mesh.vertices[tri.vertices[2]]) <= 1.0e-5F)
@@ -958,8 +1124,8 @@ namespace navmesh::core
         out << std::format("  \"profile\": {{\"name\":\"{}\",\"version\":\"{}\",\"agent_radius\":{},\"agent_height\":{},\"max_slope_degrees\":{},\"step_height\":{},\"clearance\":{},\"weld_tolerance\":{},\"minimum_region_area\":{},\"contour_simplification_tolerance\":{},\"cell_border_policy\":\"{}\"}},\n",
             p.name,p.version,p.agentRadius,p.agentHeight,p.maxSlopeDegrees,p.stepHeight,p.clearance,p.weldTolerance,p.minimumRegionArea,p.contourSimplificationTolerance,p.cellBorderPolicy);
         const auto& s = candidate.statistics;
-        out << std::format("  \"statistics\": {{\"input_triangles\":{},\"eligible_triangles\":{},\"rejected_source\":{},\"rejected_slope\":{},\"rejected_clearance\":{},\"rejected_obstruction\":{},\"rejected_degenerate\":{},\"rejected_small_region\":{},\"rejected_unreachable\":{},\"output_polygons\":{}}},\n",
-            s.inputTriangles,s.eligibleTriangles,s.rejectedSource,s.rejectedSlope,s.rejectedClearance,s.rejectedObstruction,s.rejectedDegenerate,s.rejectedSmallRegion,s.rejectedUnreachable,s.outputPolygons);
+        out << std::format("  \"statistics\": {{\"input_triangles\":{},\"eligible_triangles\":{},\"rejected_source\":{},\"rejected_slope\":{},\"rejected_clearance\":{},\"rejected_obstruction\":{},\"rejected_degenerate\":{},\"rejected_small_region\":{},\"rejected_unreachable\":{},\"polygons_before_simplification\":{},\"output_polygons\":{}}},\n",
+            s.inputTriangles,s.eligibleTriangles,s.rejectedSource,s.rejectedSlope,s.rejectedClearance,s.rejectedObstruction,s.rejectedDegenerate,s.rejectedSmallRegion,s.rejectedUnreachable,s.polygonsBeforeSimplification,s.outputPolygons);
         out << "  \"vertices\": [";
         for (std::size_t i{}; i < candidate.mesh.vertices.size(); ++i) { const auto& v = candidate.mesh.vertices[i]; out << (i ? "," : "") << std::format("[{},{},{}]",v.x,v.y,v.z); }
         out << "],\n  \"polygons\": [";
@@ -968,7 +1134,10 @@ namespace navmesh::core
             const auto sourceId = scene.triangleProvenance[sourceIndex].geometrySource;
             out << (i ? "," : "") << std::format("{{\"vertices\":[{},{},{}],\"neighbors\":[",tri.vertices[0],tri.vertices[1],tri.vertices[2]);
             for (std::size_t side{}; side < 3; ++side) out << (side ? "," : "") << (tri.neighbors[side] == NoNeighbor ? "null" : std::to_string(tri.neighbors[side]));
-            out << std::format("],\"source_triangle\":{},\"geometry_source\":{}}}",sourceIndex,sourceId);
+            out << std::format("],\"source_triangle\":{},\"source_triangles\":[",sourceIndex);
+            for (std::size_t j{}; j < candidate.polygonContributingTriangles[i].size(); ++j)
+                out << (j ? "," : "") << candidate.polygonContributingTriangles[i][j];
+            out << std::format("],\"geometry_source\":{}}}",sourceId);
         }
         out << "],\n  \"regions\": [";
         for (std::size_t i{}; i < candidate.regions.size(); ++i) {
@@ -1002,7 +1171,9 @@ namespace navmesh::core
                     reproducibility::EscapeJson(source.modelPath),source.sourceType == GeometrySourceType::Terrain ? "terrain" : source.sourceType == GeometrySourceType::Collision ? "collision" : "render_fallback",source.confidence);
         }
         out << "],\n  \"source_triangles\": [";
-        std::set<std::size_t> usedSources(candidate.polygonSourceTriangles.begin(),candidate.polygonSourceTriangles.end());
+        std::set<std::size_t> usedSources;
+        for (const auto& contributors : candidate.polygonContributingTriangles)
+            usedSources.insert(contributors.begin(),contributors.end());
         std::size_t emitted{};
         for (const auto sourceIndex : usedSources) {
             const auto& provenance = scene.triangleProvenance[sourceIndex];

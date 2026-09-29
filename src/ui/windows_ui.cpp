@@ -70,6 +70,7 @@ namespace
         std::filesystem::path config;
         std::shared_ptr<std::atomic_bool> cancelRequested;
     };
+    struct RunCompletion { double elapsed{}; std::string summary; };
     WindowState* State(HWND window) { return reinterpret_cast<WindowState*>(GetWindowLongPtrA(window, GWLP_USERDATA)); }
     std::string Text(HWND window, int id) { char value[4096]{}; GetWindowTextA(GetDlgItem(window, id), value, static_cast<int>(std::size(value))); return value; }
     std::string SelectedNavigationProfile(HWND window)
@@ -205,8 +206,10 @@ namespace
             std::thread([window, options, cancelRequested] {
                 const auto started = std::chrono::steady_clock::now();
                 int result{};
+                std::string finalStatus;
                 try {
-                    result = navmesh::app::Run(options, [window](int percent, std::string_view status) {
+                    result = navmesh::app::Run(options, [window, &finalStatus](int percent, std::string_view status) {
+                        finalStatus = status;
                         auto* message = new std::string(status); PostMessageA(window, ProgressMessage, static_cast<WPARAM>(percent), reinterpret_cast<LPARAM>(message));
                     }, [cancelRequested] { return cancelRequested->load(); });
                 } catch (const std::exception& error) {
@@ -215,7 +218,8 @@ namespace
                     PostMessageA(window, ProgressMessage, 0, reinterpret_cast<LPARAM>(message));
                 }
                 const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-                PostMessageA(window, CompleteMessage, static_cast<WPARAM>(result), reinterpret_cast<LPARAM>(new double(elapsed)));
+                PostMessageA(window, CompleteMessage, static_cast<WPARAM>(result),
+                    reinterpret_cast<LPARAM>(new RunCompletion{elapsed, std::move(finalStatus)}));
             }).detach();
         } catch (const std::exception& error) { MessageBoxA(window, error.what(), "Invalid options", MB_ICONWARNING); }
     }
@@ -296,7 +300,22 @@ namespace
             RECT bounds = item->rcItem; SetBkMode(item->hDC, TRANSPARENT); SetTextColor(item->hDC, RGB(255, 255, 255)); DrawTextA(item->hDC, "?", 1, &bounds, DT_CENTER | DT_VCENTER | DT_SINGLELINE); return TRUE;
         }
         case ProgressMessage: { std::unique_ptr<std::string> status(reinterpret_cast<std::string*>(lParam)); SendMessageA(state->progress, PBM_SETPOS, wParam, 0); SetWindowTextA(state->percent, (std::to_string(wParam) + "%").c_str()); SetWindowTextA(state->status, status->c_str()); RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN); return 0; }
-        case CompleteMessage: { std::unique_ptr<double> elapsed(reinterpret_cast<double*>(lParam)); char text[256]{}; std::snprintf(text, sizeof(text), "%s in %.2f seconds.", wParam == 0 ? "Completed" : wParam == 3 ? "Cancelled" : "Stopped", *elapsed); SetWindowTextA(state->status, text); SendMessageA(state->progress, PBM_SETPOS, wParam == 3 ? SendMessageA(state->progress, PBM_GETPOS, 0, 0) : 100, 0); SetWindowTextA(state->percent, wParam == 3 ? (std::to_string(SendMessageA(state->progress, PBM_GETPOS, 0, 0)) + "%").c_str() : "100%"); EnableWindow(GetDlgItem(window, RunButton), TRUE); EnableWindow(GetDlgItem(window, ListButton), TRUE); EnableWindow(GetDlgItem(window, CancelButton), FALSE); RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN); return 0; }
+        case CompleteMessage: {
+            std::unique_ptr<RunCompletion> completed(reinterpret_cast<RunCompletion*>(lParam));
+            char elapsed[80]{};
+            std::snprintf(elapsed, sizeof(elapsed), "%s in %.2f seconds.",
+                wParam == 0 ? "Completed" : wParam == 3 ? "Cancelled" : "Stopped", completed->elapsed);
+            std::string status = elapsed;
+            if (wParam == 0 && !completed->summary.empty()) status += " " + completed->summary;
+            SetWindowTextA(state->status, status.c_str());
+            SendMessageA(state->progress, PBM_SETPOS, wParam == 3 ? SendMessageA(state->progress, PBM_GETPOS, 0, 0) : 100, 0);
+            SetWindowTextA(state->percent, wParam == 3 ? (std::to_string(SendMessageA(state->progress, PBM_GETPOS, 0, 0)) + "%").c_str() : "100%");
+            EnableWindow(GetDlgItem(window, RunButton), TRUE);
+            EnableWindow(GetDlgItem(window, ListButton), TRUE);
+            EnableWindow(GetDlgItem(window, CancelButton), FALSE);
+            RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            return 0;
+        }
         case WM_DESTROY: DeleteObject(state->heading); DeleteObject(state->body); DeleteObject(state->label); delete state; PostQuitMessage(0); return 0;
         }
         return DefWindowProcA(window, message, wParam, lParam);
