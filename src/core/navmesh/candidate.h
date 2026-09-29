@@ -10,12 +10,11 @@
 
 namespace navmesh::core
 {
-    /// Versioned movement and surface constraints used to build a candidate navmesh.
+    /// Fixed human movement and surface constraints used to build a candidate navmesh.
     /// Distances and areas use Skyrim world units; angles use degrees.
     struct NavigationProfile
     {
         std::string name{ "human" };
-        std::string version{ "1.1.0" };
         float agentRadius{ 16.0F };
         float agentHeight{ 128.0F };
         float maxSlopeDegrees{ 45.0F };
@@ -27,10 +26,6 @@ namespace navmesh::core
         float contourSimplificationTolerance{ 0.05F };
         std::string cellBorderPolicy{ "preserve_open_border" };
     };
-
-    /// Find a built-in profile by its `name@version` key, including legacy versions.
-    /// @return The profile, or no value for an unknown name or version.
-    [[nodiscard]] std::optional<NavigationProfile> FindNavigationProfile(const std::string& key);
 
     struct CandidateRegion
     {
@@ -84,7 +79,7 @@ namespace navmesh::core
 
     /// Build a candidate from supported terrain and collision triangles in a scene.
     /// @param scene Geometry and source evidence to inspect.
-    /// @param profile Versioned movement and surface constraints.
+    /// @param profile Fixed human movement and surface constraints in Skyrim world units.
     /// @param cellBounds Optional generated exterior area's world-space bounds for border handling.
     /// @param exits Enabled placed DOOR references in Skyrim world coordinates. A door
     /// anchors only a nearby polygon on the same vertical level.

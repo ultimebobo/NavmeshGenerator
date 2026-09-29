@@ -182,7 +182,7 @@ Accept when: the benchmark cases produce expected classifications, including bri
 
 Implement:
 
-- define navigation parameters as named versioned profiles: agent radius/height, max slope, step height, clearance, cell-border policy, and simplification tolerances;
+- define fixed navigation parameters using the human values: agent radius/height, max slope, step height, clearance, cell-border policy, and simplification tolerances;
 - build a walkable triangle set from terrain/collision, including slope, clearance, and obstruction tests;
 - voxel/heightfield or polygon-based region construction (choose after a documented spike using real benchmark scenes);
 - contour extraction, region filtering, polygonization/triangulation, adjacency construction, and border stitching;
@@ -290,7 +290,7 @@ Run these in order. Each prompt is deliberately narrow; it authorizes one review
 
 ### Prompt 8
 
-> Read `docs/roadmap.md` and implement milestone 8 only. First document and justify the candidate-surface algorithm choice with benchmark evidence. Then generate deterministic neutral candidate NAVM with versioned navigation profiles, topology validation, and visual export. Do not serialize a plugin.
+> Read `docs/roadmap.md` and implement milestone 8 only. First document and justify the candidate-surface algorithm choice with benchmark evidence. Then generate deterministic neutral candidate NAVM with fixed human navigation settings, topology validation, and visual export. Do not serialize a plugin.
 
 ### Prompt 9
 

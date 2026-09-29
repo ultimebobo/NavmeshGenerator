@@ -1,6 +1,7 @@
 #include "app/options.h"
 
 #include <algorithm>
+#include <stdexcept>
 
 namespace navmesh::app
 {
@@ -32,7 +33,6 @@ namespace navmesh::app
             else if (argument == "--diagnostics") options.diagnostics = true;
             else if (argument == "--terrain-only") options.terrainOnly = true;
             else if (argument == "--generate-candidate") options.generateCandidate = true;
-            else if (argument == "--navigation-profile" && index + 1 < argc) options.navigationProfile = argv[++index];
             else if (argument == "--surface-search-radius" && index + 1 < argc) options.surfaceSearchRadius = std::stof(argv[++index]);
             else if (argument == "--max-support-distance" && index + 1 < argc) options.maxSupportDistance = std::stof(argv[++index]);
             else if (argument == "--max-slope" && index + 1 < argc) options.maxSlope = std::stof(argv[++index]);

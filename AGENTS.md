@@ -23,3 +23,4 @@
 - Treat named cells and mods supplied as bug examples as reproduction data.
   Keep behavior, UI help, and synthetic fixture names location independent
   unless a location-specific rule is explicitly required.
+- When changing behavior, do not add comments mentioning the previous behavior.

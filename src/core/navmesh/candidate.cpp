@@ -714,16 +714,6 @@ namespace
 
 namespace navmesh::core
 {
-    std::optional<NavigationProfile> FindNavigationProfile(const std::string& key)
-    {
-        if (key == "human@1.1.0") return NavigationProfile{};
-        if (key == "human@1.0.0") return NavigationProfile{ .version = "1.0.0", .stepHeight = 18.0F };
-        if (key == "small@1.0.0") return NavigationProfile{ .name = "small", .version = "1.0.0", .agentRadius = 8.0F,
-            .agentHeight = 64.0F, .maxSlopeDegrees = 50.0F, .stepHeight = 12.0F, .clearance = 64.0F,
-            .weldTolerance = 0.05F, .minimumRegionArea = 32.0F, .contourSimplificationTolerance = 0.05F };
-        return std::nullopt;
-    }
-
     CandidateNavMesh GenerateCandidate(const Scene& scene, const NavigationProfile& profile,
         std::optional<AABB> cellBounds, std::vector<CandidateExit> exits)
     {
@@ -734,7 +724,7 @@ namespace navmesh::core
             || profile.maxSlopeDegrees < 0 || profile.maxSlopeDegrees >= 90 || profile.stepHeight < 0
             || profile.weldTolerance <= 0 || profile.minimumRegionArea < 0 || profile.contourSimplificationTolerance < 0
             || (profile.cellBorderPolicy != "preserve_open_border" && profile.cellBorderPolicy != "inset_all_edges"))
-            throw std::invalid_argument("Invalid navigation profile parameters");
+            throw std::invalid_argument("Invalid navigation settings");
         if (scene.triangleProvenance.size() != input.triangles.size())
             throw std::invalid_argument("Candidate generation requires complete triangle provenance");
         navmesh::analysis::SpatialIndex spatial; spatial.Build(input.triangles,input.vertices);
@@ -1122,8 +1112,8 @@ namespace navmesh::core
         std::ofstream out(path,std::ios::binary|std::ios::trunc); if (!out) return false;
         const auto& p = candidate.profile;
         out << "{\n  \"schema\": \"navmesh-generator/candidate-navm\",\n  \"schema_version\": \"1.0.0\",\n  \"metadata\": " << metadataJson << ",\n";
-        out << std::format("  \"profile\": {{\"name\":\"{}\",\"version\":\"{}\",\"agent_radius\":{},\"agent_height\":{},\"max_slope_degrees\":{},\"step_height\":{},\"clearance\":{},\"weld_tolerance\":{},\"minimum_region_area\":{},\"contour_simplification_tolerance\":{},\"cell_border_policy\":\"{}\"}},\n",
-            p.name,p.version,p.agentRadius,p.agentHeight,p.maxSlopeDegrees,p.stepHeight,p.clearance,p.weldTolerance,p.minimumRegionArea,p.contourSimplificationTolerance,p.cellBorderPolicy);
+        out << std::format("  \"profile\": {{\"name\":\"{}\",\"agent_radius\":{},\"agent_height\":{},\"max_slope_degrees\":{},\"step_height\":{},\"clearance\":{},\"weld_tolerance\":{},\"minimum_region_area\":{},\"contour_simplification_tolerance\":{},\"cell_border_policy\":\"{}\"}},\n",
+            p.name,p.agentRadius,p.agentHeight,p.maxSlopeDegrees,p.stepHeight,p.clearance,p.weldTolerance,p.minimumRegionArea,p.contourSimplificationTolerance,p.cellBorderPolicy);
         const auto& s = candidate.statistics;
         out << std::format("  \"statistics\": {{\"input_triangles\":{},\"eligible_triangles\":{},\"rejected_source\":{},\"rejected_slope\":{},\"rejected_clearance\":{},\"rejected_obstruction\":{},\"rejected_degenerate\":{},\"rejected_small_region\":{},\"rejected_unreachable\":{},\"polygons_before_simplification\":{},\"output_polygons\":{}}},\n",
             s.inputTriangles,s.eligibleTriangles,s.rejectedSource,s.rejectedSlope,s.rejectedClearance,s.rejectedObstruction,s.rejectedDegenerate,s.rejectedSmallRegion,s.rejectedUnreachable,s.polygonsBeforeSimplification,s.outputPolygons);
@@ -1196,7 +1186,7 @@ namespace navmesh::core
     bool WriteCandidateObj(const std::filesystem::path& path, const CandidateNavMesh& candidate)
     {
         std::ofstream out(path,std::ios::trunc); if (!out) return false;
-        out << "# neutral candidate NAVM; profile " << candidate.profile.name << '@' << candidate.profile.version << "\n";
+        out << "# neutral candidate NAVM; profile " << candidate.profile.name << "\n";
         for (const auto& vertex : candidate.mesh.vertices) out << std::format("v {} {} {}\n",vertex.x,vertex.y,vertex.z);
         for (const auto& region : candidate.regions) {
             out << "g candidate_region_" << region.id << "\n";

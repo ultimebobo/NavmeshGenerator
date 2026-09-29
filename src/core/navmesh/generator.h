@@ -12,7 +12,7 @@ namespace navmesh::core
 
         /** Generate world-space navigation geometry from authoritative scene triangles.
          * @param scene Skyrim-world geometry with complete triangle provenance.
-         * @param profile Agent dimensions and movement limits in Skyrim units.
+         * @param profile Fixed human agent dimensions and movement limits in Skyrim units.
          * @param cellBounds Optional exterior bounds in Skyrim world coordinates.
          * @param exits Enabled door positions in Skyrim world coordinates.
          * @return Candidate mesh and evidence; throws on invalid input or a build failure.

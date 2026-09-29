@@ -15,27 +15,25 @@ exceeds roughly 2048 columns. Vertical cell height is 2 world units. This
 resolves 12-unit stair treads in a single cell. A three-cell-wide footprint
 uses about 6-unit horizontal voxels, although collision extending outside
 those cells can make the extracted bounds and voxels larger. Larger extracted
-areas may still lose narrow stairs. The
-default `human@1.1.0` profile allows a 28-unit climb; `human@1.0.0` remains
-available with its original 18-unit climb for historical comparisons. A local
-Riverwood03 `WalkwayStairs15` collision sample has tread rises near 25 units.
+areas may still lose narrow stairs. The fixed human settings allow a 28-unit
+climb. Historical runs used an 18-unit climb for comparison. A local Riverwood03 `WalkwayStairs15` collision sample has tread rises near 25 units.
 With the old climb, Recast split the isolated stair collision into five
-regions. The new profile joined it into one region, including when the test
+regions. The 28-unit setting joined it into one region, including when the test
 uses the wider extracted scene bounds. The slope and radius settings were
 unchanged: the walkable tread faces are flat and the normal radius fits. A
 full CLI rerun of Riverwood03 with one neighboring-cell ring found three
-placements of that stair model. With `human@1.0.0`, each placement's candidate
-polygons appeared in two connected regions. With `human@1.1.0`, polygons from
-all three placements joined one connected region. These are local game-data
+placements of that stair model. With the historical 18-unit climb, each placement's candidate polygons
+appeared in two connected regions. With the current 28-unit climb, polygons
+from all three placements joined one connected region. These are local game-data
 measurements; the source assets are not committed.
 
 Source-triangle provenance is recovered by the closest source height at each
 generated triangle's XY centroid. This is an approximate audit join after
 voxelization. Recast's smoothing and erosion can remove small supported areas;
 output is still an inspection candidate and is not Bethesda NAVM serialization.
-The profile's agent dimensions, clearance, slope, step height, radius, and
+The fixed settings for agent dimensions, clearance, slope, step height, radius, and
 minimum region area feed the Recast build. Weld tolerance, contour tolerance,
-and cell-border policy remain in the versioned profile for historical output
+and cell-border policy remain in the exported settings for output
 compatibility but do not control this voxel-based build.
 
 A Windows UI terrain-only run on a local exterior CELL on 2026-09-29 produced
@@ -64,7 +62,7 @@ Its fixed resolution also makes a narrow passage change with cell placement.
 
 An end-to-end read-only run against the installed vanilla `Skyrim.esm` CELL
 `00008EA2` at (26, 25), using `--terrain-only --generate-candidate` and
-`human@1.0.0`, completed in 8.45 seconds on this development machine. The
+an 18-unit climb, completed in 8.45 seconds on this development machine. The
 decoded LAND supplied 2,048 triangles. The candidate accepted 1,639,
 rejected 409 for slope, and emitted 1,639 polygons in 89 regions with valid
 index/adjacency/contour topology. The combined GLB has a separate Candidate
@@ -77,16 +75,16 @@ regions are a review signal, not evidence of playable navigation.
 The local Riverwood CELL reproduction uses the five supported collision
 placements beneath the existing elevated walkway NAVM. Before the region and
 inset fixes, that walkway had no candidate polygons. In a 2026-09-28 run with
-one neighboring-cell ring and `human@1.0.0`, the candidate had 83 walkway
-polygons in one region; all 18 existing walkway NAVM polygon centroids lay on
+one neighboring-cell ring and the historical 18-unit climb, the candidate
+had 83 walkway polygons in one region; all 18 existing walkway NAVM polygon centroids lay on
 those candidate polygons at the same height. Candidate topology was valid.
 This checks coverage of one known structure, not navigation quality across all
 bridges or stairs. The local asset cache supplied 755 models; 222 referenced
 models remained unavailable in that run.
 
 A 2026-09-28 terrain-only rerun of the local exterior benchmark with the
-interior simplifier and `human@1.0.0` had 2,202 polygons after filtering and
-edge splitting, then 1,984 after simplification (218 fewer, 9.9%). It kept
+interior simplifier and the historical 18-unit climb had 2,202 polygons
+after filtering and edge splitting, then 1,984 after simplification (218 fewer, 9.9%). It kept
 four connected regions and passed candidate topology validation. This
 resolved load order selected an exterior CELL override, so its counts differ
 from the earlier vanilla run above. A synthetic flat grid of 72 source
@@ -102,10 +100,10 @@ polygons. This retains vertical layers
 and a direct source-triangle audit trail; seam vertices may move by at most
 0.25 world units. After region filtering, interior vertices of convex,
 connected fans are removed when all contributing source triangles and the
-replacement triangles stay within half a profile-bounded height tolerance
+replacement triangles stay within half a step-height-bounded height tolerance
 of the same fitted plane. The total vertical difference is at most the
-smaller of 16 world units or the profile's step height. The
-replacement triangles must still satisfy the profile slope, clearance, and
+smaller of 16 world units or the fixed step height. The
+replacement triangles must still satisfy the fixed slope, clearance, and
 wall-obstruction checks. Fan boundaries, including obstacle openings, cell
 borders, and distinct height levels, are retained exactly. This reduces
 surface detail without relaxing
@@ -119,7 +117,7 @@ navigation.
 ## Scope and limitations
 
 Generation is opt-in and emits a neutral JSON candidate plus OBJ and GLB
-inspection views. The JSON includes the profile name/version, all parameter
+inspection views. The JSON includes the fixed human settings and all parameter
 values, source-triangle provenance (including LAND sample coordinates),
 regions, contours, polygon neighbors, and topology findings.
 `polygons[].source_triangles` and `regions[].source_triangles` join to
@@ -129,7 +127,7 @@ index for simple joins; a simplified polygon can cover several input triangles,
 all of which appear in its `source_triangles` list. It does not assign a
 Bethesda FormID or serialize NVNM.
 The candidate is reproducible for identical scene geometry, source order, and
-profile. Triangle order from the resolved load order is part of the input.
+fixed settings. Triangle order from the resolved load order is part of the input.
 Placed, enabled DOOR references in the selected worldspace are identified as
 exits before filtering regions. A door anchors only a nearby polygon on the
 same vertical level. A region also survives when it reaches any exterior cell

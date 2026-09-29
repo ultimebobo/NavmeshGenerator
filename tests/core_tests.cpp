@@ -426,8 +426,7 @@ namespace
             {200,0,0},{328,0,0},{328,128,500}, {400,0,0},{528,0,0},{528,128,0} };
         scene.mesh.triangles = { {{0,1,2}},{{0,2,3}},{{4,5,6}},{{7,8,9}} };
         scene.triangleProvenance = { {0,0,{}},{0,1,{}},{1,0,{}},{2,0,{}} };
-        auto profile = *FindNavigationProfile("human@1.0.0");
-        Require(!FindNavigationProfile("human@9.0.0"));
+        auto profile = NavigationProfile{};
         profile.agentRadius = 0; profile.minimumRegionArea = 0;
         const auto flat = GenerateCandidate(scene,profile);
         Require(flat.topology.valid && flat.mesh.polygons.size() == 2 && flat.regions.size() == 1);
@@ -651,8 +650,8 @@ namespace
         scene.mesh.vertices = {{0,0,0},{512,0,0},{512,512,0},{0,512,0}};
         scene.mesh.triangles = {{{0,1,2}},{{0,2,3}}};
         scene.triangleProvenance = {{0,0,{}},{0,1,{}}};
-        const auto profile = *FindNavigationProfile("human@1.1.0");
-        Require(profile.stepHeight == 28.0F && FindNavigationProfile("human@1.0.0")->stepHeight == 18.0F);
+        const NavigationProfile profile{};
+        Require(profile.name == "human" && profile.stepHeight == 28.0F);
         const CandidateGenerator& generator = RecastCandidateGenerator{};
         const auto generated = generator.Generate(scene,profile,std::nullopt,{});
         Require(!generated.mesh.polygons.empty());
@@ -661,6 +660,9 @@ namespace
         const auto root = std::filesystem::temp_directory_path() / "navmesh-recast-scene-test";
         std::filesystem::create_directories(root);
         Require(WriteCandidateJson(root / "candidate.json",generated,scene,"{}"));
+        std::ifstream candidateJson(root / "candidate.json",std::ios::binary);
+        const std::string candidateBytes(std::istreambuf_iterator<char>(candidateJson),{});
+        Require(candidateBytes.contains("\"profile\": {\"name\":\"human\",\"agent_radius\":"));
         SceneExportOptions options{ .layers = {SceneLayer::CandidateNavmesh}, .candidateNavmesh = &generated.mesh };
         Cell cell{ .id = 0x100, .editorId = "Fixture" };
         const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
@@ -695,13 +697,10 @@ namespace
         }
         if (scene.mesh.triangles.empty()) return false;
         Require(scene.mesh.triangles.size() == 308);
-        const auto current = *FindNavigationProfile("human@1.1.0");
-        const auto legacy = *FindNavigationProfile("human@1.0.0");
+        const NavigationProfile current{};
         const RecastCandidateGenerator generator;
         const auto isolated = generator.Generate(scene,current,std::nullopt,{});
         Require(isolated.topology.valid && isolated.regions.size() == 1);
-        const auto oldResult = generator.Generate(scene,legacy,std::nullopt,{});
-        Require(oldResult.topology.valid && oldResult.regions.size() > 1);
 
         // Include the extracted scene envelope to reproduce its coarser grid.
         {

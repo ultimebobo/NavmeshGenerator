@@ -664,8 +664,6 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     for (const auto& polygon : analysisReport.polygons) sceneMarkers.push_back({ polygon.centroid, polygon.classification, polygon.index, polygon.support.found ? std::optional<std::size_t>{ polygon.support.triangleIndex } : std::nullopt, cell->navMeshes.front().id });
     std::optional<navmesh::core::CandidateNavMesh> candidate;
     if (options.generateCandidate) {
-        const auto profile = navmesh::core::FindNavigationProfile(options.navigationProfile);
-        if (!profile) { std::cerr << "Unknown navigation profile '" << options.navigationProfile << "'. Available: human@1.1.0, human@1.0.0, small@1.0.0.\n"; return 1; }
         std::vector<navmesh::core::CandidateExit> exits;
         std::optional<navmesh::core::AABB> candidateBounds;
         for (const auto& sceneCell : sceneCells) {
@@ -706,7 +704,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
         std::sort(exits.begin(),exits.end(),[](const auto& a, const auto& b){return a.referenceId < b.referenceId;});
         exits.erase(std::unique(exits.begin(),exits.end(),[](const auto& a, const auto& b){return a.referenceId == b.referenceId;}),exits.end());
         try {
-            candidate = navmesh::core::RecastCandidateGenerator{}.Generate(geometry.scene, *profile,candidateBounds,std::move(exits));
+            candidate = navmesh::core::RecastCandidateGenerator{}.Generate(geometry.scene, navmesh::core::NavigationProfile{},candidateBounds,std::move(exits));
         } catch (const std::exception& error) {
             std::cerr << "Candidate generation failed: " << error.what() << "\n";
             return 2;

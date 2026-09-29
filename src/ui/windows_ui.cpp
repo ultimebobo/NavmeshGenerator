@@ -27,7 +27,6 @@ namespace
     constexpr int RunButton = 900;
     constexpr int ListButton = 901;
     constexpr int CancelButton = 902;
-    constexpr int NavigationProfileBox = 903;
     constexpr int FieldBase = 100;
     constexpr int CheckBase = 200;
     constexpr int TargetBase = 300;
@@ -62,7 +61,7 @@ namespace
     };
 
     struct WindowState {
-        HWND window{}, tooltip{}, progress{}, status{}, percent{}, title{}, subtitle{}, lookupLabel{}, profileLabel{}, profileHelp{};
+        HWND window{}, tooltip{}, progress{}, status{}, percent{}, title{}, subtitle{}, lookupLabel{};
         std::array<HWND, Fields.size()> fieldLabels{}, fieldHelps{};
         std::array<HWND, 4> sectionLabels{};
         std::array<HWND, Checks.size()> checkHelps{};
@@ -73,14 +72,6 @@ namespace
     struct RunCompletion { double elapsed{}; std::string summary; };
     WindowState* State(HWND window) { return reinterpret_cast<WindowState*>(GetWindowLongPtrA(window, GWLP_USERDATA)); }
     std::string Text(HWND window, int id) { char value[4096]{}; GetWindowTextA(GetDlgItem(window, id), value, static_cast<int>(std::size(value))); return value; }
-    std::string SelectedNavigationProfile(HWND window)
-    {
-        switch (SendMessageA(GetDlgItem(window, NavigationProfileBox), CB_GETCURSEL, 0, 0)) {
-        case 1: return "human@1.0.0";
-        case 2: return "small@1.0.0";
-        default: return "human@1.1.0";
-        }
-    }
     std::string Trim(std::string value)
     {
         const auto whitespace = [](unsigned char character) { return std::isspace(character) != 0; };
@@ -153,9 +144,6 @@ namespace
             Move(GetDlgItem(state.window, CheckBase + index), x, y, columnWidth - 30, 24);
             Move(state.checkHelps[index], x + columnWidth - 25, y, 22, 22);
         }
-        Move(state.profileLabel, columns[1], 722, 118, 18);
-        Move(GetDlgItem(state.window, NavigationProfileBox), columns[1] + 120, 715, columnWidth - 153, 150);
-        Move(state.profileHelp, columns[1] + columnWidth - 25, 718, 22, 22);
         const int footerTop = std::max(772, height - 145);
         Move(state.progress, margin, footerTop, std::max(300, width - margin * 2 - 75), 20);
         Move(state.percent, width - margin - 60, footerTop, 60, 20);
@@ -188,7 +176,6 @@ namespace
         result.diagnostics = SendMessageA(GetDlgItem(window, CheckBase + 1), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.terrainOnly = SendMessageA(GetDlgItem(window, CheckBase + 2), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.generateCandidate = SendMessageA(GetDlgItem(window, CheckBase + 3), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        result.navigationProfile = SelectedNavigationProfile(window);
         return result;
     }
     void Save(HWND window)
@@ -196,7 +183,6 @@ namespace
         const auto path = State(window)->config.string();
         for (size_t i{}; i < Fields.size(); ++i) WritePrivateProfileStringA("options", Fields[i].key, Text(window, FieldBase + static_cast<int>(i)).c_str(), path.c_str());
         for (size_t i{}; i < Checks.size(); ++i) WritePrivateProfileStringA("options", Checks[i].key, SendMessageA(GetDlgItem(window, CheckBase + static_cast<int>(i)), BM_GETCHECK, 0, 0) == BST_CHECKED ? "1" : "0", path.c_str());
-        WritePrivateProfileStringA("options", "navigation_profile", SelectedNavigationProfile(window).c_str(), path.c_str());
         for (int i{}; i != 3; ++i) if (SendMessageA(GetDlgItem(window, TargetBase + i), BM_GETCHECK, 0, 0) == BST_CHECKED) WritePrivateProfileStringA("options", "target", std::to_string(i).c_str(), path.c_str());
     }
     void Start(HWND window, bool listOnly)
@@ -254,11 +240,6 @@ namespace
             const char* targets[] = {"Form ID", "Editor ID", "Coordinates"};
             for (int i{}; i < 3; ++i) { auto button = CreateWindowA("BUTTON", targets[i], WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | (i == 0 ? WS_GROUP : 0), 157 + i * 125, 652, 116, 24, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(TargetBase + i)), nullptr, nullptr); Theme(button); Font(button, state->body); AddTooltip(*state, button, i == 0 ? "Select exactly one cell-lookup method." : i == 1 ? "Use this method to select a CELL by editor ID." : "Use this method to select an exterior CELL by X/Y coordinates."); }
             for (size_t i{}; i < Checks.size(); ++i) { auto check = CreateWindowA("BUTTON", Checks[i].label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 535 + static_cast<int>(i) * 125, 685, 104, 24, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(CheckBase + static_cast<int>(i))), nullptr, nullptr); Theme(check); Font(check, state->body); auto help = CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 640 + static_cast<int>(i) * 125, 685, 22, 22, window, nullptr, nullptr, nullptr); state->checkHelps[i] = help; AddTooltip(*state, help, Checks[i].hint); }
-            state->profileLabel = Label(*state, "Navigation profile", 340, 722, 118);
-            auto profileBox = CreateWindowA("COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 460, 715, 160, 150, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(NavigationProfileBox)), nullptr, nullptr);
-            Font(profileBox, state->body); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("human@1.1.0")); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("human@1.0.0")); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("small@1.0.0"));
-            state->profileHelp = CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 632, 718, 22, 22, window, nullptr, nullptr, nullptr);
-            AddTooltip(*state, state->profileHelp, "Versioned Recast agent settings. human@1.1.0 allows 28-unit stair steps; human@1.0.0 retains the older 18-unit climb.");
             state->progress = CreateWindowExA(0, PROGRESS_CLASSA, nullptr, WS_CHILD | WS_VISIBLE, 30, 772, 770, 20, window, nullptr, nullptr, nullptr); Theme(state->progress); SendMessageA(state->progress, PBM_SETRANGE32, 0, 100);
             state->percent = Label(*state, "0%", 815, 772, 90, state->label);
             state->status = CreateWindowA("STATIC", "Ready to analyze", WS_CHILD | WS_VISIBLE, 30, 801, 860, 22, window, nullptr, nullptr, nullptr); Font(state->status, state->body);
@@ -267,8 +248,6 @@ namespace
             auto run = CreateWindowA("BUTTON", "Run analysis", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 760, 840, 145, 38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(RunButton)), nullptr, nullptr); Font(run, state->body);
             for (size_t i{}; i < Fields.size(); ++i) SetText(window, FieldBase + static_cast<int>(i), ReadConfig(state->config, Fields[i].key, i == 6 ? "." : i == 15 ? "64" : i == 16 ? "32" : i == 17 ? "45" : i == 18 ? "1" : ""));
             for (size_t i{}; i < Checks.size(); ++i) SendMessageA(GetDlgItem(window, CheckBase + static_cast<int>(i)), BM_SETCHECK, ReadConfig(state->config, Checks[i].key) == "1" ? BST_CHECKED : BST_UNCHECKED, 0);
-            const auto savedProfile = ReadConfig(state->config, "navigation_profile", "human@1.1.0");
-            SendMessageA(profileBox, CB_SETCURSEL, savedProfile == "small@1.0.0" ? 2 : savedProfile == "human@1.0.0" ? 1 : 0, 0);
             const auto target = std::clamp(std::stoi(ReadConfig(state->config, "target", "0")), 0, 2); SendMessageA(GetDlgItem(window, TargetBase + target), BM_SETCHECK, BST_CHECKED, 0);
             Layout(*state);
             return 0;

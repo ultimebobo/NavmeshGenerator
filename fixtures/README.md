@@ -10,9 +10,8 @@ The Recast stair regression can use a local Riverwood03 geometry export without
 committing Bethesda assets. Run a candidate export of that CELL with supported
 collision, then invoke `navmesh-tests.exe --local-stair-obj <geometry.obj>` on
 the resulting OBJ. The test reads all available `WalkwayStairs15` placements,
-checks that `human@1.1.0` connects each one's landings at both isolated and
-broad scene resolutions, and confirms that the legacy 18-unit profile splits
-each one. The ordinary local test run uses
+checks that the fixed human settings connect each one's landings at
+both isolated and broad scene resolutions. The ordinary local test run uses
 `output/riverwood03-recast-repro/geometry.obj` when present. CI can run the
 same test when a lawfully
 supplied local export is available; no extracted game geometry is stored in

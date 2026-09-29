@@ -69,7 +69,7 @@ namespace navmesh::core
         if (!scene.HasCompleteTriangleProvenance()) throw std::invalid_argument("Recast requires complete triangle provenance");
         if (profile.agentRadius < 0 || profile.agentHeight <= 0 || profile.stepHeight < 0
             || profile.maxSlopeDegrees < 0 || profile.maxSlopeDegrees >= 90)
-            throw std::invalid_argument("Invalid navigation profile for Recast");
+            throw std::invalid_argument("Invalid navigation settings for Recast");
         CandidateNavMesh result;
         result.profile = profile;
         result.exits = std::move(exits);
