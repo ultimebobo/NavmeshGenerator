@@ -665,7 +665,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     std::optional<navmesh::core::CandidateNavMesh> candidate;
     if (options.generateCandidate) {
         const auto profile = navmesh::core::FindNavigationProfile(options.navigationProfile);
-        if (!profile) { std::cerr << "Unknown navigation profile '" << options.navigationProfile << "'. Available: human@1.0.0, small@1.0.0.\n"; return 1; }
+        if (!profile) { std::cerr << "Unknown navigation profile '" << options.navigationProfile << "'. Available: human@1.1.0, human@1.0.0, small@1.0.0.\n"; return 1; }
         std::vector<navmesh::core::CandidateExit> exits;
         std::optional<navmesh::core::AABB> candidateBounds;
         for (const auto& sceneCell : sceneCells) {

@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <source_location>
+#include <sstream>
 #include <string_view>
 #include <vector>
 #include <tuple>
@@ -650,7 +651,8 @@ namespace
         scene.mesh.vertices = {{0,0,0},{512,0,0},{512,512,0},{0,512,0}};
         scene.mesh.triangles = {{{0,1,2}},{{0,2,3}}};
         scene.triangleProvenance = {{0,0,{}},{0,1,{}}};
-        const auto profile = *FindNavigationProfile("human@1.0.0");
+        const auto profile = *FindNavigationProfile("human@1.1.0");
+        Require(profile.stepHeight == 28.0F && FindNavigationProfile("human@1.0.0")->stepHeight == 18.0F);
         const CandidateGenerator& generator = RecastCandidateGenerator{};
         const auto generated = generator.Generate(scene,profile,std::nullopt,{});
         Require(!generated.mesh.polygons.empty());
@@ -665,6 +667,69 @@ namespace
         const auto exported = WriteCombinedGlb(root / "scene.glb",scene,{}, {},metadata,options);
         Require(exported.triangles == generated.mesh.polygons.size());
     }
+    bool TestLocalStairCollision(const std::filesystem::path& geometryObj, const std::string& groupName)
+    {
+        using namespace navmesh::core;
+        Scene scene;
+        scene.geometrySources.push_back({ .sourceType = GeometrySourceType::Collision, .confidence = 1.0F,
+            .reference = { "Local.esm", 0x200, "REFR" } });
+        std::ifstream input(geometryObj);
+        Require(input.is_open());
+        bool selected{};
+        std::string line;
+        while (std::getline(input,line)) {
+            if (line.starts_with("v ")) {
+                Vec3 point;
+                std::istringstream values(line.substr(2));
+                Require(static_cast<bool>(values >> point.x >> point.y >> point.z));
+                scene.mesh.vertices.push_back(point);
+            } else if (line.starts_with("g ")) {
+                selected = line == "g " + groupName;
+            } else if (selected && line.starts_with("f ")) {
+                unsigned a{},b{},c{};
+                std::istringstream values(line.substr(2));
+                Require(static_cast<bool>(values >> a >> b >> c) && a && b && c);
+                scene.mesh.triangles.push_back({{a-1,b-1,c-1}});
+                scene.triangleProvenance.push_back({0,scene.triangleProvenance.size(),{}});
+            }
+        }
+        if (scene.mesh.triangles.empty()) return false;
+        Require(scene.mesh.triangles.size() == 308);
+        const auto current = *FindNavigationProfile("human@1.1.0");
+        const auto legacy = *FindNavigationProfile("human@1.0.0");
+        const RecastCandidateGenerator generator;
+        const auto isolated = generator.Generate(scene,current,std::nullopt,{});
+        Require(isolated.topology.valid && isolated.regions.size() == 1);
+        const auto oldResult = generator.Generate(scene,legacy,std::nullopt,{});
+        Require(oldResult.topology.valid && oldResult.regions.size() > 1);
+
+        // Include the extracted scene envelope to reproduce its coarser grid.
+        {
+            const auto base = static_cast<std::uint32_t>(scene.mesh.vertices.size());
+            scene.mesh.vertices.insert(scene.mesh.vertices.end(),
+                {{20135.55F,-55045.95F,-1835.7F},{20139.55F,-55045.95F,-1835.7F},{20135.55F,-55041.95F,-1835.7F},
+                 {37318.176F,-32027.32F,10821.2F},{37322.176F,-32027.32F,10821.2F},{37318.176F,-32023.32F,10821.2F}});
+            scene.mesh.triangles.push_back({{base,base+1,base+2}});
+            scene.triangleProvenance.push_back({0,scene.triangleProvenance.size(),{}});
+            scene.mesh.triangles.push_back({{base+3,base+4,base+5}});
+            scene.triangleProvenance.push_back({0,scene.triangleProvenance.size(),{}});
+        }
+        const auto candidate = generator.Generate(scene,current,std::nullopt,{});
+        Require(candidate.topology.valid && candidate.regions.size() == 1);
+        const auto& vertices = candidate.mesh.vertices;
+        const auto [low,high] = std::minmax_element(vertices.begin(),vertices.end(),
+            [](Vec3 a, Vec3 b){ return a.z < b.z; });
+        Require(high->z - low->z > 220.0F);
+        return true;
+    }
+    void TestLocalStairs(const std::filesystem::path& geometryObj)
+    {
+        const std::array groups{
+            "REF_0002A749_BASE_0004D7C2", "REF_0004D7E2_BASE_0004D7C2", "REF_000538A7_BASE_0004D7C2"};
+        int found{};
+        for (const auto* group : groups) found += TestLocalStairCollision(geometryObj,group);
+        Require(found > 0);
+    }
 }
 
 int main(int argc, char** argv)
@@ -672,6 +737,7 @@ int main(int argc, char** argv)
     if (argc > 1 && std::string_view(argv[1]) == "--scene-only") { TestCombinedColorLayeredGlb(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--candidate-only") { TestCandidateGeneration(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--recast-only") { TestRecastSceneGeneration(); return 0; }
+    if (argc > 2 && std::string_view(argv[1]) == "--local-stair-obj") { TestLocalStairs(argv[2]); return 0; }
     TestResolvedLoadOrder();
     TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();
@@ -685,6 +751,8 @@ int main(int argc, char** argv)
     TestCombinedColorLayeredGlb();
     TestCandidateGeneration();
     TestRecastSceneGeneration();
+    if (std::filesystem::exists("output/riverwood03-recast-repro/geometry.obj"))
+        TestLocalStairs("output/riverwood03-recast-repro/geometry.obj");
     navmesh::core::Mesh mesh{ .vertices = { { -1.0F, 2.0F, 3.0F }, { 4.0F, -5.0F, 6.0F } } };
     const auto bounds = mesh.Bounds();
     assert(bounds.IsValid());

@@ -9,9 +9,25 @@ The Recast adapter consumes supported terrain and collision, converts Skyrim
 world Z-up to Recast Y-up, and runs Recast's voxel rasterization, walkability
 filters, radius erosion, monotone region partition, contour construction, and
 polygon mesh construction. It triangulates Recast polygons for the neutral
-candidate JSON/OBJ and combined GLB. The voxel cell size is at least 16 Skyrim
-units and increases for wide extracted areas so neither horizontal grid axis
-exceeds roughly 1024 columns. Vertical cell height is 4 world units.
+candidate JSON/OBJ and combined GLB. The horizontal voxel cell size is at least
+4 Skyrim units and increases for wide extracted areas so neither grid axis
+exceeds roughly 2048 columns. Vertical cell height is 2 world units. This
+resolves 12-unit stair treads in a single cell. A three-cell-wide footprint
+uses about 6-unit horizontal voxels, although collision extending outside
+those cells can make the extracted bounds and voxels larger. Larger extracted
+areas may still lose narrow stairs. The
+default `human@1.1.0` profile allows a 28-unit climb; `human@1.0.0` remains
+available with its original 18-unit climb for historical comparisons. A local
+Riverwood03 `WalkwayStairs15` collision sample has tread rises near 25 units.
+With the old climb, Recast split the isolated stair collision into five
+regions. The new profile joined it into one region, including when the test
+uses the wider extracted scene bounds. The slope and radius settings were
+unchanged: the walkable tread faces are flat and the normal radius fits. A
+full CLI rerun of Riverwood03 with one neighboring-cell ring found three
+placements of that stair model. With `human@1.0.0`, each placement's candidate
+polygons appeared in two connected regions. With `human@1.1.0`, polygons from
+all three placements joined one connected region. These are local game-data
+measurements; the source assets are not committed.
 
 Source-triangle provenance is recovered by the closest source height at each
 generated triangle's XY centroid. This is an approximate audit join after

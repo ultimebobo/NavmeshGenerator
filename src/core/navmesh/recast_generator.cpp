@@ -118,11 +118,11 @@ namespace navmesh::core
             for (int x=minX; x<=maxX; ++x) for (int y=minY; y<=maxY; ++y) sourceGrid[{x,y}].push_back(index);
         }
 
-        // Limit the grid to 1024 columns per axis for larger extracted areas.
-        // A single-cell run remains at 16 Skyrim units per voxel.
+        // Resolve narrow stair treads in one cell and the default neighboring
+        // cell ring while limiting wider areas to roughly 2048 columns per axis.
         const float width = bounds.max.x-bounds.min.x, depth = bounds.max.y-bounds.min.y;
-        const float cs = std::max({16.0F,width/1024.0F,depth/1024.0F});
-        const float ch = 4.0F;
+        const float cs = std::max({4.0F,width/2048.0F,depth/2048.0F});
+        const float ch = 2.0F;
         rcConfig config{};
         config.cs = cs; config.ch = ch;
         config.walkableSlopeAngle = profile.maxSlopeDegrees;

@@ -716,7 +716,8 @@ namespace navmesh::core
 {
     std::optional<NavigationProfile> FindNavigationProfile(const std::string& key)
     {
-        if (key == "human@1.0.0") return NavigationProfile{};
+        if (key == "human@1.1.0") return NavigationProfile{};
+        if (key == "human@1.0.0") return NavigationProfile{ .version = "1.0.0", .stepHeight = 18.0F };
         if (key == "small@1.0.0") return NavigationProfile{ .name = "small", .version = "1.0.0", .agentRadius = 8.0F,
             .agentHeight = 64.0F, .maxSlopeDegrees = 50.0F, .stepHeight = 12.0F, .clearance = 64.0F,
             .weldTolerance = 0.05F, .minimumRegionArea = 32.0F, .contourSimplificationTolerance = 0.05F };

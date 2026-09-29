@@ -11,7 +11,9 @@ namespace navmesh::app
     struct Options
     {
         std::filesystem::path plugin, data, loadOrder, mo2, modsDirectory, output{"."}, exportGeometry, exportAnalysis, exportScene;
-        std::string profile, cell, editorId, worldspace, geometryLayers{"navmesh,terrain,collision,render,diagnostics"}, outputDetail{"full"}, navigationProfile{"human@1.0.0"};
+        std::string profile, cell, editorId, worldspace, geometryLayers{"navmesh,terrain,collision,render,diagnostics"}, outputDetail{"full"};
+        /// Versioned Recast movement profile shared by CLI and Windows UI runs.
+        std::string navigationProfile{"human@1.1.0"};
         std::optional<std::int32_t> cellX, cellY;
         std::optional<std::uint32_t> cellFormId;
         bool listCells{}, diagnostics{}, terrainOnly{}, generateCandidate{};

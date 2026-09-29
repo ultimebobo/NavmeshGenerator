@@ -75,7 +75,11 @@ namespace
     std::string Text(HWND window, int id) { char value[4096]{}; GetWindowTextA(GetDlgItem(window, id), value, static_cast<int>(std::size(value))); return value; }
     std::string SelectedNavigationProfile(HWND window)
     {
-        return SendMessageA(GetDlgItem(window, NavigationProfileBox), CB_GETCURSEL, 0, 0) == 1 ? "small@1.0.0" : "human@1.0.0";
+        switch (SendMessageA(GetDlgItem(window, NavigationProfileBox), CB_GETCURSEL, 0, 0)) {
+        case 1: return "human@1.0.0";
+        case 2: return "small@1.0.0";
+        default: return "human@1.1.0";
+        }
     }
     std::string Trim(std::string value)
     {
@@ -252,9 +256,9 @@ namespace
             for (size_t i{}; i < Checks.size(); ++i) { auto check = CreateWindowA("BUTTON", Checks[i].label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 535 + static_cast<int>(i) * 125, 685, 104, 24, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(CheckBase + static_cast<int>(i))), nullptr, nullptr); Theme(check); Font(check, state->body); auto help = CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 640 + static_cast<int>(i) * 125, 685, 22, 22, window, nullptr, nullptr, nullptr); state->checkHelps[i] = help; AddTooltip(*state, help, Checks[i].hint); }
             state->profileLabel = Label(*state, "Navigation profile", 340, 722, 118);
             auto profileBox = CreateWindowA("COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 460, 715, 160, 150, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(NavigationProfileBox)), nullptr, nullptr);
-            Font(profileBox, state->body); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("human@1.0.0")); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("small@1.0.0"));
+            Font(profileBox, state->body); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("human@1.1.0")); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("human@1.0.0")); SendMessageA(profileBox, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("small@1.0.0"));
             state->profileHelp = CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 632, 718, 22, 22, window, nullptr, nullptr, nullptr);
-            AddTooltip(*state, state->profileHelp, "Versioned agent size, slope, step, clearance, and region settings for Recast candidate generation.");
+            AddTooltip(*state, state->profileHelp, "Versioned Recast agent settings. human@1.1.0 allows 28-unit stair steps; human@1.0.0 retains the older 18-unit climb.");
             state->progress = CreateWindowExA(0, PROGRESS_CLASSA, nullptr, WS_CHILD | WS_VISIBLE, 30, 772, 770, 20, window, nullptr, nullptr, nullptr); Theme(state->progress); SendMessageA(state->progress, PBM_SETRANGE32, 0, 100);
             state->percent = Label(*state, "0%", 815, 772, 90, state->label);
             state->status = CreateWindowA("STATIC", "Ready to analyze", WS_CHILD | WS_VISIBLE, 30, 801, 860, 22, window, nullptr, nullptr, nullptr); Font(state->status, state->body);
@@ -263,8 +267,8 @@ namespace
             auto run = CreateWindowA("BUTTON", "Run analysis", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 760, 840, 145, 38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(RunButton)), nullptr, nullptr); Font(run, state->body);
             for (size_t i{}; i < Fields.size(); ++i) SetText(window, FieldBase + static_cast<int>(i), ReadConfig(state->config, Fields[i].key, i == 6 ? "." : i == 15 ? "64" : i == 16 ? "32" : i == 17 ? "45" : i == 18 ? "1" : ""));
             for (size_t i{}; i < Checks.size(); ++i) SendMessageA(GetDlgItem(window, CheckBase + static_cast<int>(i)), BM_SETCHECK, ReadConfig(state->config, Checks[i].key) == "1" ? BST_CHECKED : BST_UNCHECKED, 0);
-            const auto savedProfile = ReadConfig(state->config, "navigation_profile", "human@1.0.0");
-            SendMessageA(profileBox, CB_SETCURSEL, savedProfile == "small@1.0.0" ? 1 : 0, 0);
+            const auto savedProfile = ReadConfig(state->config, "navigation_profile", "human@1.1.0");
+            SendMessageA(profileBox, CB_SETCURSEL, savedProfile == "small@1.0.0" ? 2 : savedProfile == "human@1.0.0" ? 1 : 0, 0);
             const auto target = std::clamp(std::stoi(ReadConfig(state->config, "target", "0")), 0, 2); SendMessageA(GetDlgItem(window, TargetBase + target), BM_SETCHECK, BST_CHECKED, 0);
             Layout(*state);
             return 0;

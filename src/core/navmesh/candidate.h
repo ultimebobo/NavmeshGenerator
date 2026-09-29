@@ -15,11 +15,12 @@ namespace navmesh::core
     struct NavigationProfile
     {
         std::string name{ "human" };
-        std::string version{ "1.0.0" };
+        std::string version{ "1.1.0" };
         float agentRadius{ 16.0F };
         float agentHeight{ 128.0F };
         float maxSlopeDegrees{ 45.0F };
-        float stepHeight{ 18.0F };
+        /// Maximum traversable step height in Skyrim world units.
+        float stepHeight{ 28.0F };
         float clearance{ 128.0F };
         float weldTolerance{ 0.05F };
         float minimumRegionArea{ 64.0F };
@@ -27,7 +28,7 @@ namespace navmesh::core
         std::string cellBorderPolicy{ "preserve_open_border" };
     };
 
-    /// Find a built-in profile by its `name@version` key.
+    /// Find a built-in profile by its `name@version` key, including legacy versions.
     /// @return The profile, or no value for an unknown name or version.
     [[nodiscard]] std::optional<NavigationProfile> FindNavigationProfile(const std::string& key);
 
