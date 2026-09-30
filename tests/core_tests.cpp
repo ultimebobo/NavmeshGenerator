@@ -657,6 +657,21 @@ namespace
         Require(generated.mesh.polygons.size() == 2);
         Require(generated.topology.valid);
         Require(generated.statistics.eligibleTriangles == 2);
+        Scene withIsland = scene;
+        withIsland.mesh.vertices.insert(withIsland.mesh.vertices.end(),
+            {{768,0,0},{832,0,0},{832,64,0},{768,64,0}});
+        withIsland.mesh.triangles.push_back({{4,5,6}});
+        withIsland.mesh.triangles.push_back({{4,6,7}});
+        withIsland.triangleProvenance.push_back({0,2,{}});
+        withIsland.triangleProvenance.push_back({0,3,{}});
+        NavigationProfile permissive = profile;
+        permissive.minimumRegionArea = 64.0F;
+        const auto withOrphan = generator.Generate(withIsland,permissive,std::nullopt,{});
+        const auto withoutIsland = generator.Generate(withIsland,profile,std::nullopt,{});
+        Require(withOrphan.topology.valid && withOrphan.regions.size() == 2);
+        Require(withOrphan.mesh.polygons.size() > generated.mesh.polygons.size());
+        Require(withoutIsland.topology.valid && withoutIsland.regions.size() == 1);
+        Require(withoutIsland.mesh.polygons.size() == generated.mesh.polygons.size());
         const auto root = std::filesystem::temp_directory_path() / "navmesh-recast-scene-test";
         std::filesystem::create_directories(root);
         Require(WriteCandidateJson(root / "candidate.json",generated,scene,"{}"));
@@ -688,6 +703,34 @@ namespace
         const auto [low,high] = std::minmax_element(stepped.mesh.vertices.begin(),stepped.mesh.vertices.end(),
             [](Vec3 a, Vec3 b){ return a.z < b.z; });
         Require(high->z-low->z > 200.0F);
+
+        Scene winding;
+        winding.geometrySources = scene.geometrySources;
+        for (std::uint32_t segment = 0; segment < 48; ++segment) {
+            const auto x = static_cast<float>(segment) * 32.0F;
+            const auto y = static_cast<float>((segment * 13) % 7) * 8.0F;
+            const auto nextY = static_cast<float>(((segment + 1) * 13) % 7) * 8.0F;
+            const auto base = static_cast<std::uint32_t>(winding.mesh.vertices.size());
+            winding.mesh.vertices.insert(winding.mesh.vertices.end(),
+                {{x,y,0},{x+32,nextY,0},{x+32,nextY+128,0},{x,y+128,0}});
+            winding.mesh.triangles.push_back({{base,base+1,base+2}});
+            winding.mesh.triangles.push_back({{base,base+2,base+3}});
+            winding.triangleProvenance.push_back({0,winding.triangleProvenance.size(),{}});
+            winding.triangleProvenance.push_back({0,winding.triangleProvenance.size(),{}});
+        }
+        const auto ribbon = generator.Generate(winding,profile,std::nullopt,{});
+        float worstQuality = 1.0F;
+        for (const auto& face : ribbon.mesh.polygons) {
+            const auto a = ribbon.mesh.vertices[face.vertices[0]];
+            const auto b = ribbon.mesh.vertices[face.vertices[1]];
+            const auto c = ribbon.mesh.vertices[face.vertices[2]];
+            const auto sq = [](Vec3 p,Vec3 q){ const auto dx=p.x-q.x,dy=p.y-q.y; return dx*dx+dy*dy; };
+            const auto cross = std::abs((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x));
+            worstQuality = std::min(worstQuality,cross*3.464F/(sq(a,b)+sq(b,c)+sq(c,a)));
+        }
+        Require(ribbon.topology.valid && ribbon.regions.size() == 1);
+        Require(ribbon.mesh.polygons.size() <= 40);
+        Require(worstQuality > 0.3F);
     }
     bool TestLocalStairCollision(const std::filesystem::path& geometryObj, const std::string& groupName)
     {

@@ -22,7 +22,8 @@ namespace navmesh::core
         float stepHeight{ 28.0F };
         float clearance{ 128.0F };
         float weldTolerance{ 0.05F };
-        float minimumRegionArea{ 64.0F };
+        /// Minimum area for a disconnected walkable island, in square Skyrim world units.
+        float minimumRegionArea{ 8172.0F };
         float contourSimplificationTolerance{ 0.05F };
         std::string cellBorderPolicy{ "preserve_open_border" };
     };
@@ -63,6 +64,8 @@ namespace navmesh::core
     struct CandidateNavMesh
     {
         NavigationProfile profile;
+        /// Recast region partition strategy used to build this candidate.
+        std::string partitioningAlgorithm{ "watershed" };
         NavMesh mesh;
         /// Primary input triangle for each output polygon, retained for simple source joins.
         std::vector<std::size_t> polygonSourceTriangles;

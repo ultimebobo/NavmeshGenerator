@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/navmesh/generator.h"
+
 #include <cstdint>
 #include <array>
 #include <filesystem>
@@ -15,6 +17,8 @@ namespace navmesh::app
         std::optional<std::int32_t> cellX, cellY;
         std::optional<std::uint32_t> cellFormId;
         bool listCells{}, diagnostics{}, terrainOnly{}, generateCandidate{};
+        /// Recast region strategy used for candidate generation; watershed is the default.
+        core::RegionPartitioningAlgorithm partitioningAlgorithm{ core::RegionPartitioningAlgorithm::Watershed };
         int neighboringCellRadius{};
         std::optional<std::array<float, 4>> sceneBounds;
         float surfaceSearchRadius{64.0F}, maxSupportDistance{32.0F}, maxSlope{45.0F};

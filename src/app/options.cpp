@@ -36,6 +36,13 @@ namespace navmesh::app
             else if (argument == "--surface-search-radius" && index + 1 < argc) options.surfaceSearchRadius = std::stof(argv[++index]);
             else if (argument == "--max-support-distance" && index + 1 < argc) options.maxSupportDistance = std::stof(argv[++index]);
             else if (argument == "--max-slope" && index + 1 < argc) options.maxSlope = std::stof(argv[++index]);
+            else if (argument == "--partitioning-algorithm" && index + 1 < argc) {
+                const std::string algorithm = argv[++index];
+                if (algorithm == "watershed") options.partitioningAlgorithm = core::RegionPartitioningAlgorithm::Watershed;
+                else if (algorithm == "monotone") options.partitioningAlgorithm = core::RegionPartitioningAlgorithm::Monotone;
+                else if (algorithm == "layers") options.partitioningAlgorithm = core::RegionPartitioningAlgorithm::Layers;
+                else throw std::invalid_argument("--partitioning-algorithm must be watershed, monotone, or layers");
+            }
             else if (argument == "--list-cells") options.listCells = true;
         }
         return options;

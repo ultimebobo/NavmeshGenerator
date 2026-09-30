@@ -30,6 +30,8 @@ namespace
     constexpr int FieldBase = 100;
     constexpr int CheckBase = 200;
     constexpr int TargetBase = 300;
+    constexpr int PartitioningAlgorithmControl = 400;
+    constexpr int PartitioningAlgorithmControlHeight = 100;
 
     struct Field { const char* key; const char* label; const char* hint; };
     constexpr std::array Fields{
@@ -62,6 +64,7 @@ namespace
 
     struct WindowState {
         HWND window{}, tooltip{}, progress{}, status{}, percent{}, title{}, subtitle{}, lookupLabel{};
+        HWND partitioningAlgorithmLabel{};
         std::array<HWND, Fields.size()> fieldLabels{}, fieldHelps{};
         std::array<HWND, 4> sectionLabels{};
         std::array<HWND, Checks.size()> checkHelps{};
@@ -137,6 +140,9 @@ namespace
             Move(state.fieldHelps[index], x + columnWidth - helpWidth, y + 21, helpWidth, helpWidth);
         }
         Move(state.lookupLabel, margin, 654, 120, 20);
+        Move(state.partitioningAlgorithmLabel, columns[1], 591, columnWidth - helpWidth - 8, 18);
+        Move(GetDlgItem(state.window, PartitioningAlgorithmControl), columns[1], 610,
+            columnWidth - helpWidth - 8, PartitioningAlgorithmControlHeight);
         const int selectionX = margin + 127;
         for (int index{}; index < 3; ++index) Move(GetDlgItem(state.window, TargetBase + index), selectionX + index * 125, 652, 116, 24);
         for (int index{}; index < static_cast<int>(Checks.size()); ++index) {
@@ -176,6 +182,10 @@ namespace
         result.diagnostics = SendMessageA(GetDlgItem(window, CheckBase + 1), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.terrainOnly = SendMessageA(GetDlgItem(window, CheckBase + 2), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.generateCandidate = SendMessageA(GetDlgItem(window, CheckBase + 3), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        const auto algorithm = static_cast<int>(SendMessageA(GetDlgItem(window, PartitioningAlgorithmControl), CB_GETCURSEL, 0, 0));
+        result.partitioningAlgorithm = algorithm == 1 ? navmesh::core::RegionPartitioningAlgorithm::Monotone
+            : algorithm == 2 ? navmesh::core::RegionPartitioningAlgorithm::Layers
+            : navmesh::core::RegionPartitioningAlgorithm::Watershed;
         return result;
     }
     void Save(HWND window)
@@ -183,6 +193,9 @@ namespace
         const auto path = State(window)->config.string();
         for (size_t i{}; i < Fields.size(); ++i) WritePrivateProfileStringA("options", Fields[i].key, Text(window, FieldBase + static_cast<int>(i)).c_str(), path.c_str());
         for (size_t i{}; i < Checks.size(); ++i) WritePrivateProfileStringA("options", Checks[i].key, SendMessageA(GetDlgItem(window, CheckBase + static_cast<int>(i)), BM_GETCHECK, 0, 0) == BST_CHECKED ? "1" : "0", path.c_str());
+        const auto algorithm = static_cast<int>(SendMessageA(GetDlgItem(window, PartitioningAlgorithmControl), CB_GETCURSEL, 0, 0));
+        const char* algorithmName = algorithm == 1 ? "monotone" : algorithm == 2 ? "layers" : "watershed";
+        WritePrivateProfileStringA("options", "partitioning_algorithm", algorithmName, path.c_str());
         for (int i{}; i != 3; ++i) if (SendMessageA(GetDlgItem(window, TargetBase + i), BM_GETCHECK, 0, 0) == BST_CHECKED) WritePrivateProfileStringA("options", "target", std::to_string(i).c_str(), path.c_str());
     }
     void Start(HWND window, bool listOnly)
@@ -236,6 +249,13 @@ namespace
             AddSection(*state, 3, "ANALYSIS THRESHOLDS", 511);
             for (int i{}; i < 3; ++i) AddField(*state, i + 15, columns[i], 534);
             AddField(*state, 18, columns[0], 591);
+            state->partitioningAlgorithmLabel = Label(*state, "Partitioning algorithm", columns[1], 591, 250);
+            auto algorithm = CreateWindowExA(WS_EX_CLIENTEDGE, "COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                columns[1], 610, 254, PartitioningAlgorithmControlHeight, window,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(PartitioningAlgorithmControl)), nullptr, nullptr);
+            Theme(algorithm); Font(algorithm, state->body);
+            for (const char* value : {"Watershed", "Monotone", "Layers"}) SendMessageA(algorithm, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value));
+            AddTooltip(*state, algorithm, "Recast region partitioning strategy used for candidate NAVM generation.");
             state->lookupLabel = CreateWindowA("STATIC", "LOOK UP CELL BY", WS_CHILD | WS_VISIBLE, 30, 654, 120, 20, window, nullptr, nullptr, nullptr); Font(state->lookupLabel, state->label);
             const char* targets[] = {"Form ID", "Editor ID", "Coordinates"};
             for (int i{}; i < 3; ++i) { auto button = CreateWindowA("BUTTON", targets[i], WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | (i == 0 ? WS_GROUP : 0), 157 + i * 125, 652, 116, 24, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(TargetBase + i)), nullptr, nullptr); Theme(button); Font(button, state->body); AddTooltip(*state, button, i == 0 ? "Select exactly one cell-lookup method." : i == 1 ? "Use this method to select a CELL by editor ID." : "Use this method to select an exterior CELL by X/Y coordinates."); }
@@ -248,6 +268,9 @@ namespace
             auto run = CreateWindowA("BUTTON", "Run analysis", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 760, 840, 145, 38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(RunButton)), nullptr, nullptr); Font(run, state->body);
             for (size_t i{}; i < Fields.size(); ++i) SetText(window, FieldBase + static_cast<int>(i), ReadConfig(state->config, Fields[i].key, i == 6 ? "." : i == 15 ? "64" : i == 16 ? "32" : i == 17 ? "45" : i == 18 ? "1" : ""));
             for (size_t i{}; i < Checks.size(); ++i) SendMessageA(GetDlgItem(window, CheckBase + static_cast<int>(i)), BM_SETCHECK, ReadConfig(state->config, Checks[i].key) == "1" ? BST_CHECKED : BST_UNCHECKED, 0);
+            const auto savedAlgorithm = ReadConfig(state->config, "partitioning_algorithm", "watershed");
+            const int algorithmIndex = savedAlgorithm == "monotone" ? 1 : savedAlgorithm == "layers" ? 2 : 0;
+            SendMessageA(GetDlgItem(window, PartitioningAlgorithmControl), CB_SETCURSEL, algorithmIndex, 0);
             const auto target = std::clamp(std::stoi(ReadConfig(state->config, "target", "0")), 0, 2); SendMessageA(GetDlgItem(window, TargetBase + target), BM_SETCHECK, BST_CHECKED, 0);
             Layout(*state);
             return 0;

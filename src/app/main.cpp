@@ -704,7 +704,8 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
         std::sort(exits.begin(),exits.end(),[](const auto& a, const auto& b){return a.referenceId < b.referenceId;});
         exits.erase(std::unique(exits.begin(),exits.end(),[](const auto& a, const auto& b){return a.referenceId == b.referenceId;}),exits.end());
         try {
-            candidate = navmesh::core::RecastCandidateGenerator{}.Generate(geometry.scene, navmesh::core::NavigationProfile{},candidateBounds,std::move(exits));
+            candidate = navmesh::core::RecastCandidateGenerator{}.Generate(geometry.scene, navmesh::core::NavigationProfile{},candidateBounds,
+                std::move(exits), options.partitioningAlgorithm);
         } catch (const std::exception& error) {
             std::cerr << "Candidate generation failed: " << error.what() << "\n";
             return 2;

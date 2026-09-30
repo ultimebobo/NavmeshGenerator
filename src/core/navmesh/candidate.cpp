@@ -1112,6 +1112,7 @@ namespace navmesh::core
         std::ofstream out(path,std::ios::binary|std::ios::trunc); if (!out) return false;
         const auto& p = candidate.profile;
         out << "{\n  \"schema\": \"navmesh-generator/candidate-navm\",\n  \"schema_version\": \"1.0.0\",\n  \"metadata\": " << metadataJson << ",\n";
+        out << std::format("  \"partitioning_algorithm\": \"{}\",\n", candidate.partitioningAlgorithm);
         out << std::format("  \"profile\": {{\"name\":\"{}\",\"agent_radius\":{},\"agent_height\":{},\"max_slope_degrees\":{},\"step_height\":{},\"clearance\":{},\"weld_tolerance\":{},\"minimum_region_area\":{},\"contour_simplification_tolerance\":{},\"cell_border_policy\":\"{}\"}},\n",
             p.name,p.agentRadius,p.agentHeight,p.maxSlopeDegrees,p.stepHeight,p.clearance,p.weldTolerance,p.minimumRegionArea,p.contourSimplificationTolerance,p.cellBorderPolicy);
         const auto& s = candidate.statistics;

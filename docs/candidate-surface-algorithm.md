@@ -7,24 +7,25 @@ polygon-based measurements and decisions below document the previous spike and
 remain useful as comparison evidence; they do not describe the active run path.
 The Recast adapter consumes supported terrain and collision, converts Skyrim
 world Z-up to Recast Y-up, and runs Recast's voxel rasterization, walkability
-filters, radius erosion, monotone region partition, contour construction, and
-polygon mesh construction. It triangulates Recast polygons for the neutral
-candidate JSON/OBJ and combined GLB. The horizontal voxel cell size is at least
-4 Skyrim units and increases for wide extracted areas so neither grid axis
-exceeds roughly 2048 columns. Vertical cell height is 2 world units. At the
-minimum cell size, a 12-unit stair tread spans three horizontal cells. A three-cell-wide footprint
-uses about 6-unit horizontal voxels, although collision extending outside
-those cells can make the extracted bounds and voxels larger. Larger extracted
-areas may still lose narrow stairs. The fixed human settings allow a 28-unit
-climb. Historical runs used an 18-unit climb for comparison. A local Riverwood03 `WalkwayStairs15` collision sample has tread rises near 25 units.
-Contour edges are no longer subdivided by a maximum edge length (`maxEdgeLen = 0`),
-and contour simplification allows 1.3 horizontal voxels of deviation. Monotone
-regions smaller than four times the profile's minimum region area are eligible
-for merging, measured in horizontal voxel cells. The 4-unit minimum cell size
-is retained to resolve narrow treads; raising it would also reduce precision and
-can remove narrow walkable surfaces during radius erosion. Long contour edges
-can produce thin triangles on irregular boundaries, so scene exports still need
-inspection.
+filters, radius erosion, configurable region partitioning, contour construction,
+and polygon mesh construction. Region partitioning defaults to watershed; the
+CLI and Windows UI also expose monotone and layer partitioning. The selected
+strategy is recorded in `candidate-navm.json`. It triangulates Recast polygons for the neutral
+candidate JSON/OBJ and combined GLB. Horizontal voxel size grows with the
+extracted area to limit grid dimensions. Finer voxels resolve narrow stair treads,
+while larger extracted areas can lose them. The human profile supplies the
+traversable climb and other movement limits. Contour edges are not subdivided
+by a maximum length. Contours allow two horizontal voxels of simplification
+error, and Recast emits triangles directly for the neutral mesh. Disconnected
+Regions below the profile's minimum area are removed. Watershed and monotone
+partitioning can merge small adjacent regions; layer partitioning does not use
+the merge threshold. Recast converts the area thresholds to horizontal voxel
+cells. This filters small orphan surfaces before polygon construction.
+Long contour edges can still produce thin triangles on irregular boundaries,
+so scene exports need inspection. On a synthetic jagged corridor, these settings
+produced 39 triangles instead of 50 with the 1.3-voxel, six-vertex-polygon
+configuration; the worst normalized triangle quality rose from 0.16 to 0.42.
+This comparison is a geometry fixture, not a claim about every game scene.
 
 A synthetic 16-step straight staircase with 12-unit
 treads and 24-unit rises produces one connected region and two output triangles
@@ -38,7 +39,7 @@ uses the wider extracted scene bounds. The slope and radius settings were
 unchanged: the walkable tread faces are flat and the normal radius fits. A
 full CLI rerun of Riverwood03 with one neighboring-cell ring found three
 placements of that stair model. With the historical 18-unit climb, each placement's candidate polygons
-appeared in two connected regions. With the current 28-unit climb, polygons
+appeared in two connected regions. With the tested 28-unit climb, polygons
 from all three placements joined one connected region. These are local game-data
 measurements; the source assets are not committed.
 
@@ -148,8 +149,8 @@ exits before filtering regions. A door anchors only a nearby polygon on the
 same vertical level. A region also survives when it reaches any exterior cell
 grid border, including a triangle that crosses the border without an edge
 lying exactly on it. Substantial collision regions also survive when their
-walkable area is at least the larger of 16,384 square world units or 64 squared
-agent radii. They carry a warning because a route to a door or border has not
+walkable area exceeds the generator's standalone area threshold, which scales
+with the agent radius. They carry a warning because a route to a door or border has not
 been established. Smaller isolated regions are removed and counted as
 `rejected_unreachable` or `rejected_small_region`. If there is no identified
 exit or reachable border, the largest connected region is retained for review

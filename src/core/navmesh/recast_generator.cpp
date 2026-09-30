@@ -64,7 +64,8 @@ namespace
 namespace navmesh::core
 {
     CandidateNavMesh RecastCandidateGenerator::Generate(const Scene& scene, const NavigationProfile& profile,
-        std::optional<AABB> cellBounds, std::vector<CandidateExit> exits) const
+        std::optional<AABB> cellBounds, std::vector<CandidateExit> exits,
+        RegionPartitioningAlgorithm partitioningAlgorithm) const
     {
         if (!scene.HasCompleteTriangleProvenance()) throw std::invalid_argument("Recast requires complete triangle provenance");
         if (profile.agentRadius < 0 || profile.agentHeight <= 0 || profile.stepHeight < 0
@@ -73,6 +74,12 @@ namespace navmesh::core
         CandidateNavMesh result;
         result.profile = profile;
         result.exits = std::move(exits);
+        switch (partitioningAlgorithm) {
+        case RegionPartitioningAlgorithm::Watershed: result.partitioningAlgorithm = "watershed"; break;
+        case RegionPartitioningAlgorithm::Monotone: result.partitioningAlgorithm = "monotone"; break;
+        case RegionPartitioningAlgorithm::Layers: result.partitioningAlgorithm = "layers"; break;
+        default: throw std::invalid_argument("Invalid Recast region partitioning algorithm");
+        }
         result.statistics.inputTriangles = scene.mesh.triangles.size();
 
         std::vector<float> vertices;
@@ -134,7 +141,7 @@ namespace navmesh::core
         config.minRegionArea = static_cast<int>(std::ceil(profile.minimumRegionArea/(cs*cs)));
         // Scale the merge threshold with the profile's physical minimum area.
         config.mergeRegionArea = static_cast<int>(std::ceil(4.0F*profile.minimumRegionArea/(cs*cs)));
-        config.maxVertsPerPoly = 6;
+        config.maxVertsPerPoly = 3;
         config.bmin[0] = bounds.min.x-cs*2; config.bmin[1] = bounds.min.z-ch*2; config.bmin[2] = bounds.min.y-cs*2;
         config.bmax[0] = bounds.max.x+cs*2; config.bmax[1] = bounds.max.z+profile.agentHeight+ch*2; config.bmax[2] = bounds.max.y+cs*2;
         rcCalcGridSize(config.bmin,config.bmax,config.cs,&config.width,&config.height);
@@ -155,7 +162,14 @@ namespace navmesh::core
         if (!compact || !rcBuildCompactHeightfield(&context,config.walkableHeight,config.walkableClimb,*heightfield,*compact))
             throw std::runtime_error("Recast compact heightfield failed");
         if (!rcErodeWalkableArea(&context,config.walkableRadius,*compact)) throw std::runtime_error("Recast radius erosion failed");
-        if (!rcBuildRegionsMonotone(&context,*compact,0,config.minRegionArea,config.mergeRegionArea))
+        if (partitioningAlgorithm == RegionPartitioningAlgorithm::Watershed && !rcBuildDistanceField(&context,*compact))
+            throw std::runtime_error("Recast distance field failed");
+        const bool regionsBuilt = partitioningAlgorithm == RegionPartitioningAlgorithm::Watershed
+            ? rcBuildRegions(&context,*compact,0,config.minRegionArea,config.mergeRegionArea)
+            : partitioningAlgorithm == RegionPartitioningAlgorithm::Monotone
+                ? rcBuildRegionsMonotone(&context,*compact,0,config.minRegionArea,config.mergeRegionArea)
+                : rcBuildLayerRegions(&context,*compact,0,config.minRegionArea);
+        if (!regionsBuilt)
             throw std::runtime_error("Recast region partition failed");
         RecastOwner<rcContourSet,rcFreeContourSet> contours(rcAllocContourSet(),rcFreeContourSet);
         if (!contours || !rcBuildContours(&context,*compact,config.maxSimplificationError,config.maxEdgeLen,*contours))
