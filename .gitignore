@@ -13,3 +13,5 @@ output/
 # files
 *.zip
 compile_commands.json
+__pycache__/
+*.py[cod]

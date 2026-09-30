@@ -1,4 +1,3 @@
-includes("lib/commonlibsse")
 includes("lib/nifly")
 
 -- set project constants
@@ -39,15 +38,6 @@ target("navmesh-offline")
     add_includedirs("src", "lib/nifly/external")
     add_packages("zlib")
     add_syslinks("comctl32", "user32", "gdi32", "uxtheme")
-
-target("navmesh-generator")
-    set_kind("binary")
-    set_default(false)
-    add_deps("navmesh-core")
-    add_files("src/plugin/**.cpp")
-    add_headerfiles("src/plugin/**.h")
-    add_includedirs("src")
-    set_pcxxheader("src/pch.h")
 
 target("navmesh-tests")
     set_kind("binary")

@@ -10,7 +10,7 @@ namespace navmesh::core
 {
     struct Reference {
         std::uint32_t id{}; std::uint32_t baseObjectId{}; std::string name; std::string recordType; std::string editorId; std::string modelPath; Vec3 position; Vec3 rotation; float scale{ 1.0F };
-        // Populated by resolved-load-order assembly. Legacy runtime extraction may leave these empty.
+        /// Winning record origins from resolved load order assembly.
         std::string sourcePlugin; std::string basePlugin; std::string baseRecordType;
         /// True when the winning placed-record header marks this reference initially disabled.
         bool initiallyDisabled{};

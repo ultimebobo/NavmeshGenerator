@@ -43,7 +43,6 @@ Its limitations are decisive for later work:
 - it uses visual NIF geometry, not authoritative Havok collision;
 - `LAND` terrain is absent, which means the ground is absent for exterior cells;
 - association classifications are diagnostic hypotheses, not repair instructions;
-- the existing `navmesh-generator` SKSE target is legacy/experimental and is outside the offline product path.
 
 ## Shared definitions of done
 

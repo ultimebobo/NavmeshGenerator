@@ -8,6 +8,8 @@ Run `navmesh-offline.exe` without arguments to open the Windows desktop UI. It e
 
 This project is an offline, read-only prototype for inspecting Skyrim plugin data without requiring an active Skyrim runtime or SKSE. The focus is on parsing plugin records directly, extracting cell and navmesh information from a plugin file, and turning that into a neutral geometry + navmesh model that can be analyzed and exported for inspection.
 
+The desktop build uses the Nifly and Recast Navigation submodules. Archived asset extraction uses the BSAFileExtractor submodule. The project has no runtime plugin target.
+
 ## What it currently does
 
 - Builds a neutral, CommonLib-free C++ core for geometry and navmesh data.

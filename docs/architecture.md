@@ -2,6 +2,8 @@
 
 This project is intentionally split into offline processing stages so the analysis logic stays independent from Skyrim runtime code.
 
+The build targets the offline Windows application, neutral core, and tests. Runtime game APIs are outside the processing pipeline.
+
 ## 1. Plugin parsing
 
 The parser layer is responsible for reading a Bethesda plugin file directly from disk.
