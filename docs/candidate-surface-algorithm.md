@@ -17,7 +17,7 @@ while larger extracted areas can lose them. The human profile supplies the
 traversable climb and other movement limits. Contour edges are not subdivided
 by a maximum length. Contours allow two horizontal voxels of simplification
 error, and Recast emits triangles directly for the neutral mesh. Disconnected
-Regions below the profile's minimum area are removed. Watershed and monotone
+regions below the profile's minimum area are removed. Watershed and monotone
 partitioning can merge small adjacent regions; layer partitioning does not use
 the merge threshold. Recast converts the area thresholds to horizontal voxel
 cells. This filters small orphan surfaces before polygon construction.
@@ -42,6 +42,16 @@ placements of that stair model. With the historical 18-unit climb, each placemen
 appeared in two connected regions. With the tested 28-unit climb, polygons
 from all three placements joined one connected region. These are local game-data
 measurements; the source assets are not committed.
+
+After polygon construction, the active generator keeps only connected components
+that reach an enabled placed DOOR or the outer border of the extracted exterior
+cell area. Door matching checks the closest point on a polygon at a compatible
+height. Border matching allows for the walkable inset created by agent-radius
+erosion. Unanchored components are removed from the candidate mesh, JSON, OBJ,
+and GLB; the statistics count their rejected polygons. An interior scene without
+a reachable door and an exterior scene without a reachable door or border yield
+an empty candidate and a warning. Entrance positions are shown as orange markers
+in the candidate GLB layer, including entrances that did not match a polygon.
 
 Source-triangle provenance is recovered by the closest source height at each
 generated triangle's XY centroid. This is an approximate audit join after
@@ -146,17 +156,13 @@ The candidate is reproducible for identical scene geometry, source order, and
 fixed settings. Triangle order from the resolved load order is part of the input.
 Placed, enabled DOOR references in the selected worldspace are identified as
 exits before filtering regions. A door anchors only a nearby polygon on the
-same vertical level. A region also survives when it reaches any exterior cell
-grid border, including a triangle that crosses the border without an edge
-lying exactly on it. Substantial collision regions also survive when their
-walkable area exceeds the generator's standalone area threshold, which scales
-with the agent radius. They carry a warning because a route to a door or border has not
-been established. Smaller isolated regions are removed and counted as
-`rejected_unreachable` or `rejected_small_region`. If there is no identified
-exit or reachable border, the largest connected region is retained for review
-and a warning is emitted. JSON records exits, their matched region, and each
-region's border/exit evidence. These are candidate reachability checks, not
-Bethesda door portal links.
+same vertical level. A region also survives when it reaches the extracted
+exterior cell grid border, including a triangle that crosses the border without
+an edge lying exactly on it. Other regions are removed and counted as
+`rejected_unreachable`. If no region reaches an entrance or border, the mesh is
+empty and a warning is emitted. JSON records exits, their matched region, and
+each surviving region's border/exit evidence. These are candidate reachability
+checks, not Bethesda door portal links.
 
 Only LAND and supported Havok collision are eligible by default. Render
 fallback remains diagnostic evidence and is never silently promoted to

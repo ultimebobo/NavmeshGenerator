@@ -734,6 +734,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     if (candidate) {
         sceneOptions.layers.push_back(navmesh::core::SceneLayer::CandidateNavmesh);
         sceneOptions.candidateNavmesh = &candidate->mesh;
+        sceneOptions.candidateEntrances = &candidate->exits;
     }
     if (options.sceneBounds) {
         const auto& bounds = *options.sceneBounds;

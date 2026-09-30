@@ -3,6 +3,7 @@
 #include "core/reproducibility/export_metadata.h"
 #include "core/scene/scene.h"
 #include "core/navmesh/types.h"
+#include "core/navmesh/candidate.h"
 
 #include <filesystem>
 #include <optional>
@@ -22,6 +23,9 @@ namespace navmesh::core
         std::optional<SceneBounds> bounds;
         bool detailedProvenance{ true };
         const NavMesh* candidateNavmesh{};
+        /// Enabled placed DOOR references to show in orange beside the candidate mesh.
+        /// Positions use Skyrim world coordinates; the caller retains ownership through export.
+        const std::vector<CandidateExit>* candidateEntrances{};
     };
     struct SceneExportResult { std::size_t objects{}; std::size_t triangles{}; std::size_t culledTriangles{}; };
 

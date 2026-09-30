@@ -653,7 +653,8 @@ namespace
         const NavigationProfile profile{};
         Require(profile.name == "human" && profile.stepHeight == 28.0F);
         const CandidateGenerator& generator = RecastCandidateGenerator{};
-        const auto generated = generator.Generate(scene,profile,std::nullopt,{});
+        const AABB cellBounds{.min={0,0,-100},.max={512,512,100}};
+        const auto generated = generator.Generate(scene,profile,cellBounds,{});
         Require(generated.mesh.polygons.size() == 2);
         Require(generated.topology.valid);
         Require(generated.statistics.eligibleTriangles == 2);
@@ -666,23 +667,36 @@ namespace
         withIsland.triangleProvenance.push_back({0,3,{}});
         NavigationProfile permissive = profile;
         permissive.minimumRegionArea = 64.0F;
-        const auto withOrphan = generator.Generate(withIsland,permissive,std::nullopt,{});
-        const auto withoutIsland = generator.Generate(withIsland,profile,std::nullopt,{});
-        Require(withOrphan.topology.valid && withOrphan.regions.size() == 2);
-        Require(withOrphan.mesh.polygons.size() > generated.mesh.polygons.size());
+        const auto withOrphan = generator.Generate(withIsland,permissive,cellBounds,{});
+        const auto withoutIsland = generator.Generate(withIsland,profile,cellBounds,{});
+        Require(withOrphan.topology.valid && withOrphan.regions.size() == 1);
+        Require(withOrphan.mesh.polygons.size() == generated.mesh.polygons.size());
+        Require(withOrphan.statistics.rejectedUnreachable > 0);
         Require(withoutIsland.topology.valid && withoutIsland.regions.size() == 1);
         Require(withoutIsland.mesh.polygons.size() == generated.mesh.polygons.size());
+        const auto doorLinked = generator.Generate(withIsland,permissive,cellBounds,
+            {{.referenceId=0x200,.position={800,32,0}}});
+        Require(doorLinked.topology.valid && doorLinked.regions.size() == 2);
+        Require(doorLinked.exits[0].region && !doorLinked.regions[*doorLinked.exits[0].region].reachesBorder);
+        Require(doorLinked.mesh.polygons.size() > generated.mesh.polygons.size());
+        const auto noAnchor = generator.Generate(scene,profile,std::nullopt,{});
+        Require(noAnchor.mesh.polygons.empty() && noAnchor.regions.empty()
+            && noAnchor.statistics.rejectedUnreachable > 0 && noAnchor.topology.valid);
         const auto root = std::filesystem::temp_directory_path() / "navmesh-recast-scene-test";
         std::filesystem::create_directories(root);
         Require(WriteCandidateJson(root / "candidate.json",generated,scene,"{}"));
         std::ifstream candidateJson(root / "candidate.json",std::ios::binary);
         const std::string candidateBytes(std::istreambuf_iterator<char>(candidateJson),{});
         Require(candidateBytes.contains("\"profile\": {\"name\":\"human\",\"agent_radius\":"));
-        SceneExportOptions options{ .layers = {SceneLayer::CandidateNavmesh}, .candidateNavmesh = &generated.mesh };
+        SceneExportOptions options{ .layers = {SceneLayer::CandidateNavmesh},
+            .candidateNavmesh = &doorLinked.mesh, .candidateEntrances = &doorLinked.exits };
         Cell cell{ .id = 0x100, .editorId = "Fixture" };
         const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
         const auto exported = WriteCombinedGlb(root / "scene.glb",scene,{}, {},metadata,options);
-        Require(exported.triangles == generated.mesh.polygons.size());
+        Require(exported.triangles == doorLinked.mesh.polygons.size()+4);
+        std::ifstream entranceGlb(root / "scene.glb",std::ios::binary);
+        const std::string entranceBytes(std::istreambuf_iterator<char>(entranceGlb),{});
+        Require(entranceBytes.contains("Entrance (orange)") && entranceBytes.contains("Entrance 00000200"));
 
         Scene stairs;
         stairs.geometrySources = scene.geometrySources;
@@ -697,7 +711,8 @@ namespace
             stairs.triangleProvenance.push_back({0,stairs.triangleProvenance.size(),{}});
             stairs.triangleProvenance.push_back({0,stairs.triangleProvenance.size(),{}});
         }
-        const auto stepped = generator.Generate(stairs,profile,std::nullopt,{});
+        const auto stepped = generator.Generate(stairs,profile,std::nullopt,
+            {{.referenceId=0x201,.position={12,48,0}}});
         Require(stepped.topology.valid && stepped.regions.size() == 1);
         Require(stepped.mesh.polygons.size() == 2);
         const auto [low,high] = std::minmax_element(stepped.mesh.vertices.begin(),stepped.mesh.vertices.end(),
@@ -718,7 +733,8 @@ namespace
             winding.triangleProvenance.push_back({0,winding.triangleProvenance.size(),{}});
             winding.triangleProvenance.push_back({0,winding.triangleProvenance.size(),{}});
         }
-        const auto ribbon = generator.Generate(winding,profile,std::nullopt,{});
+        const auto ribbon = generator.Generate(winding,profile,std::nullopt,
+            {{.referenceId=0x202,.position={16,64,0}}});
         float worstQuality = 1.0F;
         for (const auto& face : ribbon.mesh.polygons) {
             const auto a = ribbon.mesh.vertices[face.vertices[0]];
@@ -762,7 +778,8 @@ namespace
         Require(scene.mesh.triangles.size() == 308);
         const NavigationProfile current{};
         const RecastCandidateGenerator generator;
-        const auto isolated = generator.Generate(scene,current,std::nullopt,{});
+        const auto isolated = generator.Generate(scene,current,std::nullopt,
+            {{.referenceId=0x200,.position=scene.mesh.vertices.front()}});
         Require(isolated.topology.valid && isolated.regions.size() == 1);
 
         // Include the extracted scene envelope to reproduce its coarser grid.
@@ -776,7 +793,8 @@ namespace
             scene.mesh.triangles.push_back({{base+3,base+4,base+5}});
             scene.triangleProvenance.push_back({0,scene.triangleProvenance.size(),{}});
         }
-        const auto candidate = generator.Generate(scene,current,std::nullopt,{});
+        const auto candidate = generator.Generate(scene,current,std::nullopt,
+            {{.referenceId=0x200,.position=scene.mesh.vertices.front()}});
         Require(candidate.topology.valid && candidate.regions.size() == 1);
         const auto& vertices = candidate.mesh.vertices;
         const auto [low,high] = std::minmax_element(vertices.begin(),vertices.end(),

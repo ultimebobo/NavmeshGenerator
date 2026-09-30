@@ -10,6 +10,7 @@
 #include <memory>
 #include <queue>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace
@@ -33,6 +34,56 @@ namespace
         if (u < -0.01F || v < -0.01F || u+v > 1.01F) return false;
         height = u*a.z+v*b.z+(1-u-v)*c.z;
         return true;
+    }
+
+    [[nodiscard]] Vec3 ClosestPointOnTriangle(Vec3 point, Vec3 a, Vec3 b, Vec3 c)
+    {
+        float height{};
+        if (HeightAt(point,a,b,c,height)) return {point.x,point.y,height};
+        Vec3 closest{};
+        float best = std::numeric_limits<float>::max();
+        for (const auto [start,end] : {std::pair{a,b},std::pair{b,c},std::pair{c,a}}) {
+            const float dx=end.x-start.x, dy=end.y-start.y;
+            const float length=dx*dx+dy*dy;
+            const float t=length > 0 ? std::clamp(((point.x-start.x)*dx+(point.y-start.y)*dy)/length,0.0F,1.0F) : 0.0F;
+            const Vec3 projected=start+(end-start)*t;
+            const float distance=std::hypot(projected.x-point.x,projected.y-point.y);
+            if (distance < best) { best=distance; closest=projected; }
+        }
+        return closest;
+    }
+
+    [[nodiscard]] bool TouchesBorder(Vec3 a, Vec3 b, Vec3 c, const AABB& bounds, float tolerance)
+    {
+        // Intersect the triangle with a narrow strip at each outer cell edge.
+        const auto intersectsStrip = [&](float left, float bottom, float right, float top) {
+            const std::array<Vec3,3> points{a,b,c};
+            const float centerX=(left+right)*0.5F, centerY=(bottom+top)*0.5F;
+            const float halfX=(right-left)*0.5F, halfY=(top-bottom)*0.5F;
+            for (const auto [nx,ny] : {std::pair{1.0F,0.0F},std::pair{0.0F,1.0F}}) {
+                const auto [low,high]=std::minmax({nx*a.x+ny*a.y,nx*b.x+ny*b.y,nx*c.x+ny*c.y});
+                const float center=nx*centerX+ny*centerY;
+                const float radius=std::abs(nx)*halfX+std::abs(ny)*halfY;
+                if (high < center-radius || low > center+radius) return false;
+            }
+            for (std::size_t side{}; side<3; ++side) {
+                const auto start=points[side], end=points[(side+1)%3];
+                const float nx=start.y-end.y, ny=end.x-start.x;
+                const auto [low,high]=std::minmax({nx*a.x+ny*a.y,nx*b.x+ny*b.y,nx*c.x+ny*c.y});
+                const float center=nx*centerX+ny*centerY;
+                const float radius=std::abs(nx)*halfX+std::abs(ny)*halfY;
+                if (high < center-radius || low > center+radius) return false;
+            }
+            return true;
+        };
+        return intersectsStrip(bounds.min.x-tolerance,bounds.min.y-tolerance,
+                bounds.min.x+tolerance,bounds.max.y+tolerance)
+            || intersectsStrip(bounds.max.x-tolerance,bounds.min.y-tolerance,
+                bounds.max.x+tolerance,bounds.max.y+tolerance)
+            || intersectsStrip(bounds.min.x-tolerance,bounds.min.y-tolerance,
+                bounds.max.x+tolerance,bounds.min.y+tolerance)
+            || intersectsStrip(bounds.min.x-tolerance,bounds.max.y-tolerance,
+                bounds.max.x+tolerance,bounds.max.y+tolerance);
     }
 
     using SourceGrid = std::map<std::pair<int,int>,std::vector<std::size_t>>;
@@ -137,7 +188,7 @@ namespace navmesh::core
         config.walkableClimb = static_cast<int>(std::floor(profile.stepHeight/ch));
         config.walkableRadius = static_cast<int>(std::ceil(profile.agentRadius/cs));
         config.maxEdgeLen = 0;
-        config.maxSimplificationError = 1.3F;
+        config.maxSimplificationError = 2.0F;
         config.minRegionArea = static_cast<int>(std::ceil(profile.minimumRegionArea/(cs*cs)));
         // Scale the merge threshold with the profile's physical minimum area.
         config.mergeRegionArea = static_cast<int>(std::ceil(4.0F*profile.minimumRegionArea/(cs*cs)));
@@ -244,12 +295,7 @@ namespace navmesh::core
                 for (auto neighbor : face.neighbors) if (neighbor != NoNeighbor && !seen[neighbor]) {
                     seen[neighbor]=true; pending.push(neighbor);
                 }
-                if (cellBounds) for (auto vertex : face.vertices) {
-                    const auto p=result.mesh.vertices[vertex];
-                    if (std::abs(p.x-cellBounds->min.x)<=cs*2 || std::abs(p.x-cellBounds->max.x)<=cs*2
-                        || std::abs(p.y-cellBounds->min.y)<=cs*2 || std::abs(p.y-cellBounds->max.y)<=cs*2)
-                        region.reachesBorder=true;
-                }
+                if (cellBounds && TouchesBorder(a,b,c,*cellBounds,profile.agentRadius+cs*2)) region.reachesBorder=true;
             }
             std::sort(region.sourceTriangles.begin(),region.sourceTriangles.end());
             region.sourceTriangles.erase(std::unique(region.sourceTriangles.begin(),region.sourceTriangles.end()),region.sourceTriangles.end());
@@ -261,8 +307,8 @@ namespace navmesh::core
             float best = std::numeric_limits<float>::max();
             for (const auto& region : result.regions) for (auto index : region.polygons) {
                 const auto& face = result.mesh.polygons[index];
-                const auto point = (result.mesh.vertices[face.vertices[0]]+result.mesh.vertices[face.vertices[1]]
-                    +result.mesh.vertices[face.vertices[2]])/3.0F;
+                const auto point = ClosestPointOnTriangle(door.position,result.mesh.vertices[face.vertices[0]],
+                    result.mesh.vertices[face.vertices[1]],result.mesh.vertices[face.vertices[2]]);
                 const float dx=point.x-door.position.x, dy=point.y-door.position.y, dz=point.z-door.position.z;
                 const float distance=std::hypot(dx,dy);
                 if (distance<best && distance<=profile.agentRadius*4+cs*2 && std::abs(dz)<=profile.stepHeight+ch*2) {
@@ -271,11 +317,60 @@ namespace navmesh::core
             }
             if (door.region) result.regions[*door.region].exitFormIds.push_back(door.referenceId);
         }
+        // Keep whole connected components so the exported mesh and region evidence
+        // describe only navigation that can reach a door or the exterior boundary.
+        std::vector<std::uint32_t> polygonRemap(result.mesh.polygons.size(),NoNeighbor);
+        std::vector<NavPolygon> keptPolygons;
+        std::vector<std::size_t> keptSources;
+        std::vector<std::vector<std::size_t>> keptContributors;
+        std::vector<CandidateRegion> keptRegions;
+        std::vector<std::uint32_t> regionRemap(result.regions.size(),NoNeighbor);
+        for (auto& region : result.regions) {
+            if (!region.reachesBorder && region.exitFormIds.empty()) {
+                result.statistics.rejectedUnreachable += region.polygons.size();
+                continue;
+            }
+            const auto oldRegionId = region.id;
+            region.id = static_cast<std::uint32_t>(keptRegions.size());
+            regionRemap[oldRegionId] = region.id;
+            for (auto& index : region.polygons) {
+                const auto old = index;
+                index = static_cast<std::uint32_t>(keptPolygons.size());
+                polygonRemap[old] = index;
+                keptPolygons.push_back(result.mesh.polygons[old]);
+                keptSources.push_back(result.polygonSourceTriangles[old]);
+                keptContributors.push_back(std::move(result.polygonContributingTriangles[old]));
+            }
+            keptRegions.push_back(std::move(region));
+        }
+        for (auto& face : keptPolygons) for (auto& neighbor : face.neighbors)
+            if (neighbor != NoNeighbor) neighbor = polygonRemap[neighbor];
+        result.mesh.polygons = std::move(keptPolygons);
+        result.polygonSourceTriangles = std::move(keptSources);
+        result.polygonContributingTriangles = std::move(keptContributors);
+        result.regions = std::move(keptRegions);
+        std::vector<std::uint32_t> vertexRemap(result.mesh.vertices.size(),NoNeighbor);
+        std::vector<Vec3> keptVertices;
+        for (auto& face : result.mesh.polygons) for (auto& index : face.vertices) {
+            if (vertexRemap[index] == NoNeighbor) {
+                vertexRemap[index] = static_cast<std::uint32_t>(keptVertices.size());
+                keptVertices.push_back(result.mesh.vertices[index]);
+            }
+            index = vertexRemap[index];
+        }
+        result.mesh.vertices = std::move(keptVertices);
+        for (auto& door : result.exits) if (door.region)
+            door.region = regionRemap[*door.region] == NoNeighbor ? std::nullopt
+                : std::optional<std::uint32_t>{regionRemap[*door.region]};
+        if (result.statistics.rejectedUnreachable)
+            result.warnings.push_back("Removed candidate polygons without a route to an entrance or exterior cell border.");
+        if (result.mesh.polygons.empty())
+            result.warnings.push_back("No candidate region reaches an entrance or exterior cell border.");
         result.statistics.polygonsBeforeSimplification = result.mesh.polygons.size();
         result.statistics.outputPolygons = result.mesh.polygons.size();
         result.warnings.push_back("Recast source-triangle provenance is matched by nearest surface after voxelization; generated geometry remains inspection-only.");
         result.warnings.push_back("Profile weld tolerance, contour tolerance, and cell-border policy are legacy polygon-generator settings and do not control Recast voxelization.");
-        if (result.mesh.polygons.empty()) result.warnings.push_back("Recast produced no walkable polygons for the supplied geometry and profile.");
+        if (result.mesh.polygons.empty()) result.warnings.push_back("No walkable polygons remain after Recast generation and reachability filtering.");
         result.topology = ValidateCandidateTopology(result);
         return result;
     }

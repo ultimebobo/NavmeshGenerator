@@ -38,8 +38,16 @@ namespace navmesh::core
     class RecastCandidateGenerator final : public CandidateGenerator
     {
     public:
-        /// Rasterize terrain and collision, partition regions, then contour and triangulate them.
-        /// @param partitioningAlgorithm Recast region strategy; defaults to watershed.
+        /** Rasterize authoritative Skyrim-world terrain and collision, then export only
+         * connected regions that reach a nearby door or the exterior cell bounds.
+         * An unanchored result has an empty mesh and a warning.
+         * @param scene Geometry with complete triangle provenance in Skyrim world coordinates.
+         * @param profile Agent dimensions and movement constraints in Skyrim world units.
+         * @param cellBounds Optional exterior area in Skyrim world coordinates; absent for interiors.
+         * @param exits Enabled placed DOOR references in Skyrim world coordinates.
+         * @param partitioningAlgorithm Recast region strategy; defaults to watershed.
+         * @return Candidate mesh and evidence; throws on invalid input or a Recast build failure.
+         */
         [[nodiscard]] CandidateNavMesh Generate(const Scene& scene, const NavigationProfile& profile,
             std::optional<AABB> cellBounds, std::vector<CandidateExit> exits,
             RegionPartitioningAlgorithm partitioningAlgorithm = RegionPartitioningAlgorithm::Watershed) const override;

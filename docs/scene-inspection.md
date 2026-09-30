@@ -18,6 +18,8 @@ manually joining the OBJ exports:
 | `Existing NAVM ...: out_of_coverage` / `Diagnostic: out_of_coverage` | blue | polygons outside extracted support coverage |
 | `Existing NAVM ...: ambiguous` / `Diagnostic: ambiguous` | violet | polygons with conflicting support evidence |
 | `Existing NAVM ...: unsupported` / `Diagnostic: unsupported` | dark gray | unsupported or unknown classification |
+| `Candidate NAVM` | blue-green | generated navigation connected to an entrance or exterior cell border |
+| `Entrance ...` | orange | enabled placed DOOR position; scene provenance records its reference ID and matched candidate region |
 
 Each analyzed NAVM is split into named objects by polygon classification under
 the `Existing NAVM` layer. The GLB contains the geometry and colors. Its adjacent

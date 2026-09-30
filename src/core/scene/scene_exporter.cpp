@@ -41,7 +41,7 @@ namespace
         if (layer == SceneLayer::Terrain) return 1; // brown/green
         if (layer == SceneLayer::Collision) return 2; // gray
         if (layer == SceneLayer::RenderFallback) return 3; // purple
-        if (layer == SceneLayer::CandidateNavmesh) return 12; // blue-green
+        if (layer == SceneLayer::CandidateNavmesh) return classification == "entrance" ? 13 : 12;
         if (classification.empty()) return 0; // unclassified NAVM
         if (classification == "supported") return 4;
         if (classification == "floating") return 5;
@@ -180,6 +180,17 @@ namespace navmesh::core
             }
             objects.push_back(std::move(object));
         }
+        if (options.candidateEntrances && Contains(options.layers, SceneLayer::CandidateNavmesh))
+            for (const auto& entrance : *options.candidateEntrances) {
+                if (options.bounds && !options.bounds->world.Contains(entrance.position)) continue;
+                Object object{SceneLayer::CandidateNavmesh,
+                    std::format("Entrance {:08X}",entrance.referenceId),
+                    std::format("{{\"kind\":\"entrance\",\"referenceFormId\":\"{:08X}\",\"region\":{}}}",
+                        entrance.referenceId, entrance.region ? std::to_string(*entrance.region) : "null"),
+                    "entrance"};
+                AppendMarker(object,{.position=entrance.position});
+                objects.push_back(std::move(object));
+            }
         if (Contains(options.layers, SceneLayer::DiagnosticMarkers)) {
             std::map<std::string, Object> markerObjects;
             for (const auto& marker : markers) {
@@ -208,8 +219,8 @@ namespace navmesh::core
             else provenanceObjects.push_back(std::format("{{\"name\":\"{}\",\"layer\":\"{}\",\"triangles\":{}}}", Escape(object.name), LayerName(object.layer), object.triangles.size()));
             result.triangles += object.triangles.size(); ++result.objects;
         }
-        const std::array<const char*, 13> materialNames{ "Unclassified NAVM (cyan)", "Terrain (brown-green)", "Collision (gray)", "Render fallback (purple)", "Supported (green)", "Floating (orange)", "Buried (red)", "Too steep (yellow)", "Blocked (magenta)", "Out of coverage (blue)", "Ambiguous (violet)", "Unsupported or unknown (dark gray)", "Candidate NAVM (blue-green)" };
-        const std::array<std::array<float, 4>, 13> colors{{ {{0.0F,0.85F,0.95F,0.70F}}, {{0.35F,0.48F,0.16F,1.0F}}, {{0.46F,0.46F,0.50F,1.0F}}, {{0.58F,0.25F,0.75F,0.80F}}, {{0.10F,0.70F,0.25F,0.75F}}, {{1.0F,0.50F,0.05F,0.75F}}, {{0.90F,0.10F,0.10F,0.75F}}, {{0.95F,0.82F,0.08F,0.75F}}, {{0.85F,0.05F,0.60F,0.75F}}, {{0.08F,0.35F,0.95F,0.75F}}, {{0.48F,0.20F,0.90F,0.75F}}, {{0.25F,0.28F,0.32F,0.75F}}, {{0.02F,0.78F,0.72F,0.8F}} }};
+        const std::array<const char*, 14> materialNames{ "Unclassified NAVM (cyan)", "Terrain (brown-green)", "Collision (gray)", "Render fallback (purple)", "Supported (green)", "Floating (orange)", "Buried (red)", "Too steep (yellow)", "Blocked (magenta)", "Out of coverage (blue)", "Ambiguous (violet)", "Unsupported or unknown (dark gray)", "Candidate NAVM (blue-green)", "Entrance (orange)" };
+        const std::array<std::array<float, 4>, 14> colors{{ {{0.0F,0.85F,0.95F,0.70F}}, {{0.35F,0.48F,0.16F,1.0F}}, {{0.46F,0.46F,0.50F,1.0F}}, {{0.58F,0.25F,0.75F,0.80F}}, {{0.10F,0.70F,0.25F,0.75F}}, {{1.0F,0.50F,0.05F,0.75F}}, {{0.90F,0.10F,0.10F,0.75F}}, {{0.95F,0.82F,0.08F,0.75F}}, {{0.85F,0.05F,0.60F,0.75F}}, {{0.08F,0.35F,0.95F,0.75F}}, {{0.48F,0.20F,0.90F,0.75F}}, {{0.25F,0.28F,0.32F,0.75F}}, {{0.02F,0.78F,0.72F,0.8F}}, {{1.0F,0.45F,0.0F,1.0F}} }};
         std::vector<std::string> materials; for (std::size_t i{}; i < materialNames.size(); ++i) materials.push_back(std::format("{{\"name\":\"{}\",\"doubleSided\":true,\"alphaMode\":\"{}\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":[{},{},{},{}],\"metallicFactor\":0,\"roughnessFactor\":0.82}}}}", materialNames[i], colors[i][3] < 1.0F ? "BLEND" : "OPAQUE", colors[i][0], colors[i][1], colors[i][2], colors[i][3]));
         const auto join = [](const auto& values) { std::ostringstream out; for (std::size_t i{}; i < values.size(); ++i) out << (i ? "," : "") << values[i]; return out.str(); };
         // Keep a stable, visible hierarchy even when a requested layer has no
