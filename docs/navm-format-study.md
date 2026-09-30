@@ -1,8 +1,8 @@
-# NAVM / NVNM format study (Milestone 2)
+# NAVM / NVNM format study
 
 ## Scope and evidence
 
-This is a reader study, not a writer specification.  It was checked against the
+The reader was checked against the
 repository's synthetic `NAVM` fixture (`TestLossAwareRecordReader`) and against
 two independently maintained descriptions of the runtime/plugin ecosystem:
 
@@ -24,16 +24,18 @@ with all offsets relative to the start of NVNM data:
 | Offset | Field | Status |
 | ---: | --- | --- |
 | `0x00` | little-endian NVNM version | Read; only version 12's prefix is marked supported. |
-| `0x04..0x0f` | NVNM prefix/header fields | Preserved verbatim; semantics intentionally not asserted. |
+| `0x04..0x07` | NVNM location field | Read as raw bytes and preserved by the writer. |
+| `0x08..0x0b` | Worldspace FormID | Preserved by the reader; the writer encodes the selected worldspace or zero for an interior. |
+| `0x0c..0x0f` | Exterior grid Y/X or interior CELL FormID | Preserved by the reader; the writer encodes the selected CELL. |
 | `0x10` | `uint32` vertex count | Bounds checked. |
 | `0x14` | `vertexCount` × `{ float x, float y, float z }` | Read as a 12-byte array. |
 | after vertices | `uint32` triangle count | Bounds checked. |
 | after triangle count | `triangleCount` × 16-byte triangle | Read/preserved.  The runtime definition supports three `uint16` vertex indices, three `uint16` neighbours, `uint16` triangle flags, and `uint16` traversal flags. |
 | remaining NVNM bytes | links, doors, cover/grid/other version-specific content | Kept verbatim and exposed as `trailingData`; not interpreted. |
 
-The reader does not reconstruct the trailing layout from guesses.  A future
-writer must either preserve the original NVNM byte stream exactly or extend this
-study with independently checked sample coverage for every modified section.
+The reader retains trailing bytes. The writer creates fresh external, door,
+cover, and grid sections for generated geometry; authored connection sections
+are not carried into the output.
 
 ## Preservation and failure policy
 
@@ -49,4 +51,28 @@ study with independently checked sample coverage for every modified section.
 - An unrecognised NVNM version is retained but reported as `UnsupportedVersion`;
   no geometry derived from its layout should be trusted.
 
-No plugin serialization is implemented in this milestone.
+## Guarded override writer
+
+The writer accepts a resolved load order and the selected cell's existing NAVMs.
+It copies their group placement and record headers, while leaving parent CELL and
+worldspace records in their source plugins. Its TES4 master list contains each
+NAVM source plugin and its dependencies in load order; record and group FormIDs
+are rebased into that table. It places generated world-space vertices and triangles in the
+largest original NAVM and writes empty geometry into the other NAVM overrides.
+Every override has empty external, door, and cover sections and a rebuilt spatial
+grid. The source plugin is never modified. The output is always an ESP; its ESL
+flag is set when the override-only records and master table fit the light format,
+including when a dependency is a regular ESP. All NAVMs are
+read back and compared with the serialized geometry.
+
+The generated candidate must be nonempty, topologically valid, and stay within
+the selected exterior cell when applicable. A cell with no existing NAVM or
+unresolved source dependencies is rejected. Additional authored
+NAVM subrecords are rejected because they may contain geometry references.
+Authored external, door, and cover connections are not regenerated, so replacing
+them can break navigation between NAVMs, doors, or cells. Independent-tool and
+disposable-profile game validation are required before an output plugin is used.
+Localized source plugins work because no localized parent records are copied.
+
+The generated trailing section layout follows
+[OpenMW's NAVM loader](https://gitlab.com/OpenMW/openmw/-/raw/master/components/esm4/loadnavm.cpp).

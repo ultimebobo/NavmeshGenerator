@@ -60,7 +60,7 @@ namespace navmesh::core
         /// Final candidate triangle count after interior simplification.
         std::size_t outputPolygons{};
     };
-    /// Inspection-only result; this does not encode or replace a plugin NAVM record.
+    /// Neutral candidate geometry and evidence; a separate guarded writer can encode eligible overrides.
     struct CandidateNavMesh
     {
         NavigationProfile profile;

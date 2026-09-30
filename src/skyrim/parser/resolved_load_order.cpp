@@ -127,14 +127,19 @@ namespace navmesh::skyrim::offline
         std::string headerError;
         if (!ParseSubrecords(*header.raw, header, &masters, headerError)) { diagnostics.push_back({ DiagnosticKind::MalformedInput, path.filename().string(), "TES4 " + headerError }); return false; }
         const auto plugin = path.filename().string();
-        const auto walk = [&](const auto& self, std::size_t begin, std::size_t end, std::uint32_t cell, std::uint32_t world, bool persistent, bool temporary) -> void {
+        const auto walk = [&](const auto& self, std::size_t begin, std::size_t end, std::uint32_t cell, std::uint32_t world, bool persistent, bool temporary,
+            std::vector<std::array<std::uint8_t, 24>> groups) -> void {
             for (auto p = begin; p + 24 <= end;) {
                 const auto kind = Text(b, p, 4); const auto size = U32(b, p + 4); const auto next = p + static_cast<std::size_t>(kind == "GRUP" ? size : 24ULL + size);
                 if ((kind == "GRUP" && size < 24) || next > end) { diagnostics.push_back({ DiagnosticKind::InvalidPlugin, plugin, "A record/group size exceeds its containing group." }); return; }
                 if (kind == "GRUP") {
                     const auto label = U32(b, p + 8); const auto groupType = U32(b, p + 12);
+                    std::array<std::uint8_t, 24> groupHeader{};
+                    std::copy_n(b.begin() + p, 24, groupHeader.begin());
+                    groups.push_back(groupHeader);
                     self(self, p + 24, next, groupType == 6 || groupType == 8 || groupType == 9 || groupType == 10 ? label : cell,
-                        groupType == 1 ? label : world, persistent || groupType == 8, temporary || groupType == 9);
+                        groupType == 1 ? label : world, persistent || groupType == 8, temporary || groupType == 9, groups);
+                    groups.pop_back();
                 } else {
                     const auto flags = U32(b, p + 8); const auto payload = p + 24;
                     ResolvedRecord r{ .type = kind, .formId = U32(b, p + 12), .winning = { plugin, U32(b, p + 12), { p, 24 } },
@@ -142,6 +147,7 @@ namespace navmesh::skyrim::offline
                         .persistent = persistent, .temporary = temporary };
                     const auto retain = IndexedRecordType(kind) && (includeReferencesAndNavmeshes || kind == "CELL" || kind == "WRLD");
                     if (retain) {
+                        if (kind == "CELL" || kind == "WRLD" || kind == "NAVM") r.groupHeaders = groups;
                         r.raw = PluginRecord{ .type = kind, .flags = flags, .headerRange = { p, 24 }, .filePayloadRange = { payload, size }, .compressed = (flags & 0x40000U) != 0 };
                         r.raw->filePayload.assign(b.begin() + payload, b.begin() + next);
                         std::string error;
@@ -158,7 +164,7 @@ namespace navmesh::skyrim::offline
                 p = next;
             }
         };
-        walk(walk, headerEnd, b.size(), 0, 0, false, false);
+        walk(walk, headerEnd, b.size(), 0, 0, false, false, {});
         return true;
     }
 

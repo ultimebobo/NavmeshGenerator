@@ -2,7 +2,7 @@
 
 This document defines the user-facing command contract. You select an existing Mod Organizer 2 (MO2) instance and one of its existing profiles. You do **not** create plugin manifests, copy assets, deploy mods, edit `plugins.txt`, or change MO2's virtual file system.
 
-All commands are read-only until milestone 10. The tool writes only beneath the `--output` directory supplied by the user.
+Analysis commands read the input profile without changing it. The guarded plugin-generation option writes a new plugin only beneath the `--output` directory supplied by the user.
 
 ## One input model for the whole product
 
@@ -45,6 +45,8 @@ The commands below are the target command contract. A command is introduced only
 For a current analysis run, `navmesh-counts.txt` records two counts: original
 navmesh polygons in the selected CELL and generated navmesh polygons. The CLI
 prints these counts, and the desktop UI shows the same summary after completion.
+
+Select a cell and use `--neighboring-cell-radius 0 --generate-plugin`. The generated ESP is placed under `--output` and every NAVM override is read back before success is reported. The desktop UI exposes **Write plugin**; the ESP is ESL-flagged when the patch fits the light format. Place it after its source ESPs. All existing NAVMs in the selected cell receive overrides: the generated geometry goes into the largest source NAVM and the rest become empty. Authored external, door, and cover navigation connections are not regenerated. Check the resulting pathing in independent tooling and on a disposable game profile before using the plugin.
 
 ## Immediate correction to milestone 1
 

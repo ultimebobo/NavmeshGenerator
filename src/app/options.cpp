@@ -33,6 +33,11 @@ namespace navmesh::app
             else if (argument == "--diagnostics") options.diagnostics = true;
             else if (argument == "--terrain-only") options.terrainOnly = true;
             else if (argument == "--generate-candidate") options.generateCandidate = true;
+            else if (argument == "--generate-plugin") {
+                if (index + 1 < argc && (std::string(argv[index + 1]) == "esp" || std::string(argv[index + 1]) == "esl"))
+                    throw std::invalid_argument("--generate-plugin selects ESL or ESP automatically; omit the format argument");
+                options.generatePlugin = true; options.generateCandidate = true;
+            }
             else if (argument == "--surface-search-radius" && index + 1 < argc) options.surfaceSearchRadius = std::stof(argv[++index]);
             else if (argument == "--max-support-distance" && index + 1 < argc) options.maxSupportDistance = std::stof(argv[++index]);
             else if (argument == "--max-slope" && index + 1 < argc) options.maxSlope = std::stof(argv[++index]);

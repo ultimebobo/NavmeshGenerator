@@ -17,6 +17,8 @@ namespace navmesh::app
         std::optional<std::int32_t> cellX, cellY;
         std::optional<std::uint32_t> cellFormId;
         bool listCells{}, diagnostics{}, terrainOnly{}, generateCandidate{};
+        /// Write generated navigation over the selected cell's existing NAVM records.
+        bool generatePlugin{};
         /// Recast region strategy used for candidate generation; watershed is the default.
         core::RegionPartitioningAlgorithm partitioningAlgorithm{ core::RegionPartitioningAlgorithm::Watershed };
         int neighboringCellRadius{};
@@ -24,5 +26,6 @@ namespace navmesh::app
         float surfaceSearchRadius{64.0F}, maxSupportDistance{32.0F}, maxSlope{45.0F};
     };
 
+    /// Parse CLI options; `--generate-plugin` selects the format automatically and rejects a format argument.
     [[nodiscard]] Options ParseCommandLine(int argc, char** argv);
 }

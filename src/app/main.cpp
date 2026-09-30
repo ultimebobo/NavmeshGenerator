@@ -2,6 +2,7 @@
 #include "app/run.h"
 #include "cli/json_report.h"
 #include "skyrim/parser/plugin_parser.h"
+#include "skyrim/parser/plugin_writer.h"
 #include "skyrim/mo2/mo2_importer.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
@@ -474,10 +475,15 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     const auto wasCancelled = [&] { return cancelled && cancelled(); };
     update(0, "Validating inputs");
     if (options.mo2.empty() && options.plugin.empty() && options.loadOrder.empty()) {
-        std::cerr << "Usage: navmesh-offline --mo2 <instance-or-portable-root> --profile <existing-profile> [--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex>] --output <dir>\nDeveloper/test override: --data <Data> --load-order <plugins.txt>.\n";
+        std::cerr << "Usage: navmesh-offline --mo2 <instance-or-portable-root> --profile <existing-profile> [--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex>] [--generate-plugin] --output <dir>\nDeveloper/test override: --data <Data> --load-order <plugins.txt>.\n";
         return 1;
     }
     if (!options.mo2.empty() && options.profile.empty()) { std::cerr << "--mo2 requires --profile naming an existing MO2 profile.\n"; return 1; }
+    if (options.generatePlugin && (options.listCells || (options.mo2.empty() && options.loadOrder.empty()) || options.neighboringCellRadius != 0)) {
+        std::cerr << "Plugin generation requires a resolved MO2/load-order input, one selected cell, and --neighboring-cell-radius 0.\n";
+        return 1;
+    }
+    if (options.generatePlugin) options.generateCandidate = true;
 
     std::optional<navmesh::skyrim::offline::ResolvedLoadOrder> resolved;
     std::optional<navmesh::skyrim::offline::Mo2ProfileInput> mo2Input;
@@ -748,6 +754,27 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     if (candidate && !candidate->topology.valid) {
         std::cerr << "Candidate topology validation failed; see candidate-navm.json.\n";
         return 2;
+    }
+    if (options.generatePlugin) {
+        std::vector<std::filesystem::path> inputPaths;
+        if (mo2Input) inputPaths = mo2Input->pluginPaths;
+        else for (auto path : navmesh::skyrim::offline::ReadLoadOrderManifest(options.loadOrder))
+            inputPaths.push_back(path.is_absolute() ? path : options.data / path);
+        std::filesystem::path pluginPath;
+        std::string error;
+        update(89, "Writing NAVM override plugin");
+        if (!navmesh::skyrim::offline::WriteNavmeshOverride(options.output, inputPaths, *resolved, *cell, *candidate, pluginPath, error)) {
+            std::cerr << "Plugin generation failed: " << error << "\n";
+            update(89, std::format("Plugin generation failed: {}", error));
+            return 2;
+        }
+        std::ifstream writtenPlugin(pluginPath, std::ios::binary);
+        std::array<unsigned char, 12> pluginHeader{};
+        writtenPlugin.read(reinterpret_cast<char*>(pluginHeader.data()), static_cast<std::streamsize>(pluginHeader.size()));
+        const bool eslFlagged = writtenPlugin && (pluginHeader[9] & 0x02U) != 0;
+        std::cout << "Generated NAVM override plugin: " << pluginPath.string()
+            << (eslFlagged ? " (ESL-flagged ESP)\n" : " (regular ESP)\n");
+        std::cerr << "Generated plugin does not regenerate authored NAVM connections; verify navigation before use.\n";
     }
     update(90, "Navmesh support analyzed");
     if (wasCancelled()) return 3;

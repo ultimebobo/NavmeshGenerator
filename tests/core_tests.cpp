@@ -3,6 +3,7 @@
 #include "core/reproducibility/export_metadata.h"
 #include "core/scene/scene.h"
 #include "skyrim/parser/plugin_parser.h"
+#include "skyrim/parser/plugin_writer.h"
 #include "skyrim/mo2/mo2_importer.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
@@ -93,6 +94,114 @@ namespace
         std::fstream badCompressedFile(root / "BadCompression.esp", std::ios::in | std::ios::out | std::ios::binary); badCompressedFile.seekp(24 + 8); badCompressedFile.write(reinterpret_cast<const char*>(&compressedFlag), sizeof(compressedFlag)); badCompressedFile.close();
         const auto badCompression = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "BadCompression.esp" } });
         Require(std::any_of(badCompression.diagnostics.begin(), badCompression.diagnostics.end(), [](const auto& d) { return d.kind == navmesh::skyrim::offline::DiagnosticKind::DecompressionFailure; }));
+    }
+    void TestNavmeshOverrideWriter()
+    {
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-override-writer-test";
+        std::filesystem::remove_all(root); std::filesystem::create_directories(root);
+        auto navmPayload = NavmPayload();
+        navmPayload.resize(navmPayload.size() - 9); // remove the fixture's unrelated ZZZZ subrecord
+        PutU32(navmPayload, 1); // one authored external connection
+        PutU32(navmPayload, 0); PutU32(navmPayload, 0x201); PutU16(navmPayload, 0);
+        PutU32(navmPayload, 1); // one authored door triangle
+        PutU16(navmPayload, 0); PutU32(navmPayload, 0); PutU32(navmPayload, 0x300);
+        PutU32(navmPayload, 1); PutU16(navmPayload, 0); // one authored cover triangle
+        PutU32(navmPayload, 1); // one spatial grid segment
+        for (int i{}; i < 8; ++i) PutFloat(navmPayload, 0.0F);
+        PutU32(navmPayload, 1); PutU16(navmPayload, 0);
+        // The NVNM subrecord's short length includes the trailing link and grid sections.
+        const auto nvnmSize = static_cast<std::uint16_t>(navmPayload[4] | navmPayload[5] << 8);
+        const auto completeSize = static_cast<std::uint16_t>(nvnmSize + 76);
+        navmPayload[4] = static_cast<std::uint8_t>(completeSize);
+        navmPayload[5] = static_cast<std::uint8_t>(completeSize >> 8);
+        std::vector<std::uint8_t> navmeshGroup; PutRecord(navmeshGroup, "NAVM", 0x200, navmPayload); PutRecord(navmeshGroup, "NAVM", 0x201, navmPayload);
+        std::vector<std::uint8_t> cellChildren; PutGroup(cellChildren, 0x100, 10, navmeshGroup);
+        std::vector<std::uint8_t> cells; PutRecord(cells, "CELL", 0x100, CellPayload("WriterCell")); PutGroup(cells, 0x100, 6, cellChildren);
+        std::vector<std::uint8_t> plugin; PutRecord(plugin, "TES4", 0, {}, 1); PutGroup(plugin, 0x4c4c4543, 0, cells);
+        const auto sourcePath = root / "Source.esm";
+        { std::ofstream file(sourcePath, std::ios::binary); file.write(reinterpret_cast<const char*>(plugin.data()), static_cast<std::streamsize>(plugin.size())); }
+        const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { sourcePath } });
+        Require(resolved.cells.size() == 1 && resolved.cells.front().navMeshes.size() == 2);
+        navmesh::core::CandidateNavMesh candidate;
+        candidate.mesh.vertices = { { 0, 0, 0 }, { 128, 0, 0 }, { 0, 128, 0 } };
+        navmesh::core::NavPolygon triangle; triangle.vertices = { 0, 1, 2 }; triangle.neighbors.fill(std::numeric_limits<std::uint32_t>::max());
+        candidate.mesh.polygons.push_back(triangle);
+        const auto eslFlagged = [](const std::filesystem::path& path) {
+            std::ifstream file(path, std::ios::binary);
+            std::array<std::uint8_t, 12> header{};
+            file.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+            Require(static_cast<bool>(file));
+            return header[8] == 0 && (header[9] & 0x02U) != 0;
+        };
+        std::filesystem::path target;
+        std::string error;
+        const bool written = navmesh::skyrim::offline::WriteNavmeshOverride(root / "master-output", { sourcePath }, resolved, resolved.cells.front(), candidate, target, error);
+        if (!written) std::fprintf(stderr, "Writer rejected fixture: %s\n", error.c_str());
+        Require(written && target.extension() == ".esp" && eslFlagged(target) && std::filesystem::exists(target));
+        const auto patched = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { sourcePath, target } });
+        Require(patched.cells.size() == 1 && patched.cells.front().navMeshes.size() == 2);
+        const auto& active = patched.cells.front().navMeshes;
+        Require(std::count_if(active.begin(), active.end(), [](const auto& mesh) { return mesh.vertices.size() == 3 && mesh.polygons.size() == 1 && mesh.vertices[1].x == 128; }) == 1);
+        Require(std::count_if(active.begin(), active.end(), [](const auto& mesh) { return mesh.vertices.empty() && mesh.polygons.empty(); }) == 1);
+        const auto* parent = patched.FindWinning(0x100);
+        Require(parent && parent->editorId == "WriterCell" && parent->winning.plugin == "Source.esm");
+        Require(!navmesh::skyrim::offline::WriteNavmeshOverride(root / "master-output", { sourcePath }, resolved, resolved.cells.front(), candidate, target, error));
+        std::ifstream unchanged(sourcePath, std::ios::binary); const std::vector<std::uint8_t> sourceBytes((std::istreambuf_iterator<char>(unchanged)), {});
+        Require(sourceBytes == plugin);
+        auto localized = plugin; localized[8] |= 0x80;
+        const auto localizedPath = root / "Localized.esm";
+        { std::ofstream file(localizedPath, std::ios::binary); file.write(reinterpret_cast<const char*>(localized.data()), static_cast<std::streamsize>(localized.size())); }
+        const auto localizedOrder = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { localizedPath } });
+        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "localized-output", { localizedPath }, localizedOrder,
+            localizedOrder.cells.front(), candidate, target, error) && target.extension() == ".esp" && eslFlagged(target));
+        auto regular = plugin; regular[8] = 0;
+        const auto regularPath = root / "Regular.esp";
+        { std::ofstream file(regularPath, std::ios::binary); file.write(reinterpret_cast<const char*>(regular.data()), static_cast<std::streamsize>(regular.size())); }
+        const auto regularOrder = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { regularPath } });
+        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "regular-output", { regularPath }, regularOrder,
+            regularOrder.cells.front(), candidate, target, error) && target.extension() == ".esp" && eslFlagged(target));
+
+        std::vector<std::uint8_t> patchHeader;
+        PutText(patchHeader, "MAST", { 'S', 'o', 'u', 'r', 'c', 'e', '.', 'e', 's', 'm', 0 });
+        std::vector<std::uint8_t> patchNavmesh; PutRecord(patchNavmesh, "NAVM", 0x01000300, navmPayload);
+        std::vector<std::uint8_t> patchChildren; PutGroup(patchChildren, 0x100, 10, patchNavmesh);
+        std::vector<std::uint8_t> patchCells; PutGroup(patchCells, 0x100, 6, patchChildren);
+        std::vector<std::uint8_t> patchPlugin; PutRecord(patchPlugin, "TES4", 0, patchHeader);
+        PutGroup(patchPlugin, 0x4c4c4543, 0, patchCells);
+        const auto patchPath = root / "Addition.esp";
+        { std::ofstream file(patchPath, std::ios::binary); file.write(reinterpret_cast<const char*>(patchPlugin.data()), static_cast<std::streamsize>(patchPlugin.size())); }
+        const auto mixedOrder = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { sourcePath, patchPath } });
+        Require(mixedOrder.cells.size() == 1 && mixedOrder.cells.front().navMeshes.size() == 3);
+        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "mixed-output", { sourcePath, patchPath }, mixedOrder,
+            mixedOrder.cells.front(), candidate, target, error) && target.extension() == ".esp" && eslFlagged(target));
+        const auto mixedPatched = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { sourcePath, patchPath, target } });
+        Require(mixedPatched.cells.size() == 1 && mixedPatched.cells.front().navMeshes.size() == 3);
+        Require(mixedPatched.FindWinning(0x01000300) && mixedPatched.FindWinning(0x01000300)->winning.plugin == "generated-navmesh.esp");
+
+        std::vector<std::string> manyMasters;
+        std::vector<std::filesystem::path> manyPaths;
+        for (int index{}; index < 253; ++index) {
+            const auto name = "Dependency" + std::to_string(index) + ".esm";
+            WritePlugin(root / name, {}, false, {});
+            manyMasters.push_back(name);
+            manyPaths.push_back(root / name);
+        }
+        std::vector<std::uint8_t> manyHeader;
+        for (const auto& name : manyMasters) {
+            std::vector<std::uint8_t> bytes(name.begin(), name.end()); bytes.push_back(0);
+            PutText(manyHeader, "MAST", bytes);
+        }
+        std::vector<std::uint8_t> manyNavm; PutRecord(manyNavm, "NAVM", 0xFD000200, navmPayload);
+        std::vector<std::uint8_t> manyChildren; PutGroup(manyChildren, 0xFD000100, 10, manyNavm);
+        std::vector<std::uint8_t> manyCells; PutRecord(manyCells, "CELL", 0xFD000100, CellPayload("ManyMastersCell")); PutGroup(manyCells, 0xFD000100, 6, manyChildren);
+        std::vector<std::uint8_t> manyPlugin; PutRecord(manyPlugin, "TES4", 0, manyHeader); PutGroup(manyPlugin, 0x4c4c4543, 0, manyCells);
+        const auto manyPath = root / "ManyMasters.esp";
+        { std::ofstream file(manyPath, std::ios::binary); file.write(reinterpret_cast<const char*>(manyPlugin.data()), static_cast<std::streamsize>(manyPlugin.size())); }
+        manyPaths.push_back(manyPath);
+        const auto manyOrder = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = manyPaths });
+        Require(manyOrder.cells.size() == 1 && manyOrder.cells.front().navMeshes.size() == 1);
+        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "full-slot-output", manyPaths, manyOrder,
+            manyOrder.cells.front(), candidate, target, error) && target.extension() == ".esp" && !eslFlagged(target));
     }
     void TestResolvedLoadOrder()
     {
@@ -822,6 +931,7 @@ int main(int argc, char** argv)
     TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();
     TestLossAwareRecordReader();
+    TestNavmeshOverrideWriter();
     TestExteriorLandTerrain();
     TestExportMetadata();
     TestOptionalLocalGameData();

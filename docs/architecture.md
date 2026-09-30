@@ -54,17 +54,22 @@ terrain and supported collision triangles, converts Skyrim Z-up world positions
 to Recast Y-up coordinates, rasterizes and filters walkable spans, erodes them by
 agent radius, then builds regions, contours, and a polygon mesh. Recast polygons
 are triangulated into the project's neutral model for JSON, OBJ, and the
-`Candidate NAVM` GLB layer. Generated geometry remains an inspection candidate;
-it is not encoded as a Bethesda NAVM record.
+`Candidate NAVM` GLB layer. Eligible generated geometry can enter the guarded
+plugin writer.
 
 The previous polygon-based `GenerateCandidate` function remains for historical
 fixture comparisons. Application runs use the Recast implementation.
 
-## 6. Future NAVM serialization
+## 6. NAVM override serialization
 
-The next milestone is not runtime integration but a future serialization layer that can convert neutral navmesh data back into a Bethesda-compatible record layout when the generation step is ready.
-
-This project intentionally keeps the serialization boundary separate from the geometry and analysis logic so automatic generation can be implemented as a later stage rather than a hidden side effect of the parser.
+The plugin writer is separate from candidate generation. It reuses the winning
+NAVM source plugin's master order and group hierarchy, writes an override for
+every existing NAVM in the selected cell, and verifies each with the direct
+reader. Generated geometry occupies the largest original NAVM; the others get
+empty geometry. Parent CELL and worldspace records remain in the load order.
+The writer always emits an ESP and sets its ESL flag when the override-only
+records and master table fit the light format. External, door, and cover
+navigation links are not regenerated.
 
 ## Design boundary
 
@@ -74,7 +79,6 @@ Skyrim plugin data
   -> offline extraction
   -> neutral model
   -> analysis and replaceable candidate generator (currently Recast)
-  -> repair planning
-  -> future NAVM serialization
+  -> guarded NAVM override serialization
 
 This keeps the codebase testable, portable, and independent from a live Skyrim process.

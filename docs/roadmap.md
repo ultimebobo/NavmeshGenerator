@@ -28,6 +28,13 @@ The neutral model is the boundary between Bethesda-specific readers/writers and 
 
 ## Current baseline (September 2026)
 
+The writer can now emit a new ESP, ESL-flagged when eligible, for a selected cell with existing
+NAVMs from its resolved source plugins. It preserves group placement, puts the
+generated geometry in the largest existing NAVM, empties the other NAVMs, and
+verifies all overrides by reading them back. Format selection is automatic.
+The broader repair-plan approval flow, authored navigation connections, and
+independent-tool/game validation in milestone 10 remain open.
+
 The repository has an experimental but useful read-only single-plugin pipeline:
 
 - direct parsing of a subset of `CELL`, `REFR`/`ACHR`, and `NAVM` records;
@@ -209,7 +216,7 @@ Accept when: fixture cases show minimal local changes, intentionally differing N
 
 Implement:
 
-- create a new ESP/ESL output only; never overwrite input files;
+- create a new output plugin only; never overwrite input files;
 - write required TES4 header/master dependencies and only changed winning records;
 - serialize verified NAVM records while preserving every required field and links that are not deliberately changed;
 - validate FormIDs, group placement, compression, record sizes, and master dependencies before output;

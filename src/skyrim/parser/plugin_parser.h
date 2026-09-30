@@ -31,6 +31,8 @@ namespace navmesh::skyrim::offline
         std::optional<std::uint32_t> cellFormId; std::optional<std::uint32_t> worldspaceFormId;
         std::vector<std::uint32_t> referencedFormIds;
         std::optional<std::array<std::int32_t, 2>> exteriorCoordinates; bool persistent{}; bool temporary{};
+        /// Source GRUP headers from outermost to innermost, retained for override placement.
+        std::vector<std::array<std::uint8_t, 24>> groupHeaders;
         // These model the roadmap record subset without discarding unrecognised fields.
         std::optional<PluginRecord> raw;
         std::optional<std::string> modelPath; std::optional<std::array<float, 6>> transform; std::optional<float> referenceScale;

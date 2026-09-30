@@ -59,7 +59,8 @@ namespace
         Field{"list", "List cells only", "Discover and export cells without extracting geometry or analysis."},
         Field{"diagnostics", "Write diagnostics HTML", "Create an HTML report with representative support examples."},
         Field{"terrain", "Terrain only", "Skip reference-model geometry and export decoded exterior terrain only."},
-        Field{"candidate", "Generate candidate NAVM", "Use Recast Navigation to rasterize terrain and supported collision, then export neutral JSON/OBJ and show generated navmeshes in the scene GLB. No plugin is written."},
+        Field{"candidate", "Generate candidate NAVM", "Use Recast Navigation to rasterize terrain and supported collision, then export candidate JSON/OBJ and show it in the scene GLB."},
+        Field{"generate_plugin", "Write plugin", "Write an ESP, ESL-flagged when eligible, after its source plugins. Authored navigation connections are not regenerated. Requires a resolved load order and Neighboring cells set to 0."},
     };
 
     struct WindowState {
@@ -182,6 +183,10 @@ namespace
         result.diagnostics = SendMessageA(GetDlgItem(window, CheckBase + 1), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.terrainOnly = SendMessageA(GetDlgItem(window, CheckBase + 2), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.generateCandidate = SendMessageA(GetDlgItem(window, CheckBase + 3), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        result.generatePlugin = !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 4), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        if (result.generatePlugin) result.generateCandidate = true;
+        if (result.generatePlugin && result.neighboringCellRadius != 0) throw std::runtime_error("Set Neighboring cells to 0 when writing a plugin.");
+        if (result.generatePlugin && result.mo2.empty() && result.loadOrder.empty()) throw std::runtime_error("Plugin generation needs an MO2 profile or developer load-order input.");
         const auto algorithm = static_cast<int>(SendMessageA(GetDlgItem(window, PartitioningAlgorithmControl), CB_GETCURSEL, 0, 0));
         result.partitioningAlgorithm = algorithm == 1 ? navmesh::core::RegionPartitioningAlgorithm::Monotone
             : algorithm == 2 ? navmesh::core::RegionPartitioningAlgorithm::Layers
@@ -312,7 +317,7 @@ namespace
             std::snprintf(elapsed, sizeof(elapsed), "%s in %.2f seconds.",
                 wParam == 0 ? "Completed" : wParam == 3 ? "Cancelled" : "Stopped", completed->elapsed);
             std::string status = elapsed;
-            if (wParam == 0 && !completed->summary.empty()) status += " " + completed->summary;
+            if ((wParam == 0 || completed->summary.starts_with("Plugin generation failed")) && !completed->summary.empty()) status += " " + completed->summary;
             SetWindowTextA(state->status, status.c_str());
             SendMessageA(state->progress, PBM_SETPOS, wParam == 3 ? SendMessageA(state->progress, PBM_GETPOS, 0, 0) : 100, 0);
             SetWindowTextA(state->percent, wParam == 3 ? (std::to_string(SendMessageA(state->progress, PBM_GETPOS, 0, 0)) + "%").c_str() : "100%");
