@@ -63,14 +63,20 @@ are rebased into that table. It places generated world-space vertices and triang
 largest original NAVM and writes empty geometry into the other NAVM overrides.
 Generated geometry has matched external and door links, an empty cover section,
 and a rebuilt spatial grid. Adjacent NAVM overrides retain their geometry and
-authored sections while appending reciprocal external portals. The source plugin
-is never modified. The output is always an ESP; its ESL
+authored sections while appending reciprocal external portals. An authored
+portal targeting a replaced secondary NAVM is redirected to the generated
+primary NAVM. Unrelated authored targets are rejected.
+Small authored border deviations are preserved at the matched portal endpoints,
+using the same border tolerance as candidate stitching; other candidate vertices
+must stay within the selected exterior CELL. The source plugin is never modified.
+The output is always an ESP; its ESL
 flag is set when the override-only records and master table fit the light format,
 including when a dependency is a regular ESP. All NAVMs are
 read back and compared with the serialized geometry.
 
 The generated candidate must be nonempty, topologically valid, and stay within
-the selected exterior cell when applicable. A cell with no existing NAVM or
+the selected exterior cell when applicable, apart from bounded extensions at
+matched authored border portal endpoints. A cell with no existing NAVM or
 unresolved source dependencies is rejected. Additional authored
 NAVM subrecords are rejected because they may contain geometry references.
 Unmatched authored external and door connections, cover data, NAVI, and REFR

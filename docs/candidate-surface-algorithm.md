@@ -50,8 +50,13 @@ height and records the matched candidate triangle. Border matching allows for
 the walkable inset created by agent-radius erosion. When a resolved load order
 provides an adjacent NAVM, the selected-cell candidate joins a near-coincident
 full boundary edge to the neighbor's border edge at a compatible height. The
-joined triangles and reciprocal target appear in `border_links`. Regions without
-a matched border portal or door are removed after stitching. Unanchored components are removed from the
+joined triangles and reciprocal target appear in `border_links`. Border proximity
+alone does not anchor a region. Authored edges may deviate slightly from the
+nominal CELL boundary within the shared border tolerance.
+Stitching preserves their exact endpoints, including bounded portal extensions
+beyond the selected CELL, so reciprocal edges remain coincident. Other candidate
+vertices stay inside the selected CELL. Regions without a matched border portal
+or door are removed after stitching. Unanchored components are removed from the
 candidate mesh, JSON, OBJ, and GLB; the statistics count their rejected polygons. An interior scene without
 a reachable door and an exterior scene without a reachable door or border yield
 an empty candidate and a warning. Entrance positions are shown as orange markers

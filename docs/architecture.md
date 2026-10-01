@@ -58,6 +58,9 @@ are triangulated into the project's neutral model for JSON, OBJ, and the
 `Candidate NAVM` GLB layer. Eligible generated geometry can enter the guarded
 plugin writer. The application then matches selected exterior boundary edges to
 adjacent NAVM edges in the resolved load order and records reciprocal targets.
+The shared authored-border tolerance allows small deviations from nominal CELL
+bounds only at matched portal endpoints. Both generation and serialization
+preserve those endpoints and keep other generated vertices inside the target.
 Regions without a matched border portal or door are removed from this candidate.
 
 The previous polygon-based `GenerateCandidate` function remains for historical
@@ -73,8 +76,10 @@ empty geometry. Parent CELL and worldspace records remain in the load order.
 The writer always emits an ESP and sets its ESL flag when the override-only
 records and master table fit the light format. Matched door triangles are
 serialized in the generated NAVM. Matched exterior borders add external portals
-to the generated NAVM and reciprocal portals to adjacent NAVM overrides. Other
-authored links, cover data, NAVI, and REFR XNDP references remain outside this
+to the generated NAVM and reciprocal portals to adjacent NAVM overrides. Authored
+portals targeting any replaced secondary NAVM are redirected to the generated
+primary NAVM. Adjacent geometry remains unchanged. Other authored links, cover
+data, NAVI, and REFR XNDP references remain outside this
 writer's supported remapping.
 
 ## Design boundary

@@ -10,6 +10,10 @@
 
 namespace navmesh::core
 {
+    /// Maximum perpendicular deviation of an authored portal edge from its exterior CELL border,
+    /// in Skyrim world units. Only matched portal endpoints may extend beyond candidate cell bounds.
+    inline constexpr float AuthoredBorderTolerance{4.0F};
+
     /// Fixed human movement and surface constraints used to build a candidate navmesh.
     /// Distances and areas use Skyrim world units; angles use degrees.
     struct NavigationProfile
@@ -119,8 +123,9 @@ namespace navmesh::core
      * @param cellBounds Selected exterior CELL in Skyrim world coordinates.
      * @param neighbors Existing NAVMs in adjacent cells of the same worldspace.
      * @return Number of reciprocal border portals added.
-     * @warning Only near-coincident full edges at compatible heights are joined. Regions
-     * without a matched border portal or door are removed. This modifies candidate
+     * @warning Only near-coincident full edges at compatible heights are joined. Authored
+     * border drift within AuthoredBorderTolerance is preserved at matched portal endpoints.
+     * Regions without a matched border portal or door are removed. This modifies candidate
      * geometry, region membership, source joins, and topology.
      * @throws std::invalid_argument when polygon source evidence is incomplete.
      */

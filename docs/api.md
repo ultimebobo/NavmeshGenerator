@@ -11,6 +11,8 @@ this reference.
 - `navmesh::core::CandidateGenerator`: interchangeable scene-to-candidate
   interface. `RecastCandidateGenerator` is the application implementation and
   links against the Recast Navigation submodule under `lib/recastnavigation`.
+- `navmesh::core::AuthoredBorderTolerance`: shared world-unit bound for authored
+  portal drift from exterior CELL borders, used by stitching and the guarded writer.
 - `navmesh::skyrim::offline`: plugin/load-order reading, guarded NAVM override
   writing, Mod Organizer 2 input, and terrain/model extraction.
 - `navmesh::analysis`: spatial queries and navmesh discrepancy analysis.

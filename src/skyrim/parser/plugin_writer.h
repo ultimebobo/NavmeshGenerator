@@ -21,6 +21,8 @@ namespace navmesh::skyrim::offline
      * @param resolved Winning records from the same input snapshot.
      * @param replacements Unique cells with nonempty, valid candidates. Border links
      * between rebuilt cells must target their generated primary NAVM triangles.
+     * Matched authored portal endpoints may extend beyond nominal CELL bounds by
+     * core::AuthoredBorderTolerance; other candidate vertices must stay inside.
      * @param writtenPath Receives the finalized ESP path on success.
      * @param error Receives a failure reason; no final ESP is published on failure.
      * @return True after every NAVM, door, and reciprocal border passes read-back.
@@ -37,6 +39,8 @@ namespace navmesh::skyrim::offline
      * @param resolved Winning records from that same load order.
      * @param cell Selected cell in Skyrim world coordinates.
      * @param candidate Valid generated mesh in Skyrim world coordinates.
+     * Only matched authored portal endpoints may exceed nominal exterior CELL bounds,
+     * within core::AuthoredBorderTolerance. Neighbor geometry is preserved.
      * @param writtenPath Receives the final plugin path after read-back verification.
      * @param error Human-readable reason when the source cannot be safely serialized.
      * @return True only after a successful write and independent reader round trip;

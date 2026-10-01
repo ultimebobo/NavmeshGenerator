@@ -8,6 +8,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <set>
 #include <optional>
 #include <tuple>
 
@@ -456,11 +457,28 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
         }
         if (cell.exteriorCoordinates)
         {
-            for (const auto &vertex : candidate.mesh.vertices)
+            // Authored portals may lie just beyond the nominal CELL boundary.
+            // Preserve their exact endpoints, but never relax bounds for other vertices.
+            std::set<std::uint32_t> portalVertices;
+            for (const auto &link : candidate.borderLinks)
             {
+                if (link.polygon < candidate.mesh.polygons.size() && link.edge < 3)
+                {
+                    const auto &polygon = candidate.mesh.polygons[link.polygon];
+                    portalVertices.insert(polygon.vertices[link.edge]);
+                    portalVertices.insert(polygon.vertices[(link.edge + 1) % 3]);
+                }
+            }
+            for (std::size_t index{}; index < candidate.mesh.vertices.size(); ++index)
+            {
+                const auto &vertex = candidate.mesh.vertices[index];
                 const auto [x, y] = *cell.exteriorCoordinates;
-                if (vertex.x < static_cast<float>(x) * 4096.0F || vertex.x > (static_cast<float>(x) + 1.0F) * 4096.0F ||
-                    vertex.y < static_cast<float>(y) * 4096.0F || vertex.y > (static_cast<float>(y) + 1.0F) * 4096.0F)
+                const auto tolerance =
+                    portalVertices.contains(static_cast<std::uint32_t>(index)) ? core::AuthoredBorderTolerance : 0.0F;
+                if (vertex.x < static_cast<float>(x) * 4096.0F - tolerance ||
+                    vertex.x > (static_cast<float>(x) + 1.0F) * 4096.0F + tolerance ||
+                    vertex.y < static_cast<float>(y) * 4096.0F - tolerance ||
+                    vertex.y > (static_cast<float>(y) + 1.0F) * 4096.0F + tolerance)
                 {
                     return fail("Generated NAVM extends outside the selected exterior CELL.");
                 }
@@ -570,10 +588,13 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             const auto borderXMax = ((*cell.exteriorCoordinates)[0] + 1) * 4096.0F;
             const auto borderY = (*cell.exteriorCoordinates)[1] * 4096.0F;
             const auto borderYMax = ((*cell.exteriorCoordinates)[1] + 1) * 4096.0F;
-            if (!((near({borderX, a.y, a.z}, a) && near({borderX, b.y, b.z}, b)) ||
-                  (near({borderXMax, a.y, a.z}, a) && near({borderXMax, b.y, b.z}, b)) ||
-                  (near({a.x, borderY, a.z}, a) && near({b.x, borderY, b.z}, b)) ||
-                  (near({a.x, borderYMax, a.z}, a) && near({b.x, borderYMax, b.z}, b))))
+            const auto onBorder = [](float first, float second, float boundary)
+            {
+                return std::abs(first - boundary) <= core::AuthoredBorderTolerance &&
+                       std::abs(second - boundary) <= core::AuthoredBorderTolerance;
+            };
+            if (!(onBorder(a.x, b.x, borderX) || onBorder(a.x, b.x, borderXMax) || onBorder(a.y, b.y, borderY) ||
+                  onBorder(a.y, b.y, borderYMax)))
             {
                 return fail("A border portal is not on the selected CELL boundary.");
             }
@@ -1048,7 +1069,13 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
                         }
                         const auto authoredTarget =
                             Get32(nvnm, trailing + 4 + face.neighbors[link.neighborEdge] * 10 + 4);
-                        if (authoredTarget != *primaryFormId)
+                        // Every existing NAVM in this CELL is replaced, including
+                        // secondary meshes emptied into the generated primary mesh.
+                        const auto targetsReplacement = std::any_of(
+                            replacement.cell->navMeshes.begin(), replacement.cell->navMeshes.end(),
+                            [&](const auto &original)
+                            { return RebaseResolvedFormId(resolved, masters, original.id) == authoredTarget; });
+                        if (!targetsReplacement)
                         {
                             return fail("A neighboring border edge is linked to another NAVM.");
                         }

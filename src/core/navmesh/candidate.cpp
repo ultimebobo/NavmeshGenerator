@@ -1311,7 +1311,7 @@ namespace navmesh::core
                             }
                             auto c = neighbor.vertices[triangle.vertices[otherSide]];
                             auto d = neighbor.vertices[triangle.vertices[(otherSide + 1) % 3]];
-                            if (border(c, d, 1.0F) != cellSide)
+                            if (border(c, d, AuthoredBorderTolerance) != cellSide)
                             {
                                 continue;
                             }
