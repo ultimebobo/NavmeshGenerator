@@ -48,6 +48,10 @@ their source cells across that worldspace. Every candidate is clipped to its
 own exterior CELL; geometry suppliers do not enlarge the generated area.
 This separation also applies to single-cell generation. Increasing the geometry
 halo is compatible with plugin writing.
+For single-cell inspection scenes, terrain and authored NAVM are limited to the
+scene neighborhood. Distant suppliers contribute only model triangles whose
+world-space bounds intersect that neighborhood, including display-only render
+geometry. Their source cells do not expand the scene's terrain or NAVM coverage.
 
 ## Outputs and failure policy
 

@@ -23,6 +23,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -410,36 +411,64 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
 
     // Neighbor cells supply world-space geometry; generation still targets the selected cell.
     std::vector<navmesh::core::Cell> sceneCells{*cell};
+    std::set<std::uint32_t> sceneCellIds{cell->id};
+    std::optional<navmesh::core::AABB> neighborhoodBounds;
     if (resolved)
     {
         const navmesh::skyrim::offline::CellImpactIndex index(*resolved);
+        const auto radius =
+            options.generateCandidate ? std::max(1, options.neighboringCellRadius) : options.neighboringCellRadius;
+        const auto neighbors = index.Neighbors(*cell, radius);
+        for (const auto *neighbor : neighbors)
+        {
+            sceneCellIds.insert(neighbor->id);
+        }
+        if (cell->exteriorCoordinates)
+        {
+            const auto [x, y] = *cell->exteriorCoordinates;
+            neighborhoodBounds =
+                navmesh::core::AABB{.min = {static_cast<float>((static_cast<double>(x) - radius) * 4096.0),
+                                            static_cast<float>((static_cast<double>(y) - radius) * 4096.0),
+                                            std::numeric_limits<float>::lowest()},
+                                    .max = {static_cast<float>((static_cast<double>(x) + radius + 1) * 4096.0),
+                                            static_cast<float>((static_cast<double>(y) + radius + 1) * 4096.0),
+                                            std::numeric_limits<float>::max()}};
+        }
+        // Geometry suppliers may lie beyond the scene neighborhood. Their model
+        // triangles can contribute, but their LAND and NAVM belong to other cells.
         sceneCells.clear();
-        for (const auto *source :
-             index.GeometryNeighbors(*cell, options.generateCandidate ? std::max(1, options.neighboringCellRadius)
-                                                                      : options.neighboringCellRadius))
+        for (const auto *source : options.terrainOnly ? neighbors : index.GeometryNeighbors(*cell, radius))
         {
             auto geometryCell = index.GeometryCell(*source);
-            geometryCell.navMeshes = source->navMeshes;
+            if (sceneCellIds.contains(source->id))
+            {
+                geometryCell.navMeshes = source->navMeshes;
+            }
             sceneCells.push_back(std::move(geometryCell));
         }
     }
     navmesh::skyrim::offline::GeometryExtraction geometry;
     for (std::size_t cellIndex{}; cellIndex < sceneCells.size(); ++cellIndex)
     {
-        auto extracted = options.terrainOnly
-                             ? navmesh::skyrim::offline::GeometryExtraction{}
-                             : navmesh::skyrim::offline::ExtractGeometry(
-                                   resolved ? options.data : options.plugin.parent_path(), sceneCells[cellIndex],
-                                   options.output / ".bsa-cache",
-                                   [&](std::size_t completed, std::size_t total)
-                                   {
-                                       const auto percent =
-                                           total == 0 ? 65 : 45 + static_cast<int>((20 * completed) / total);
-                                       update(percent, std::format("Extracting scene cell {}/{}: reference {} of {}",
-                                                                   cellIndex + 1, sceneCells.size(), completed, total));
-                                   },
-                                   wasCancelled, mo2Input ? &modelAssets : nullptr);
-        if (resolved)
+        auto extracted =
+            options.terrainOnly
+                ? navmesh::skyrim::offline::GeometryExtraction{}
+                : navmesh::skyrim::offline::ExtractGeometry(
+                      resolved ? options.data : options.plugin.parent_path(), sceneCells[cellIndex],
+                      options.output / ".bsa-cache",
+                      [&](std::size_t completed, std::size_t total)
+                      {
+                          const auto percent = total == 0 ? 65 : 45 + static_cast<int>((20 * completed) / total);
+                          update(percent, std::format("Extracting geometry source cell {}/{}: reference {} of {}",
+                                                      cellIndex + 1, sceneCells.size(), completed, total));
+                      },
+                      wasCancelled, mo2Input ? &modelAssets : nullptr);
+        const bool inNeighborhood = sceneCellIds.contains(sceneCells[cellIndex].id);
+        if (!inNeighborhood && neighborhoodBounds)
+        {
+            detail::CullGeometryToBounds(extracted, *neighborhoodBounds);
+        }
+        if (resolved && inNeighborhood)
         {
             auto terrain = navmesh::skyrim::offline::ExtractTerrain(*resolved, sceneCells[cellIndex]);
             navmesh::skyrim::offline::GeometryExtraction terrainGeometry;

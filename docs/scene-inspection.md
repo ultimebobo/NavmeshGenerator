@@ -39,7 +39,7 @@ archives. A CELL records the origin of each reference, but its NIF may be in
 another enabled mod. For an exterior structure whose reference origin falls in
 a neighboring CELL, use `--neighboring-cell-radius 1` in the CLI or set
 **Neighboring cells** to `1` in the Windows UI (the UI default). Set it to `0`
-for an exact single-CELL scene.
+for an exact single-CELL inspection without candidate generation.
 
 Placed references whose winning plugin record is initially disabled or deleted
 are omitted from collision and render geometry. They remain in `geometry.json`
@@ -79,8 +79,15 @@ navmesh-offline.exe ... --neighboring-cell-radius 1 `
   --output-detail summary
 ```
 
-`--neighboring-cell-radius` streams matching exterior cells around the selected
-cell into the combined scene. `--scene-bounds minX minY maxX maxY` uses the
+`--neighboring-cell-radius` selects the exterior scene neighborhood around the
+target. Terrain and authored NAVM come only from those cells. Model-bound and
+unknown-bound searches can examine distant geometry suppliers, but retain only
+their support and display triangles whose world-space bounds intersect the
+neighborhood; they do not add the supplier cells' terrain or NAVM. Persistent
+references are assigned by physical position. Terrain-only extraction visits
+only the neighborhood. Generation includes the adjacent geometry ring and
+keeps the candidate clipped to the target CELL.
+`--scene-bounds minX minY maxX maxY` uses the
 scene grid to cull geometry outside that world-space rectangle. `--geometry-layers`
 accepts comma-separated `navmesh`, `terrain`, `collision`, `render`, and
 `diagnostics`; `--output-detail summary` trims the scene provenance report to a

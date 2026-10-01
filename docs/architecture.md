@@ -94,7 +94,11 @@ This keeps the codebase testable, portable, and independent from a live Skyrim p
 `app::Run` is the common CLI and Windows entry point. It validates and resolves
 inputs, then dispatches a cell inspection or an affected-cell rebuild. The
 application helpers in `app/geometry_pipeline` compose extracted world-space
-geometry and its provenance. `app/batch_runner` owns batch orchestration,
+geometry and its provenance.
+Single-cell orchestration selects scene cells independently of conservative
+model suppliers; distant suppliers contribute intersecting model geometry while
+terrain and authored NAVM stay within the scene neighborhood.
+`app/batch_runner` owns batch orchestration,
 bounded geometry reuse, per-cell evidence, and combined writer dispatch.
 `cli/inspection_report` owns inspection OBJ, JSON, HTML, and console reporting;
 it consumes the runner's results without choosing generation policy.

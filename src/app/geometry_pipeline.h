@@ -17,7 +17,11 @@ namespace navmesh::app::detail
     void AppendGeometry(navmesh::skyrim::offline::GeometryExtraction &destination,
                         navmesh::skyrim::offline::GeometryExtraction &&source);
 
-    /// Retain valid support triangles whose world-space bounds intersect bounds; rebuild provenance and reference ranges in place.
+    /** Retain valid support and display triangles intersecting a Skyrim world-space AABB.
+     * Rebuild support reference ranges and both triangle-provenance arrays in place,
+     * preserving source-triangle identities. Coverage and extraction counters describe
+     * the attempted inputs, including geometry outside the bounds.
+     */
     void CullGeometryToBounds(navmesh::skyrim::offline::GeometryExtraction &geometry,
                               const navmesh::core::AABB &bounds);
 } // namespace navmesh::app::detail

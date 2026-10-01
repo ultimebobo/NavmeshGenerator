@@ -19,7 +19,8 @@ this reference.
 - `navmesh::app::detail::RunBatch`: affected-cell orchestration with bounded
   geometry reuse and combined plugin writer dispatch.
 - `navmesh::app::detail` geometry-pipeline helpers: world-space extraction
-  composition, bounds filtering, and analysis provenance joins.
+  composition, bounds filtering of support and display geometry, and analysis
+  provenance joins.
 - `navmesh::cli` inspection-report functions: inspection OBJ/JSON/HTML exports,
   cell and load-order listings, and console analysis summaries.
 - `navmesh::skyrim::offline::CellImpactIndex`: affected-cell discovery, historical

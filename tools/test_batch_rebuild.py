@@ -26,10 +26,10 @@ def land():
     return sub("VHGT", struct.pack("<f", 0) + bytes(33 * 33 + 3))
 
 
-def navm(x):
-    vertices = [(x * 4096, 0, 0), ((x + 1) * 4096, 0, 0),
-                ((x + 1) * 4096, 4096, 0), (x * 4096, 4096, 0)]
-    body = struct.pack("<IIIhhI", 12, 0, 0x400, 0, x, 4)
+def navm(x, y=0):
+    vertices = [(x * 4096, y * 4096, 0), ((x + 1) * 4096, y * 4096, 0),
+                ((x + 1) * 4096, (y + 1) * 4096, 0), (x * 4096, (y + 1) * 4096, 0)]
+    body = struct.pack("<IIIhhI", 12, 0, 0x400, y, x, 4)
     body += b"".join(struct.pack("<fff", *vertex) for vertex in vertices)
     body += struct.pack("<I", 2)
     body += struct.pack("<8H", 0, 1, 2, 65535, 65535, 1, 0, 0)
@@ -58,9 +58,10 @@ class BatchRebuild(unittest.TestCase):
         (self.root / "Patch.esp").write_bytes(record("TES4", 0, patch_header) + group(int.from_bytes(b"WRLD", "little"), 0, patch))
         (self.root / "plugins.txt").write_text("Baseline.esm\nPatch.esp\n")
 
-    def run_cli(self, *args, output="output", code=0):
+    def run_cli(self, *args, output="output", code=0, terrain_only=True):
         completed = subprocess.run([str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
-                                    "--output", str(self.root / output), "--terrain-only", *args],
+                                    "--output", str(self.root / output),
+                                    *(["--terrain-only"] if terrain_only else []), *args],
                                    capture_output=True, text=True, timeout=90)
         self.assertEqual(completed.returncode, code, completed.stdout + completed.stderr)
         return self.root / output
@@ -114,6 +115,45 @@ class BatchRebuild(unittest.TestCase):
         candidate = json.loads((output / "candidate-navm.json").read_text())
         self.assertGreater(len(candidate["polygons"]), 0)
         self.assertTrue(all(0 <= vertex[0] <= 4096 for vertex in candidate["vertices"]))
+
+    def test_scene_neighborhood_excludes_distant_geometry_supplier_cells(self):
+        # Distant references can supply intersecting models without adding their
+        # source CELL's terrain or authored navigation to the inspection scene.
+        coordinates = [(x, y) for x in range(-1, 2) for y in range(-1, 2)] + [(5, 0), (10, 0)]
+        cells = b""
+        for index, (x, y) in enumerate(coordinates):
+            cell = 0x100 + index
+            payload = sub("EDID", f"SceneCell{index}\0".encode()) + sub("XCLC", struct.pack("<ii", x, y))
+            children = record("LAND", 0x300 + index, land()) + record("NAVM", 0x200 + index, navm(x, y))
+            if index >= 9:
+                reference = sub("NAME", struct.pack("<I", 0x500 + index - 9))
+                reference += sub("DATA", struct.pack("<6f", x * 4096 + 100, 100, 0, 0, 0, 0))
+                children += record("REFR", 0x600 + index, reference)
+            cells += record("CELL", cell, payload) + group(cell, 6, group(cell, 9, children))
+        bounded = sub("MODL", b"Oversized.nif\0") + sub("OBND", struct.pack("<6h", -30000, -100, -100, 30000, 100, 100))
+        unbounded = sub("MODL", b"UnknownBounds.nif\0")
+        models = group(int.from_bytes(b"STAT", "little"), 0,
+                       record("STAT", 0x500, bounded) + record("STAT", 0x501, unbounded))
+        world = record("WRLD", 0x400, sub("EDID", b"SceneWorld\0")) + group(0x400, 1, cells)
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        (self.root / "Baseline.esm").write_bytes(record("TES4", 0, header, 1) + models
+                                               + group(int.from_bytes(b"WRLD", "little"), 0, world))
+        (self.root / "plugins.txt").write_text("Baseline.esm\n")
+        for terrain_only, radius, generating in [(False, 1, False), (True, 1, True),
+                                                (False, 0, False), (False, 0, True)]:
+            with self.subTest(terrain_only=terrain_only, radius=radius, generating=generating):
+                output = self.run_cli("--cell-formid", "104", "--neighboring-cell-radius", str(radius),
+                                      *(["--generate-candidate"] if generating else []),
+                                      output=f"scene-{terrain_only}-{radius}-{generating}", terrain_only=terrain_only)
+                report = json.loads((output / "report.json").read_text())
+                expected = set(range(9)) if radius or generating else {4}
+                self.assertEqual(report["metadata"]["source_coverage"]["terrain_land_decoded"], len(expected))
+                glb = (output / "scene.glb").read_bytes()
+                chunk_size = struct.unpack_from("<I", glb, 12)[0]
+                scene = json.loads(glb[20:20 + chunk_size])
+                names = [node["name"] for node in scene["nodes"]]
+                navmesh_ids = {name.split()[2].rstrip(":") for name in names if name.startswith("Existing NAVM ")}
+                self.assertEqual(navmesh_ids, {f"{0x200 + index:08X}" for index in expected})
 
 
 if __name__ == "__main__":

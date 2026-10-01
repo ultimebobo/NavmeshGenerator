@@ -232,6 +232,43 @@ namespace navmesh::app::detail
         geometry.mesh = std::move(selected);
         geometry.scene.mesh = geometry.mesh;
         geometry.scene.triangleProvenance = std::move(provenance);
+
+        // Display-only render meshes share the spatial selection with support
+        // geometry while retaining their independent source-triangle audit join.
+        navmesh::core::Mesh selectedRender;
+        std::vector<navmesh::core::TriangleProvenance> renderProvenance;
+        const auto &render = geometry.scene.renderFallbackMesh;
+        for (std::size_t triangleIndex{}; triangleIndex < render.triangles.size(); ++triangleIndex)
+        {
+            const auto &triangle = render.triangles[triangleIndex];
+            navmesh::core::AABB triangleBounds;
+            bool valid = true;
+            for (const auto vertex : triangle.vertices)
+            {
+                if (vertex >= render.vertices.size())
+                {
+                    valid = false;
+                    break;
+                }
+                triangleBounds.Expand(render.vertices[vertex]);
+            }
+            if (!valid || !triangleBounds.Intersects(bounds))
+            {
+                continue;
+            }
+            const auto base = static_cast<std::uint32_t>(selectedRender.vertices.size());
+            for (const auto vertex : triangle.vertices)
+            {
+                selectedRender.vertices.push_back(render.vertices[vertex]);
+            }
+            selectedRender.triangles.push_back({{base, base + 1, base + 2}});
+            if (triangleIndex < geometry.scene.renderFallbackTriangleProvenance.size())
+            {
+                renderProvenance.push_back(geometry.scene.renderFallbackTriangleProvenance[triangleIndex]);
+            }
+        }
+        geometry.scene.renderFallbackMesh = std::move(selectedRender);
+        geometry.scene.renderFallbackTriangleProvenance = std::move(renderProvenance);
     }
 
 } // namespace navmesh::app::detail

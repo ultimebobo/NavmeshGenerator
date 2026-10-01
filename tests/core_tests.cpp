@@ -1,4 +1,10 @@
+// Keep assert-based checks active in optimized test builds as well as debug builds.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include "analysis/navmesh_analysis.h"
+#include "app/geometry_pipeline.h"
 #include "core/geometry/types.h"
 #include "core/reproducibility/export_metadata.h"
 #include "core/scene/scene.h"
@@ -360,6 +366,51 @@ namespace
         Require(candidate.mesh.polygons[3].neighbors[2] == 4
             && candidate.mesh.polygons[4].neighbors[0] == 3);
     }
+    void TestGeometryNeighborhoodCulling()
+    {
+        using namespace navmesh::core;
+        navmesh::skyrim::offline::GeometryExtraction geometry;
+        // Include an outside triangle, a triangle crossing the boundary from a
+        // distant placement, an inside triangle, and an invalid index.
+        geometry.mesh = {.vertices = {{20, 20, 0},
+                                      {21, 20, 0},
+                                      {20, 21, 0},
+                                      {-20, 0, 0},
+                                      {1, 0, 0},
+                                      {1, 1, 0},
+                                      {0, 0, 0},
+                                      {1, 0, 0},
+                                      {0, 1, 0}},
+                         .triangles = {{{0, 1, 2}}, {{3, 4, 5}}, {{6, 7, 8}}, {{6, 7, 100}}}};
+        geometry.references = {
+            {.formId = 1, .vertices = 3, .triangles = 1},
+            {.formId = 2, .vertices = 6, .triangles = 3, .meshVertexOffset = 3, .meshTriangleOffset = 1}};
+        geometry.scene.mesh = geometry.mesh;
+        geometry.scene.triangleProvenance = {{0, 10}, {1, 20}, {1, 21}, {1, 22}};
+        geometry.scene.renderFallbackMesh = geometry.mesh;
+        geometry.scene.renderFallbackTriangleProvenance = {{2, 30}, {3, 40}, {3, 41}, {3, 42}};
+        const AABB bounds{.min = {-2, -2, -10}, .max = {2, 2, 10}};
+        navmesh::app::detail::CullGeometryToBounds(geometry, bounds);
+        Require(geometry.mesh.triangles.size() == 2 && geometry.mesh.vertices.size() == 6);
+        Require(geometry.scene.mesh.triangles.size() == 2 && geometry.scene.HasCompleteTriangleProvenance());
+        Require(geometry.scene.triangleProvenance[0].geometrySource == 1 &&
+                geometry.scene.triangleProvenance[0].sourceTriangle == 20 &&
+                geometry.scene.triangleProvenance[1].sourceTriangle == 21);
+        Require(geometry.references[0].triangles == 0 && geometry.references[0].vertices == 0);
+        Require(geometry.references[1].triangles == 2 && geometry.references[1].vertices == 6 &&
+                geometry.references[1].meshTriangleOffset == 0 && geometry.references[1].meshVertexOffset == 0);
+        Require(geometry.scene.renderFallbackMesh.triangles.size() == 2 &&
+                geometry.scene.renderFallbackMesh.vertices.size() == 6);
+        Require(geometry.scene.renderFallbackTriangleProvenance.size() == 2 &&
+                geometry.scene.renderFallbackTriangleProvenance[0].geometrySource == 3 &&
+                geometry.scene.renderFallbackTriangleProvenance[0].sourceTriangle == 40 &&
+                geometry.scene.renderFallbackTriangleProvenance[1].sourceTriangle == 41);
+        // Repeated bounds selection keeps the source identities stable.
+        navmesh::app::detail::CullGeometryToBounds(geometry, bounds);
+        Require(geometry.mesh.triangles.size() == 2 &&
+                geometry.scene.renderFallbackTriangleProvenance[1].sourceTriangle == 41);
+    }
+
     void TestAffectedCells()
     {
         using namespace navmesh::skyrim::offline;
@@ -1159,6 +1210,7 @@ int main(int argc, char** argv)
     if (argc > 1 && std::string_view(argv[1]) == "--batch-only") {
         TestAffectedCells(); TestNavmeshOverrideWriter(); TestReciprocalCellTransitions(); return 0;
     }
+    TestGeometryNeighborhoodCulling();
     TestAffectedCells();
     TestResolvedLoadOrder();
     TestCellOverrideAcrossPlugins();

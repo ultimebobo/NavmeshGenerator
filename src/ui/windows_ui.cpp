@@ -61,8 +61,9 @@ namespace
         Field{"support", "Max support distance", "Maximum vertical distance to a support surface, in game units."},
         Field{"slope", "Max slope", "Maximum support-surface slope in degrees."},
         Field{"neighboring_cell_radius", "Neighboring cells",
-              "Exterior geometry and impact halo in cells. Generation always includes adjacent geometry and stays "
-              "clipped to each target CELL."},
+              "Exterior scene neighborhood and batch impact halo in cells. Distant models can contribute intersecting "
+              "geometry without adding their terrain or NAVM. Generation includes adjacent geometry and stays clipped "
+              "to each target CELL."},
         Field{"affected_plugin", "Affected plugin",
               "Active ESP/ESM/ESL filename for Plugin scope. The full resolved load order supplies winning geometry "
               "and overrides."},
