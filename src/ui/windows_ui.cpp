@@ -60,7 +60,7 @@ namespace
         Field{"diagnostics", "Write diagnostics HTML", "Create an HTML report with representative support examples."},
         Field{"terrain", "Terrain only", "Skip reference-model geometry and export decoded exterior terrain only."},
         Field{"candidate", "Generate candidate NAVM", "Use Recast Navigation to rasterize terrain and supported collision, then export candidate JSON/OBJ and show it in the scene GLB."},
-        Field{"generate_plugin", "Write plugin", "Write an ESP, ESL-flagged when eligible, after its source plugins. Authored navigation connections are not regenerated. Requires a resolved load order and Neighboring cells set to 0."},
+        Field{"generate_plugin", "Write plugin", "Write an ESP, ESL-flagged when eligible, after its source plugins. Matched door and border portals are written; other authored links need validation. Requires a resolved load order and Neighboring cells set to 0."},
     };
 
     struct WindowState {

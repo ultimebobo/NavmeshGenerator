@@ -17,9 +17,11 @@ namespace navmesh::skyrim::offline
      * @param candidate Valid generated mesh in Skyrim world coordinates.
      * @param writtenPath Receives the final plugin path after read-back verification.
      * @param error Human-readable reason when the source cannot be safely serialized.
-     * @return True only after a successful write and independent reader round trip.
+     * @return True only after a successful write and independent reader round trip;
+     * false with an error when a required border portal cannot be serialized.
      * @note The ESP is ESL-flagged when its override-only record set fits a light plugin.
-     * @warning Authored external, door, and cover links are not regenerated.
+     * @warning Matched door triangles and reciprocal border portals are serialized.
+     * Other authored links, cover data, NAVI, and REFR XNDP references are not rebuilt.
      */
     [[nodiscard]] bool WriteNavmeshOverride(const std::filesystem::path& outputDirectory,
         const std::vector<std::filesystem::path>& inputPlugins, const ResolvedLoadOrder& resolved,

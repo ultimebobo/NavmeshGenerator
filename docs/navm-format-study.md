@@ -34,8 +34,10 @@ with all offsets relative to the start of NVNM data:
 | remaining NVNM bytes | links, doors, cover/grid/other version-specific content | Kept verbatim and exposed as `trailingData`; not interpreted. |
 
 The reader retains trailing bytes. The writer creates fresh external, door,
-cover, and grid sections for generated geometry; authored connection sections
-are not carried into the output.
+cover, and grid sections for generated geometry. A matched border edge adds a
+portal entry and a reciprocal portal in an adjacent NAVM override. A matched
+entrance adds a door triangle referencing the placed door. Other authored
+connection sections are not carried into generated geometry.
 
 ## Preservation and failure policy
 
@@ -59,8 +61,10 @@ worldspace records in their source plugins. Its TES4 master list contains each
 NAVM source plugin and its dependencies in load order; record and group FormIDs
 are rebased into that table. It places generated world-space vertices and triangles in the
 largest original NAVM and writes empty geometry into the other NAVM overrides.
-Every override has empty external, door, and cover sections and a rebuilt spatial
-grid. The source plugin is never modified. The output is always an ESP; its ESL
+Generated geometry has matched external and door links, an empty cover section,
+and a rebuilt spatial grid. Adjacent NAVM overrides retain their geometry and
+authored sections while appending reciprocal external portals. The source plugin
+is never modified. The output is always an ESP; its ESL
 flag is set when the override-only records and master table fit the light format,
 including when a dependency is a regular ESP. All NAVMs are
 read back and compared with the serialized geometry.
@@ -69,9 +73,10 @@ The generated candidate must be nonempty, topologically valid, and stay within
 the selected exterior cell when applicable. A cell with no existing NAVM or
 unresolved source dependencies is rejected. Additional authored
 NAVM subrecords are rejected because they may contain geometry references.
-Authored external, door, and cover connections are not regenerated, so replacing
-them can break navigation between NAVMs, doors, or cells. Independent-tool and
-disposable-profile game validation are required before an output plugin is used.
+Unmatched authored external and door connections, cover data, NAVI, and REFR
+XNDP references are not rebuilt. They can still break navigation between NAVMs,
+doors, or cells. Independent-tool and disposable-profile game validation are
+required before an output plugin is used.
 Localized source plugins work because no localized parent records are copied.
 
 The generated trailing section layout follows

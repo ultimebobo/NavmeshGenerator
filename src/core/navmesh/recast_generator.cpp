@@ -53,6 +53,35 @@ namespace
         return closest;
     }
 
+    [[nodiscard]] std::vector<Vec3> ClipToCell(std::array<Vec3,3> triangle, const AABB& cell)
+    {
+        std::vector<Vec3> polygon(triangle.begin(),triangle.end());
+        const auto clip = [&](bool xAxis, float limit, bool keepGreater) {
+            std::vector<Vec3> output;
+            if (polygon.empty()) return output;
+            const auto coordinate = [&](Vec3 point) { return xAxis ? point.x : point.y; };
+            auto previous = polygon.back();
+            bool previousInside = keepGreater ? coordinate(previous) >= limit : coordinate(previous) <= limit;
+            for (const auto current : polygon) {
+                const bool currentInside = keepGreater ? coordinate(current) >= limit : coordinate(current) <= limit;
+                if (previousInside != currentInside) {
+                    const float t = (limit-coordinate(previous))/(coordinate(current)-coordinate(previous));
+                    auto crossing = previous+(current-previous)*t;
+                    if (xAxis) crossing.x = limit; else crossing.y = limit;
+                    output.push_back(crossing);
+                }
+                if (currentInside) output.push_back(current);
+                previous = current; previousInside = currentInside;
+            }
+            return output;
+        };
+        polygon = clip(true,cell.min.x,true);
+        polygon = clip(true,cell.max.x,false);
+        polygon = clip(false,cell.min.y,true);
+        polygon = clip(false,cell.max.y,false);
+        return polygon;
+    }
+
     [[nodiscard]] bool TouchesBorder(Vec3 a, Vec3 b, Vec3 c, const AABB& bounds, float tolerance)
     {
         // Intersect the triangle with a narrow strip at each outer cell edge.
@@ -150,15 +179,21 @@ namespace navmesh::core
             const float area = Cross(points[0],points[1],points[2]);
             if (std::abs(area) < 0.0001F) { ++result.statistics.rejectedDegenerate; continue; }
             if (area < 0) std::swap(points[1],points[2]);
-            const auto base = static_cast<int>(vertices.size()/3);
-            // Recast is Y-up. Swapping Skyrim Y and Z changes handedness,
-            // so the input winding is reversed to keep walkable normals up.
-            for (const auto point : points) {
-                vertices.insert(vertices.end(), {point.x,point.z,point.y});
-                bounds.Expand(point);
+            const auto clipped = cellBounds ? ClipToCell(points,*cellBounds)
+                : std::vector<Vec3>(points.begin(),points.end());
+            for (std::size_t corner = 1; corner+1 < clipped.size(); ++corner) {
+                const std::array face{clipped[0],clipped[corner],clipped[corner+1]};
+                if (Cross(face[0],face[1],face[2]) <= 0.0001F) continue;
+                const auto base = static_cast<int>(vertices.size()/3);
+                // Recast is Y-up. Swapping Skyrim Y and Z changes handedness,
+                // so the input winding is reversed to keep walkable normals up.
+                for (const auto point : face) {
+                    vertices.insert(vertices.end(), {point.x,point.z,point.y});
+                    bounds.Expand(point);
+                }
+                triangles.insert(triangles.end(), {base,base+2,base+1});
+                sources.push_back(i);
             }
-            triangles.insert(triangles.end(), {base,base+2,base+1});
-            sources.push_back(i);
         }
         result.statistics.eligibleTriangles = sources.size();
         if (sources.empty()) {
@@ -312,7 +347,7 @@ namespace navmesh::core
                 const float dx=point.x-door.position.x, dy=point.y-door.position.y, dz=point.z-door.position.z;
                 const float distance=std::hypot(dx,dy);
                 if (distance<best && distance<=profile.agentRadius*4+cs*2 && std::abs(dz)<=profile.stepHeight+ch*2) {
-                    best=distance; door.region=region.id;
+                    best=distance; door.region=region.id; door.polygon=index;
                 }
             }
             if (door.region) result.regions[*door.region].exitFormIds.push_back(door.referenceId);
@@ -359,9 +394,12 @@ namespace navmesh::core
             index = vertexRemap[index];
         }
         result.mesh.vertices = std::move(keptVertices);
-        for (auto& door : result.exits) if (door.region)
+        for (auto& door : result.exits) if (door.region) {
             door.region = regionRemap[*door.region] == NoNeighbor ? std::nullopt
                 : std::optional<std::uint32_t>{regionRemap[*door.region]};
+            door.polygon = door.region && door.polygon && polygonRemap[*door.polygon] != NoNeighbor
+                ? std::optional<std::uint32_t>{polygonRemap[*door.polygon]} : std::nullopt;
+        }
         if (result.statistics.rejectedUnreachable)
             result.warnings.push_back("Removed candidate polygons without a route to an entrance or exterior cell border.");
         if (result.mesh.polygons.empty())

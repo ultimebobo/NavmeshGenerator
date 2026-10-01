@@ -714,6 +714,156 @@ namespace
 
 namespace navmesh::core
 {
+    std::size_t StitchCandidateBorders(CandidateNavMesh& candidate, const AABB& cellBounds,
+        const std::vector<NavMesh>& neighbors)
+    {
+        if (candidate.mesh.polygons.empty()) return 0;
+        if (candidate.polygonSourceTriangles.size() != candidate.mesh.polygons.size()
+            || candidate.polygonContributingTriangles.size() != candidate.mesh.polygons.size())
+            throw std::invalid_argument("Candidate border stitching requires complete polygon source evidence");
+        const auto initialLinks = candidate.borderLinks.size();
+        const float maximumGap = candidate.profile.agentRadius * 2.0F + 16.0F;
+        const auto distance = [](Vec3 a, Vec3 b) {
+            return std::hypot(std::hypot(a.x-b.x,a.y-b.y),a.z-b.z);
+        };
+        const auto border = [&](Vec3 a, Vec3 b, float tolerance) {
+            if (std::abs(a.x-cellBounds.min.x) <= tolerance && std::abs(b.x-cellBounds.min.x) <= tolerance) return 0;
+            if (std::abs(a.x-cellBounds.max.x) <= tolerance && std::abs(b.x-cellBounds.max.x) <= tolerance) return 1;
+            if (std::abs(a.y-cellBounds.min.y) <= tolerance && std::abs(b.y-cellBounds.min.y) <= tolerance) return 2;
+            if (std::abs(a.y-cellBounds.max.y) <= tolerance && std::abs(b.y-cellBounds.max.y) <= tolerance) return 3;
+            return -1;
+        };
+        std::set<std::tuple<std::uint32_t,std::uint32_t,std::uint8_t>> used;
+        const auto originalCount = candidate.mesh.polygons.size();
+        for (std::uint32_t polygon{}; polygon < originalCount; ++polygon) for (std::uint8_t side{}; side < 3; ++side) {
+            const auto face = candidate.mesh.polygons[polygon];
+            if (face.neighbors[side] != NoNeighbor) continue;
+            const auto a = candidate.mesh.vertices[face.vertices[side]];
+            const auto b = candidate.mesh.vertices[face.vertices[(side+1)%3]];
+            const auto cellSide = border(a,b,maximumGap);
+            if (cellSide < 0 || distance(a,b) <= maximumGap) continue;
+            struct Match { std::uint32_t navmesh{}, polygon{}; std::uint8_t side{}; Vec3 a{}, b{}; float score{}; };
+            std::optional<Match> best;
+            for (const auto& neighbor : neighbors) for (std::uint32_t other{}; other < neighbor.polygons.size(); ++other)
+                for (std::uint8_t otherSide{}; otherSide < 3; ++otherSide) {
+                    const auto& triangle = neighbor.polygons[other];
+                    if (triangle.vertices[otherSide] >= neighbor.vertices.size()
+                        || triangle.vertices[(otherSide+1)%3] >= neighbor.vertices.size()
+                        || used.contains({neighbor.id,other,otherSide})) continue;
+                    auto c = neighbor.vertices[triangle.vertices[otherSide]];
+                    auto d = neighbor.vertices[triangle.vertices[(otherSide+1)%3]];
+                    if (border(c,d,1.0F) != cellSide) continue;
+                    if (distance(a,d)+distance(b,c) < distance(a,c)+distance(b,d)) std::swap(c,d);
+                    const auto gapA = distance(a,c), gapB = distance(b,d);
+                    if (gapA > maximumGap || gapB > maximumGap
+                        || std::abs(a.z-c.z) > candidate.profile.stepHeight
+                        || std::abs(b.z-d.z) > candidate.profile.stepHeight
+                        || Cross2(a,c,b) <= 0.01F || Cross2(b,c,d) <= 0.01F) continue;
+                    const auto score = gapA+gapB;
+                    if (!best || score < best->score) best = {neighbor.id,other,otherSide,c,d,score};
+                }
+            if (!best) continue;
+            const auto c = static_cast<std::uint32_t>(candidate.mesh.vertices.size());
+            candidate.mesh.vertices.push_back(best->a);
+            const auto d = static_cast<std::uint32_t>(candidate.mesh.vertices.size());
+            candidate.mesh.vertices.push_back(best->b);
+            const auto first = static_cast<std::uint32_t>(candidate.mesh.polygons.size());
+            NavPolygon inner{ .vertices = {face.vertices[side],c,face.vertices[(side+1)%3]},
+                .neighbors = {NoNeighbor,first+1,polygon} };
+            NavPolygon outer{ .vertices = {face.vertices[(side+1)%3],c,d},
+                .neighbors = {first,NoNeighbor,NoNeighbor} };
+            candidate.mesh.polygons.push_back(inner);
+            candidate.mesh.polygons.push_back(outer);
+            candidate.mesh.polygons[polygon].neighbors[side] = first;
+            candidate.polygonSourceTriangles.push_back(candidate.polygonSourceTriangles[polygon]);
+            candidate.polygonSourceTriangles.push_back(candidate.polygonSourceTriangles[polygon]);
+            candidate.polygonContributingTriangles.push_back(candidate.polygonContributingTriangles[polygon]);
+            candidate.polygonContributingTriangles.push_back(candidate.polygonContributingTriangles[polygon]);
+            for (auto& region : candidate.regions) if (std::find(region.polygons.begin(),region.polygons.end(),polygon) != region.polygons.end()) {
+                region.polygons.push_back(first);
+                region.polygons.push_back(first+1);
+                region.area += (Area2(a,best->a,b)+Area2(b,best->a,best->b))*0.5F;
+                region.reachesBorder = true;
+                break;
+            }
+            candidate.borderLinks.push_back({first+1,1,best->navmesh,best->polygon,best->side});
+            used.emplace(best->navmesh,best->polygon,best->side);
+        }
+        std::vector<bool> portalPolygons(candidate.mesh.polygons.size());
+        for (const auto& link : candidate.borderLinks) if (link.polygon < portalPolygons.size()) portalPolygons[link.polygon] = true;
+        for (const auto& exit : candidate.exits) if (exit.polygon && *exit.polygon < portalPolygons.size())
+            portalPolygons[*exit.polygon] = true;
+        std::vector<std::uint32_t> polygonRemap(candidate.mesh.polygons.size(),NoNeighbor);
+        std::map<std::uint32_t,std::uint32_t> regionRemap;
+        std::vector<NavPolygon> keptPolygons;
+        std::vector<std::size_t> keptSources;
+        std::vector<std::vector<std::size_t>> keptContributors;
+        std::vector<CandidateRegion> keptRegions;
+        std::size_t removedPolygons{};
+        for (auto region : candidate.regions) {
+            const bool connected = std::any_of(region.polygons.begin(),region.polygons.end(),[&](auto polygon) {
+                return polygon < portalPolygons.size() && portalPolygons[polygon];
+            });
+            if (!connected) {
+                candidate.statistics.rejectedUnreachable += region.polygons.size();
+                removedPolygons += region.polygons.size();
+                continue;
+            }
+            const auto originalId = region.id;
+            region.id = static_cast<std::uint32_t>(keptRegions.size());
+            regionRemap.emplace(originalId,region.id);
+            for (auto& polygon : region.polygons) {
+                const auto old = polygon;
+                polygon = static_cast<std::uint32_t>(keptPolygons.size());
+                polygonRemap[old] = polygon;
+                keptPolygons.push_back(candidate.mesh.polygons[old]);
+                keptSources.push_back(candidate.polygonSourceTriangles[old]);
+                keptContributors.push_back(std::move(candidate.polygonContributingTriangles[old]));
+            }
+            keptRegions.push_back(std::move(region));
+        }
+        candidate.mesh.polygons = std::move(keptPolygons);
+        candidate.polygonSourceTriangles = std::move(keptSources);
+        candidate.polygonContributingTriangles = std::move(keptContributors);
+        candidate.regions = std::move(keptRegions);
+        std::vector<std::uint32_t> vertexRemap(candidate.mesh.vertices.size(),NoNeighbor);
+        std::vector<Vec3> keptVertices;
+        for (auto& polygon : candidate.mesh.polygons) for (auto& vertex : polygon.vertices)
+            if (vertexRemap[vertex] == NoNeighbor) {
+                vertexRemap[vertex] = static_cast<std::uint32_t>(keptVertices.size());
+                keptVertices.push_back(candidate.mesh.vertices[vertex]);
+                vertex = vertexRemap[vertex];
+            } else vertex = vertexRemap[vertex];
+        candidate.mesh.vertices = std::move(keptVertices);
+        for (auto& link : candidate.borderLinks) link.polygon = polygonRemap[link.polygon];
+        for (auto& exit : candidate.exits) {
+            if (!exit.polygon || *exit.polygon >= polygonRemap.size() || polygonRemap[*exit.polygon] == NoNeighbor) {
+                exit.polygon.reset(); exit.region.reset(); continue;
+            }
+            exit.polygon = polygonRemap[*exit.polygon];
+            const auto found = exit.region ? regionRemap.find(*exit.region) : regionRemap.end();
+            exit.region = found == regionRemap.end() ? std::nullopt : std::optional<std::uint32_t>{found->second};
+        }
+        std::vector<CandidateContour> keptContours;
+        for (auto contour : candidate.contours) {
+            const auto region = regionRemap.find(contour.region);
+            if (region == regionRemap.end() || std::any_of(contour.vertices.begin(),contour.vertices.end(),[&](auto vertex) {
+                return vertex >= vertexRemap.size() || vertexRemap[vertex] == NoNeighbor;
+            })) continue;
+            contour.region = region->second;
+            for (auto& vertex : contour.vertices) vertex = vertexRemap[vertex];
+            keptContours.push_back(std::move(contour));
+        }
+        candidate.contours = std::move(keptContours);
+        if (removedPolygons)
+            candidate.warnings.push_back("Removed candidate polygons without a matched door or adjacent NAVM portal.");
+        // Neighboring bridges can share an edge even when they target separate NAVM triangles.
+        BuildAdjacency(candidate.mesh,candidate.profile.weldTolerance,candidate.profile.stepHeight);
+        candidate.statistics.outputPolygons = candidate.mesh.polygons.size();
+        candidate.topology = ValidateCandidateTopology(candidate);
+        return candidate.borderLinks.size()-initialLinks;
+    }
+
     CandidateNavMesh GenerateCandidate(const Scene& scene, const NavigationProfile& profile,
         std::optional<AABB> cellBounds, std::vector<CandidateExit> exits)
     {
@@ -1027,6 +1177,7 @@ namespace navmesh::core
         }
         for (auto& door : result.exits) if (const auto polygon = ExitPolygon(result.mesh,door.position,profile.stepHeight)) {
             door.region = regionOf[*polygon];
+            door.polygon = static_cast<std::uint32_t>(*polygon);
             result.regions[*door.region].exitFormIds.push_back(door.referenceId);
         }
         for (const auto& region : result.regions) {
@@ -1111,7 +1262,7 @@ namespace navmesh::core
     {
         std::ofstream out(path,std::ios::binary|std::ios::trunc); if (!out) return false;
         const auto& p = candidate.profile;
-        out << "{\n  \"schema\": \"navmesh-generator/candidate-navm\",\n  \"schema_version\": \"1.0.0\",\n  \"metadata\": " << metadataJson << ",\n";
+        out << "{\n  \"schema\": \"navmesh-generator/candidate-navm\",\n  \"schema_version\": \"1.1.0\",\n  \"metadata\": " << metadataJson << ",\n";
         out << std::format("  \"partitioning_algorithm\": \"{}\",\n", candidate.partitioningAlgorithm);
         out << std::format("  \"profile\": {{\"name\":\"{}\",\"agent_radius\":{},\"agent_height\":{},\"max_slope_degrees\":{},\"step_height\":{},\"clearance\":{},\"weld_tolerance\":{},\"minimum_region_area\":{},\"contour_simplification_tolerance\":{},\"cell_border_policy\":\"{}\"}},\n",
             p.name,p.agentRadius,p.agentHeight,p.maxSlopeDegrees,p.stepHeight,p.clearance,p.weldTolerance,p.minimumRegionArea,p.contourSimplificationTolerance,p.cellBorderPolicy);
@@ -1148,7 +1299,15 @@ namespace navmesh::core
             const auto& exit = candidate.exits[i];
             out << (i ? "," : "") << std::format("{{\"reference_id\":\"{:08X}\",\"position\":[{},{},{}],\"region\":",exit.referenceId,exit.position.x,exit.position.y,exit.position.z);
             if (exit.region) out << *exit.region; else out << "null";
+            out << ",\"polygon\":";
+            if (exit.polygon) out << *exit.polygon; else out << "null";
             out << '}';
+        }
+        out << "],\n  \"border_links\": [";
+        for (std::size_t i{}; i < candidate.borderLinks.size(); ++i) {
+            const auto& link = candidate.borderLinks[i];
+            out << (i ? "," : "") << std::format("{{\"polygon\":{},\"edge\":{},\"neighbor_navmesh_id\":\"{:08X}\",\"neighbor_polygon\":{},\"neighbor_edge\":{}}}",
+                link.polygon,link.edge,link.neighborNavmeshId,link.neighborPolygon,link.neighborEdge);
         }
         out << "],\n  \"contours\": [";
         for (std::size_t i{}; i < candidate.contours.size(); ++i) {

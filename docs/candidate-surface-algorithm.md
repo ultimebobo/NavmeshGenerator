@@ -5,8 +5,8 @@
 The application now uses Recast Navigation for candidate generation. The
 polygon-based measurements and decisions below document the previous spike and
 remain useful as comparison evidence; they do not describe the active run path.
-The Recast adapter consumes supported terrain and collision, converts Skyrim
-world Z-up to Recast Y-up, and runs Recast's voxel rasterization, walkability
+The Recast adapter consumes supported terrain and collision, clips it to the
+extracted exterior CELL bounds, converts Skyrim world Z-up to Recast Y-up, and runs Recast's voxel rasterization, walkability
 filters, radius erosion, configurable region partitioning, contour construction,
 and polygon mesh construction. Region partitioning defaults to watershed; the
 CLI and Windows UI also expose monotone and layer partitioning. The selected
@@ -46,9 +46,13 @@ measurements; the source assets are not committed.
 After polygon construction, the active generator keeps only connected components
 that reach an enabled placed DOOR or the outer border of the extracted exterior
 cell area. Door matching checks the closest point on a polygon at a compatible
-height. Border matching allows for the walkable inset created by agent-radius
-erosion. Unanchored components are removed from the candidate mesh, JSON, OBJ,
-and GLB; the statistics count their rejected polygons. An interior scene without
+height and records the matched candidate triangle. Border matching allows for
+the walkable inset created by agent-radius erosion. When a resolved load order
+provides an adjacent NAVM, the selected-cell candidate joins a near-coincident
+full boundary edge to the neighbor's border edge at a compatible height. The
+joined triangles and reciprocal target appear in `border_links`. Regions without
+a matched border portal or door are removed after stitching. Unanchored components are removed from the
+candidate mesh, JSON, OBJ, and GLB; the statistics count their rejected polygons. An interior scene without
 a reachable door and an exterior scene without a reachable door or border yield
 an empty candidate and a warning. Entrance positions are shown as orange markers
 in the candidate GLB layer, including entrances that did not match a polygon.
@@ -161,8 +165,11 @@ exterior cell grid border, including a triangle that crosses the border without
 an edge lying exactly on it. Other regions are removed and counted as
 `rejected_unreachable`. If no region reaches an entrance or border, the mesh is
 empty and a warning is emitted. JSON records exits, their matched region, and
-each surviving region's border/exit evidence. These are candidate reachability
-checks, not Bethesda door portal links.
+their matched polygon, along with each surviving region's border/exit evidence.
+For a selected exterior cell with a resolved load order, `border_links` records
+the neighboring NAVM target of each fully matched edge. These are candidate
+reachability checks; the guarded writer serializes matched NAVM door and border
+portals separately.
 
 Only LAND and supported Havok collision are eligible by default. Render
 fallback remains diagnostic evidence and is never silently promoted to

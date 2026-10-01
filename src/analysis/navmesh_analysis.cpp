@@ -1,6 +1,7 @@
 #include "analysis/navmesh_analysis.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -469,15 +470,56 @@ namespace navmesh::analysis
             topology("disconnected_component", polygons, 0.45F, "component has no shared NAVM edge with the other components");
             if (polygons.size() == 1) topology("off_mesh_island", polygons, 0.70F, "single polygon has no shared NAVM edge");
         }
-        for (std::uint32_t first{}; first < mesh.vertices.size(); ++first) for (std::uint32_t second = first + 1; second < mesh.vertices.size(); ++second) { const auto delta = Subtract(mesh.vertices[first], mesh.vertices[second]); if (Dot(delta, delta) < 0.0001) topology("duplicate_vertex_or_gap", {}, 0.85F, std::format("vertices {} and {} are coincident but use distinct indices", first, second)); }
+        // Only vertices in the same or neighboring tolerance bins can be coincident.
+        using VertexBin = std::array<std::int64_t,3>;
+        std::map<VertexBin,std::vector<std::uint32_t>> vertexBins;
+        constexpr double duplicateTolerance = 0.01;
+        const auto vertexBin = [](const core::Vec3& vertex) {
+            return VertexBin{static_cast<std::int64_t>(std::floor(vertex.x/duplicateTolerance)),
+                static_cast<std::int64_t>(std::floor(vertex.y/duplicateTolerance)),
+                static_cast<std::int64_t>(std::floor(vertex.z/duplicateTolerance))};
+        };
+        for (std::uint32_t second{}; second < mesh.vertices.size(); ++second) {
+            const auto bin = vertexBin(mesh.vertices[second]);
+            for (std::int64_t x=bin[0]-1; x<=bin[0]+1; ++x)
+                for (std::int64_t y=bin[1]-1; y<=bin[1]+1; ++y)
+                    for (std::int64_t z=bin[2]-1; z<=bin[2]+1; ++z) {
+                        const auto found = vertexBins.find({x,y,z});
+                        if (found == vertexBins.end()) continue;
+                        for (const auto first : found->second) {
+                            const auto delta = Subtract(mesh.vertices[first],mesh.vertices[second]);
+                            if (Dot(delta,delta) < 0.0001)
+                                topology("duplicate_vertex_or_gap", {}, 0.85F,
+                                    std::format("vertices {} and {} are coincident but use distinct indices",first,second));
+                        }
+                    }
+            vertexBins[bin].push_back(second);
+        }
         const auto strictlyInsideXY = [](const core::Vec3& point, const core::Vec3& a, const core::Vec3& b, const core::Vec3& c) {
             const auto cross2 = [](const core::Vec3& left, const core::Vec3& right, const core::Vec3& value) { return (right.x - left.x) * (value.y - left.y) - (right.y - left.y) * (value.x - left.x); };
             const auto one = cross2(a, b, point), two = cross2(b, c, point), three = cross2(c, a, point); return (one > 0 && two > 0 && three > 0) || (one < 0 && two < 0 && three < 0);
         };
-        for (std::uint32_t first{}; first < mesh.polygons.size(); ++first) for (std::uint32_t second = first + 1; second < mesh.polygons.size(); ++second) {
-            const auto& left = mesh.polygons[first]; const auto& right = mesh.polygons[second]; if (left.vertices[0] >= mesh.vertices.size() || left.vertices[1] >= mesh.vertices.size() || left.vertices[2] >= mesh.vertices.size() || right.vertices[0] >= mesh.vertices.size() || right.vertices[1] >= mesh.vertices.size() || right.vertices[2] >= mesh.vertices.size()) continue;
-            bool shared{}; for (const auto leftVertex : left.vertices) for (const auto rightVertex : right.vertices) shared |= leftVertex == rightVertex;
-            if (!shared && (strictlyInsideXY(mesh.vertices[left.vertices[0]], mesh.vertices[right.vertices[0]], mesh.vertices[right.vertices[1]], mesh.vertices[right.vertices[2]]) || strictlyInsideXY(mesh.vertices[right.vertices[0]], mesh.vertices[left.vertices[0]], mesh.vertices[left.vertices[1]], mesh.vertices[left.vertices[2]]))) topology("overlap", { first, second }, 0.80F, "a NAVM triangle vertex lies strictly inside another triangle in XY projection");
+        std::vector<core::Triangle> navmeshTriangles;
+        navmeshTriangles.reserve(mesh.polygons.size());
+        for (const auto& polygon : mesh.polygons) navmeshTriangles.push_back({polygon.vertices});
+        SpatialIndex polygonIndex; polygonIndex.Build(navmeshTriangles,mesh.vertices);
+        for (std::uint32_t first{}; first < mesh.polygons.size(); ++first) {
+            const auto& left = mesh.polygons[first];
+            if (std::any_of(left.vertices.begin(),left.vertices.end(),[&](auto vertex) { return vertex >= mesh.vertices.size(); })) continue;
+            const auto a = mesh.vertices[left.vertices[0]], b = mesh.vertices[left.vertices[1]], c = mesh.vertices[left.vertices[2]];
+            const core::AABB query{.min={std::min({a.x,b.x,c.x}),std::min({a.y,b.y,c.y}),std::numeric_limits<float>::lowest()},
+                .max={std::max({a.x,b.x,c.x}),std::max({a.y,b.y,c.y}),std::numeric_limits<float>::max()}};
+            auto nearby = polygonIndex.QueryAABB(query);
+            std::sort(nearby.begin(),nearby.end());
+            for (const auto second : nearby) {
+                if (second <= first) continue;
+                const auto& right = mesh.polygons[second];
+                bool shared{}; for (const auto leftVertex : left.vertices) for (const auto rightVertex : right.vertices) shared |= leftVertex == rightVertex;
+                if (!shared && (strictlyInsideXY(a, mesh.vertices[right.vertices[0]], mesh.vertices[right.vertices[1]], mesh.vertices[right.vertices[2]])
+                    || strictlyInsideXY(mesh.vertices[right.vertices[0]], a, b, c)))
+                    topology("overlap", { first, static_cast<std::uint32_t>(second) }, 0.80F,
+                        "a NAVM triangle vertex lies strictly inside another triangle in XY projection");
+            }
         }
         for (const auto& polygon : report.polygons) if ((polygon.classification == "floating" || polygon.classification == "buried" || polygon.classification == "too_steep" || polygon.classification == "blocked") && polygon.support.confidence >= 0.55F) report.repairCandidates.push_back({ std::format("navm-{:08X}-polygon-{}-{}", mesh.id, polygon.index, polygon.classification), polygon.classification, { polygon.index }, polygon.support.confidence, "manual_review", std::format("{} of {} samples agree; source={}", polygon.support.samplesCovered, polygon.support.samplesTotal, polygon.support.sourceType) });
         for (const auto& finding : report.topology) if (finding.confidence >= 0.55F) report.repairCandidates.push_back({ std::format("navm-{:08X}-topology-{}-{}", mesh.id, finding.kind, report.repairCandidates.size()), finding.kind, finding.polygons, finding.confidence, "manual_review", finding.evidence });
@@ -506,20 +548,13 @@ namespace navmesh::analysis
         std::vector<int> parents(analysis.polygonCount > 0 ? static_cast<std::size_t>(analysis.polygonCount) : 0);
         std::iota(parents.begin(), parents.end(), 0);
 
-        for (std::uint32_t polygonIndex = 0; polygonIndex < analysis.polygonCount; ++polygonIndex) {
-            const auto& polygon = mesh.polygons[polygonIndex];
-            for (std::uint32_t compareIndex = polygonIndex + 1; compareIndex < analysis.polygonCount; ++compareIndex) {
-                const auto& other = mesh.polygons[compareIndex];
-                const bool sharesVertex = std::any_of(polygon.vertices.begin(), polygon.vertices.end(), [&](std::uint32_t value) {
-                    return std::any_of(other.vertices.begin(), other.vertices.end(), [value](std::uint32_t otherValue) {
-                        return value == otherValue;
-                    });
-                });
-                if (sharesVertex) {
-                    Union(parents, static_cast<int>(polygonIndex), static_cast<int>(compareIndex));
-                }
+        // Sharing any vertex joins components; one prior polygon per vertex is sufficient.
+        std::map<std::uint32_t,int> firstPolygonByVertex;
+        for (std::uint32_t polygonIndex = 0; polygonIndex < analysis.polygonCount; ++polygonIndex)
+            for (const auto vertex : mesh.polygons[polygonIndex].vertices) {
+                const auto [found,inserted] = firstPolygonByVertex.try_emplace(vertex,static_cast<int>(polygonIndex));
+                if (!inserted) Union(parents,found->second,static_cast<int>(polygonIndex));
             }
-        }
 
         std::vector<int> componentSizes(analysis.polygonCount > 0 ? static_cast<std::size_t>(analysis.polygonCount) : 0, 0);
         for (std::uint32_t polygonIndex = 0; polygonIndex < analysis.polygonCount; ++polygonIndex) {

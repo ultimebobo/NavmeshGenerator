@@ -653,6 +653,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     update(78, "Geometry exports written");
     if (wasCancelled()) return 3;
 
+    update(79, "Analyzing existing NAVM support");
     const auto geometrySummary = navmesh::analysis::AnalyzeGeometry(geometry.mesh);
     const auto meshSummary = navmesh::analysis::AnalyzeNavMesh(cell->navMeshes.empty() ? navmesh::core::NavMesh{} : cell->navMeshes.front());
     auto analysisConfig = navmesh::analysis::AnalysisConfiguration{ .surfaceSearchRadius = options.surfaceSearchRadius, .maxSupportDistance = options.maxSupportDistance, .maxSlope = options.maxSlope };
@@ -662,6 +663,8 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     }
     const auto triangleSources = BuildTriangleSources(geometry);
     auto analysisReport = cell->navMeshes.empty() ? navmesh::analysis::AnalysisReport{} : navmesh::analysis::AnalyzeNavMeshPolygons(cell->navMeshes.front(), geometry.mesh, triangleSources, analysisConfig);
+    update(82, "Existing NAVM analysis complete");
+    if (wasCancelled()) return 3;
     AnnotateSupportSources(analysisReport, geometry);
     std::vector<navmesh::core::NavMesh> sceneNavmeshes;
     for (const auto& sceneCell : sceneCells) sceneNavmeshes.insert(sceneNavmeshes.end(), sceneCell.navMeshes.begin(), sceneCell.navMeshes.end());
@@ -710,14 +713,35 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
         std::sort(exits.begin(),exits.end(),[](const auto& a, const auto& b){return a.referenceId < b.referenceId;});
         exits.erase(std::unique(exits.begin(),exits.end(),[](const auto& a, const auto& b){return a.referenceId == b.referenceId;}),exits.end());
         try {
+            update(83, "Generating candidate NAVM");
             candidate = navmesh::core::RecastCandidateGenerator{}.Generate(geometry.scene, navmesh::core::NavigationProfile{},candidateBounds,
                 std::move(exits), options.partitioningAlgorithm);
+            update(85, "Candidate NAVM generated");
+            if (wasCancelled()) return 3;
+            if (resolved && analysisConfig.cellBounds && options.neighboringCellRadius == 0) {
+                update(86, "Matching adjacent NAVM borders");
+                std::vector<navmesh::core::NavMesh> adjacent;
+                const auto* selectedRecord = resolved->FindWinning(cell->id);
+                for (const auto& other : resolved->cells) {
+                    if (!other.exteriorCoordinates || !cell->exteriorCoordinates || other.id == cell->id) continue;
+                    const auto dx = std::abs((*other.exteriorCoordinates)[0]-(*cell->exteriorCoordinates)[0]);
+                    const auto dy = std::abs((*other.exteriorCoordinates)[1]-(*cell->exteriorCoordinates)[1]);
+                    if (dx+dy != 1) continue;
+                    const auto* otherRecord = resolved->FindWinning(other.id);
+                    if (selectedRecord && otherRecord && otherRecord->worldspaceFormId == selectedRecord->worldspaceFormId)
+                        adjacent.insert(adjacent.end(),other.navMeshes.begin(),other.navMeshes.end());
+                }
+                const auto links = navmesh::core::StitchCandidateBorders(*candidate,*analysisConfig.cellBounds,adjacent);
+                if (!links && std::any_of(candidate->regions.begin(),candidate->regions.end(),[](const auto& region) { return region.reachesBorder; }))
+                    candidate->warnings.push_back("No exterior border edge matched an adjacent NAVM; cross-cell navigation is unlinked.");
+            }
         } catch (const std::exception& error) {
             std::cerr << "Candidate generation failed: " << error.what() << "\n";
             return 2;
         }
         const auto jsonPath = options.output / "candidate-navm.json";
         const auto objPath = options.output / "candidate-navm.obj";
+        update(87, "Writing candidate exports");
         if (!navmesh::core::WriteCandidateJson(jsonPath, *candidate, geometry.scene, navmesh::reproducibility::ToJson(metadata, "    "))
             || !navmesh::core::WriteCandidateObj(objPath, *candidate)
             || !navmesh::reproducibility::WriteSidecar(objPath, metadata)) {
@@ -748,6 +772,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
         sceneOptions.bounds = navmesh::core::SceneBounds{ .world = { .min = { bounds[0], bounds[1], std::numeric_limits<float>::lowest() }, .max = { bounds[2], bounds[3], std::numeric_limits<float>::max() } } };
     }
     const auto scenePath = options.exportScene.empty() ? options.output / "scene.glb" : options.exportScene;
+    update(88, "Writing combined scene");
     const auto sceneExport = navmesh::core::WriteCombinedGlb(scenePath, geometry.scene, sceneNavmeshes, sceneMarkers, metadata, sceneOptions);
     if (!navmesh::reproducibility::WriteSidecar(scenePath, metadata)) std::cerr << "Failed to write GLB metadata sidecar\n";
     std::cout << std::format("Exported combined GLB scene to {} ({} objects, {} triangles, {} geometry triangles culled)\n", scenePath.string(), sceneExport.objects, sceneExport.triangles, sceneExport.culledTriangles);
@@ -774,7 +799,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
         const bool eslFlagged = writtenPlugin && (pluginHeader[9] & 0x02U) != 0;
         std::cout << "Generated NAVM override plugin: " << pluginPath.string()
             << (eslFlagged ? " (ESL-flagged ESP)\n" : " (regular ESP)\n");
-        std::cerr << "Generated plugin does not regenerate authored NAVM connections; verify navigation before use.\n";
+        std::cerr << "Generated NAVM includes any matched border and door links; NAVI, teleport-door XNDP, cover, and other authored links still need independent validation.\n";
     }
     update(90, "Navmesh support analyzed");
     if (wasCancelled()) return 3;

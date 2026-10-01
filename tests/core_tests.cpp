@@ -203,6 +203,133 @@ namespace
         Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "full-slot-output", manyPaths, manyOrder,
             manyOrder.cells.front(), candidate, target, error) && target.extension() == ".esp" && !eslFlagged(target));
     }
+    void TestReciprocalCellTransitions()
+    {
+        using namespace navmesh::core;
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-transition-test";
+        std::filesystem::remove_all(root); std::filesystem::create_directories(root);
+        const auto navm = [](std::array<Vec3,3> vertices, std::int16_t cellX) {
+            std::vector<std::uint8_t> body;
+            PutU32(body,12); PutU32(body,0); PutU32(body,0x400);
+            PutU16(body,static_cast<std::uint16_t>(-4)); PutU16(body,static_cast<std::uint16_t>(cellX));
+            PutU32(body,3);
+            for (const auto& vertex : vertices) { PutFloat(body,vertex.x); PutFloat(body,vertex.y); PutFloat(body,vertex.z); }
+            PutU32(body,1);
+            for (std::uint16_t i{}; i < 3; ++i) PutU16(body,i);
+            for (int i{}; i < 3; ++i) PutU16(body,0xffff);
+            PutU16(body,0); PutU16(body,0);
+            PutU32(body,0); PutU32(body,0); PutU32(body,0);
+            PutU32(body,1);
+            for (int i{}; i < 8; ++i) PutFloat(body,0);
+            PutU32(body,1); PutU16(body,0);
+            std::vector<std::uint8_t> payload; PutText(payload,"NVNM",body); return payload;
+        };
+        const auto selectedVertices = std::array<Vec3,3>{{{53120,-15936,0},{53232,-16000,0},{53232,-15872,0}}};
+        const auto neighborVertices = std::array<Vec3,3>{{{53248,-15872,0},{53248,-16000,0},{53376,-15936,0}}};
+        std::vector<std::uint8_t> selectedNavm; PutRecord(selectedNavm,"NAVM",0x200,navm(selectedVertices,12));
+        std::vector<std::uint8_t> neighborNavm; PutRecord(neighborNavm,"NAVM",0x201,navm(neighborVertices,13));
+        std::vector<std::uint8_t> selectedRefPayload, doorBase; PutU32(doorBase,0x310); PutText(selectedRefPayload,"NAME",doorBase);
+        std::vector<std::uint8_t> selectedRef; PutRecord(selectedRef,"REFR",0x300,selectedRefPayload);
+        std::vector<std::uint8_t> selectedCell;
+        PutRecord(selectedCell,"CELL",0x100,CellPayload("TransitionCell",true));
+        std::vector<std::uint8_t> selectedChildren;
+        PutGroup(selectedChildren,0x100,9,selectedRef);
+        PutGroup(selectedChildren,0x100,10,selectedNavm);
+        PutGroup(selectedCell,0x100,6,selectedChildren);
+        std::vector<std::uint8_t> neighborCellPayload = CellPayload("AdjacentCell",true);
+        const std::array<std::uint8_t,4> xclcTag{'X','C','L','C'};
+        const auto xclc = std::search(neighborCellPayload.begin(),neighborCellPayload.end(),xclcTag.begin(),xclcTag.end());
+        Require(xclc != neighborCellPayload.end());
+        neighborCellPayload[static_cast<std::size_t>(xclc-neighborCellPayload.begin())+6] = 13;
+        std::vector<std::uint8_t> neighborCell;
+        PutRecord(neighborCell,"CELL",0x101,neighborCellPayload);
+        std::vector<std::uint8_t> neighborChildren; PutGroup(neighborChildren,0x101,10,neighborNavm);
+        PutGroup(neighborCell,0x101,6,neighborChildren);
+        std::vector<std::uint8_t> world;
+        PutRecord(world,"WRLD",0x400,{});
+        std::vector<std::uint8_t> cells = selectedCell;
+        cells.insert(cells.end(),neighborCell.begin(),neighborCell.end());
+        PutGroup(world,0x400,1,cells);
+        std::vector<std::uint8_t> plugin;
+        PutRecord(plugin,"TES4",0,{});
+        PutRecord(plugin,"DOOR",0x310,{});
+        PutGroup(plugin,0x444C5257,0,world);
+        const auto source = root / "Transitions.esm";
+        { std::ofstream file(source,std::ios::binary); file.write(reinterpret_cast<const char*>(plugin.data()),static_cast<std::streamsize>(plugin.size())); }
+        const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory=root, .plugins={source} });
+        const auto selected = std::find_if(resolved.cells.begin(),resolved.cells.end(),[](const auto& cell) { return cell.id == 0x100; });
+        const auto adjacent = std::find_if(resolved.cells.begin(),resolved.cells.end(),[](const auto& cell) { return cell.id == 0x101; });
+        Require(selected != resolved.cells.end() && adjacent != resolved.cells.end());
+        Require(selected->navMeshes.size() == 1 && adjacent->navMeshes.size() == 1);
+        CandidateNavMesh candidate;
+        candidate.mesh.vertices.assign(selectedVertices.begin(),selectedVertices.end());
+        NavPolygon triangle{.vertices={0,1,2},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}};
+        candidate.mesh.polygons.push_back(triangle);
+        candidate.polygonSourceTriangles = {0};
+        candidate.polygonContributingTriangles = {{0}};
+        candidate.regions.push_back({.id=0,.polygons={0}});
+        candidate.exits.push_back({.referenceId=0x300,.position={53180,-15936,0},.region=0,.polygon=0});
+        std::filesystem::path output; std::string error;
+        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "door-only",{source},resolved,*selected,candidate,output,error));
+        const auto doorOnly = navmesh::skyrim::offline::ResolveLoadOrder({.dataDirectory=root,.plugins={source,output}});
+        const auto* doorOnlyNavm = doorOnly.FindWinning(0x200);
+        Require(doorOnlyNavm && doorOnlyNavm->navm && doorOnlyNavm->navm->triangleCount == 1);
+        const AABB bounds{.min={12*4096.0F,-4*4096.0F,-100},.max={13*4096.0F,-3*4096.0F,100}};
+        Require(StitchCandidateBorders(candidate,bounds,adjacent->navMeshes) == 1);
+        Require(candidate.topology.valid && candidate.borderLinks[0].polygon == 2 && candidate.mesh.polygons.size() == 3);
+        auto unlinked = candidate;
+        unlinked.borderLinks.clear(); unlinked.exits.clear();
+        Require(!navmesh::skyrim::offline::WriteNavmeshOverride(root / "unlinked",{source},resolved,*selected,unlinked,output,error));
+        Require(error.find("border-reaching") != std::string::npos);
+        const auto written = navmesh::skyrim::offline::WriteNavmeshOverride(root / "output",{source},resolved,*selected,candidate,output,error);
+        if (!written) std::fprintf(stderr,"Transition writer rejected fixture: %s\n",error.c_str());
+        Require(written);
+        const auto patched = navmesh::skyrim::offline::ResolveLoadOrder({.dataDirectory=root,.plugins={source,output}});
+        const auto* selectedNavmRecord = patched.FindWinning(0x200);
+        const auto* adjacentNavmRecord = patched.FindWinning(0x201);
+        Require(selectedNavmRecord && adjacentNavmRecord && selectedNavmRecord->navm && adjacentNavmRecord->navm);
+        Require(selectedNavmRecord->navm->triangleCount == 3 && adjacentNavmRecord->navm->triangleCount == 1);
+        const auto read32 = [](const auto& bytes,std::size_t offset) {
+            return static_cast<std::uint32_t>(bytes[offset]) | static_cast<std::uint32_t>(bytes[offset+1]) << 8
+                | static_cast<std::uint32_t>(bytes[offset+2]) << 16 | static_cast<std::uint32_t>(bytes[offset+3]) << 24;
+        };
+        const auto& selectedData = selectedNavmRecord->raw->decodedPayload;
+        const auto selectedTail = static_cast<std::size_t>(selectedNavmRecord->navm->trailingData.offset);
+        Require(read32(selectedData,selectedTail) == 1 && read32(selectedData,selectedTail+14) == 1);
+        Require(read32(selectedData,selectedTail+8) == 0x201 && read32(selectedData,selectedTail+20) == 0xE48B73F3U);
+        const auto& neighborData = adjacentNavmRecord->raw->decodedPayload;
+        const auto neighborTail = static_cast<std::size_t>(adjacentNavmRecord->navm->trailingData.offset);
+        Require(read32(neighborData,neighborTail) == 1 && read32(neighborData,neighborTail+8) == 0x200);
+    }
+    void TestAdjacentBorderBridges()
+    {
+        using namespace navmesh::core;
+        CandidateNavMesh candidate;
+        candidate.mesh.vertices = {{4000,50,0},{4080,0,0},{4080,100,0},
+            {4000,150,0},{4080,200,0},{4000,350,0},{4080,300,0},{4080,400,0}};
+        candidate.mesh.polygons = {
+            {.vertices={0,1,2},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}},
+            {.vertices={3,2,4},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}},
+            {.vertices={5,6,7},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}}};
+        candidate.polygonSourceTriangles = {0,1,2};
+        candidate.polygonContributingTriangles = {{0},{1},{2}};
+        candidate.regions.push_back({.id=0,.polygons={0,1},.reachesBorder=true});
+        candidate.regions.push_back({.id=1,.polygons={2},.reachesBorder=true});
+        NavMesh neighbor;
+        neighbor.id = 0x201;
+        neighbor.vertices = {{4096,100,0},{4096,0,0},{4200,50,0},
+            {4096,200,0},{4200,150,0}};
+        neighbor.polygons = {
+            {.vertices={0,1,2},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}},
+            {.vertices={3,0,4},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}}};
+        const AABB bounds{.min={0,0,-100},.max={4096,4096,100}};
+        Require(StitchCandidateBorders(candidate,bounds,{neighbor}) == 2);
+        Require(candidate.topology.valid && candidate.borderLinks.size() == 2
+            && candidate.mesh.polygons.size() == 6 && candidate.regions.size() == 1
+            && candidate.statistics.rejectedUnreachable == 1);
+        Require(candidate.mesh.polygons[3].neighbors[2] == 4
+            && candidate.mesh.polygons[4].neighbors[0] == 3);
+    }
     void TestResolvedLoadOrder()
     {
         const auto root = std::filesystem::temp_directory_path() / "navmesh-load-order-test"; std::filesystem::remove_all(root); std::filesystem::create_directories(root);
@@ -762,14 +889,22 @@ namespace
         const NavigationProfile profile{};
         Require(profile.name == "human" && profile.stepHeight == 28.0F);
         const CandidateGenerator& generator = RecastCandidateGenerator{};
-        const AABB cellBounds{.min={0,0,-100},.max={512,512,100}};
+        const AABB cellBounds{.min={0,0,-100},.max={1024,1024,100}};
         const auto generated = generator.Generate(scene,profile,cellBounds,{});
         Require(generated.mesh.polygons.size() == 2);
         Require(generated.topology.valid);
         Require(generated.statistics.eligibleTriangles == 2);
+        Scene crossing = scene;
+        crossing.mesh.vertices = {{-100,-100,0},{600,-100,0},{600,600,0},{-100,600,0}};
+        const AABB clipBounds{.min={0,0,-100},.max={512,512,100}};
+        const auto clipped = generator.Generate(crossing,profile,clipBounds,{});
+        Require(clipped.topology.valid && !clipped.mesh.polygons.empty());
+        for (const auto vertex : clipped.mesh.vertices)
+            Require(vertex.x >= clipBounds.min.x && vertex.x <= clipBounds.max.x
+                && vertex.y >= clipBounds.min.y && vertex.y <= clipBounds.max.y);
         Scene withIsland = scene;
         withIsland.mesh.vertices.insert(withIsland.mesh.vertices.end(),
-            {{768,0,0},{832,0,0},{832,64,0},{768,64,0}});
+            {{768,200,0},{832,200,0},{832,264,0},{768,264,0}});
         withIsland.mesh.triangles.push_back({{4,5,6}});
         withIsland.mesh.triangles.push_back({{4,6,7}});
         withIsland.triangleProvenance.push_back({0,2,{}});
@@ -784,7 +919,7 @@ namespace
         Require(withoutIsland.topology.valid && withoutIsland.regions.size() == 1);
         Require(withoutIsland.mesh.polygons.size() == generated.mesh.polygons.size());
         const auto doorLinked = generator.Generate(withIsland,permissive,cellBounds,
-            {{.referenceId=0x200,.position={800,32,0}}});
+            {{.referenceId=0x200,.position={800,232,0}}});
         Require(doorLinked.topology.valid && doorLinked.regions.size() == 2);
         Require(doorLinked.exits[0].region && !doorLinked.regions[*doorLinked.exits[0].region].reachesBorder);
         Require(doorLinked.mesh.polygons.size() > generated.mesh.polygons.size());
@@ -932,6 +1067,8 @@ int main(int argc, char** argv)
     TestMo2ProfileImport();
     TestLossAwareRecordReader();
     TestNavmeshOverrideWriter();
+    TestReciprocalCellTransitions();
+    TestAdjacentBorderBridges();
     TestExteriorLandTerrain();
     TestExportMetadata();
     TestOptionalLocalGameData();

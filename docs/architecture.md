@@ -51,11 +51,14 @@ The goal is to make a real downstream generation pass possible without hard-codi
 geometry and a neutral candidate navmesh. The shared CLI/Windows run path uses
 `RecastCandidateGenerator` from the Recast Navigation submodule. It accepts only
 terrain and supported collision triangles, converts Skyrim Z-up world positions
-to Recast Y-up coordinates, rasterizes and filters walkable spans, erodes them by
+to Recast Y-up coordinates, clips exterior input to the extracted CELL bounds,
+rasterizes and filters walkable spans, erodes them by
 agent radius, then builds regions, contours, and a polygon mesh. Recast polygons
 are triangulated into the project's neutral model for JSON, OBJ, and the
 `Candidate NAVM` GLB layer. Eligible generated geometry can enter the guarded
-plugin writer.
+plugin writer. The application then matches selected exterior boundary edges to
+adjacent NAVM edges in the resolved load order and records reciprocal targets.
+Regions without a matched border portal or door are removed from this candidate.
 
 The previous polygon-based `GenerateCandidate` function remains for historical
 fixture comparisons. Application runs use the Recast implementation.
@@ -68,8 +71,11 @@ every existing NAVM in the selected cell, and verifies each with the direct
 reader. Generated geometry occupies the largest original NAVM; the others get
 empty geometry. Parent CELL and worldspace records remain in the load order.
 The writer always emits an ESP and sets its ESL flag when the override-only
-records and master table fit the light format. External, door, and cover
-navigation links are not regenerated.
+records and master table fit the light format. Matched door triangles are
+serialized in the generated NAVM. Matched exterior borders add external portals
+to the generated NAVM and reciprocal portals to adjacent NAVM overrides. Other
+authored links, cover data, NAVI, and REFR XNDP references remain outside this
+writer's supported remapping.
 
 ## Design boundary
 

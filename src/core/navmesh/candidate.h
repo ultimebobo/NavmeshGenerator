@@ -47,6 +47,19 @@ namespace navmesh::core
         Vec3 position;
         /// Region reached by the exit, or no value when no walkable surface reaches it.
         std::optional<std::uint32_t> region;
+        /// Candidate triangle beside this door, or no value when its threshold has no reachable floor.
+        std::optional<std::uint32_t> polygon;
+    };
+    /// Reciprocal exterior edge portal between triangles in adjacent Skyrim world-space cells.
+    struct CandidateBorderLink
+    {
+        /// Candidate triangle and edge indices, starting at zero in the generated mesh.
+        std::uint32_t polygon{};
+        std::uint8_t edge{};
+        /// Resolved load-order FormID and triangle edge in the neighboring NAVM.
+        std::uint32_t neighborNavmeshId{};
+        std::uint32_t neighborPolygon{};
+        std::uint8_t neighborEdge{};
     };
     struct CandidateContour { std::uint32_t region{}; bool closed{}; std::vector<std::uint32_t> vertices; };
     struct CandidateTopology { bool valid{ true }; std::vector<std::string> findings; };
@@ -74,6 +87,8 @@ namespace navmesh::core
         std::vector<std::vector<std::size_t>> polygonContributingTriangles;
         std::vector<CandidateRegion> regions;
         std::vector<CandidateExit> exits;
+        /// Candidate boundary edges with reciprocal targets in adjacent NAVMs.
+        std::vector<CandidateBorderLink> borderLinks;
         std::vector<CandidateContour> contours;
         CandidateTopology topology;
         CandidateStatistics statistics;
@@ -89,6 +104,18 @@ namespace navmesh::core
     /// @return Candidate geometry, source evidence, statistics, and topology findings.
     [[nodiscard]] CandidateNavMesh GenerateCandidate(const Scene& scene, const NavigationProfile& profile,
         std::optional<AABB> cellBounds = std::nullopt, std::vector<CandidateExit> exits = {});
+    /** Extend candidate boundary edges to matching neighboring NAVM edges on an exterior cell border.
+     * @param candidate Generated mesh and source evidence to extend in place.
+     * @param cellBounds Selected exterior CELL in Skyrim world coordinates.
+     * @param neighbors Existing NAVMs in adjacent cells of the same worldspace.
+     * @return Number of reciprocal border portals added.
+     * @warning Only near-coincident full edges at compatible heights are joined. Regions
+     * without a matched border portal or door are removed. This modifies candidate
+     * geometry, region membership, source joins, and topology.
+     * @throws std::invalid_argument when polygon source evidence is incomplete.
+     */
+    [[nodiscard]] std::size_t StitchCandidateBorders(CandidateNavMesh& candidate, const AABB& cellBounds,
+        const std::vector<NavMesh>& neighbors);
     /// Check candidate polygon topology without modifying its geometry.
     [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh& candidate);
     /// Write the candidate and its source evidence as JSON; returns false on output failure.
