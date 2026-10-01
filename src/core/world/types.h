@@ -8,19 +8,35 @@
 
 namespace navmesh::core
 {
-    struct Reference {
-        std::uint32_t id{}; std::uint32_t baseObjectId{}; std::string name; std::string recordType; std::string editorId; std::string modelPath; Vec3 position; Vec3 rotation; float scale{ 1.0F };
+    struct Reference
+    {
+        std::uint32_t id{};
+        std::uint32_t baseObjectId{};
+        std::string name;
+        std::string recordType;
+        std::string editorId;
+        std::string modelPath;
+        Vec3 position;
+        Vec3 rotation;
+        float scale{1.0F};
         /// Winning record origins from resolved load order assembly.
-        std::string sourcePlugin; std::string basePlugin; std::string baseRecordType;
+        std::string sourcePlugin;
+        std::string basePlugin;
+        std::string baseRecordType;
         /// True when the winning placed-record header marks this reference initially disabled.
         bool initiallyDisabled{};
         /// True when the winning placed-record header marks this reference deleted.
         bool deleted{};
         std::optional<AABB> localBounds;
     };
-    struct Cell {
-        std::uint32_t id{}; std::string editorId; std::string name; bool isInterior{};
+    struct Cell
+    {
+        std::uint32_t id{};
+        std::string editorId;
+        std::string name;
+        bool isInterior{};
         std::optional<std::array<std::int32_t, 2>> exteriorCoordinates;
-        std::vector<Reference> references; std::vector<NavMesh> navMeshes;
+        std::vector<Reference> references;
+        std::vector<NavMesh> navMeshes;
     };
-}
+} // namespace navmesh::core

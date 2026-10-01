@@ -14,20 +14,48 @@ namespace navmesh::core
 {
     // These names are deliberately stable: they are the visible layer names in
     // glTF viewers and the keys used by scene.provenance.json.
-    enum class SceneLayer { ExistingNavmesh, Terrain, Collision, RenderFallback, DiagnosticMarkers, CandidateNavmesh };
-    struct SceneBounds { AABB world; };
-    struct DiagnosticMarker { Vec3 position; std::string classification; std::size_t navmeshPolygon{}; std::optional<std::size_t> supportTriangle; std::optional<std::uint32_t> navmeshFormId; };
+    enum class SceneLayer
+    {
+        ExistingNavmesh,
+        Terrain,
+        Collision,
+        RenderFallback,
+        DiagnosticMarkers,
+        CandidateNavmesh
+    };
+    struct SceneBounds
+    {
+        AABB world;
+    };
+    struct DiagnosticMarker
+    {
+        Vec3 position;
+        std::string classification;
+        std::size_t navmeshPolygon{};
+        std::optional<std::size_t> supportTriangle;
+        std::optional<std::uint32_t> navmeshFormId;
+    };
     struct SceneExportOptions
     {
-        std::vector<SceneLayer> layers{ SceneLayer::ExistingNavmesh, SceneLayer::Terrain, SceneLayer::Collision, SceneLayer::RenderFallback, SceneLayer::DiagnosticMarkers };
+        std::vector<SceneLayer> layers{SceneLayer::ExistingNavmesh, SceneLayer::Terrain, SceneLayer::Collision,
+                                       SceneLayer::RenderFallback, SceneLayer::DiagnosticMarkers};
         std::optional<SceneBounds> bounds;
-        bool detailedProvenance{ true };
-        const NavMesh* candidateNavmesh{};
+        bool detailedProvenance{true};
+        const NavMesh *candidateNavmesh{};
         /// Enabled placed DOOR references to show in orange beside the candidate mesh.
         /// Positions use Skyrim world coordinates; the caller retains ownership through export.
-        const std::vector<CandidateExit>* candidateEntrances{};
+        const std::vector<CandidateExit> *candidateEntrances{};
     };
-    struct SceneExportResult { std::size_t objects{}; std::size_t triangles{}; std::size_t culledTriangles{}; };
+    struct SceneExportResult
+    {
+        std::size_t objects{};
+        std::size_t triangles{};
+        std::size_t culledTriangles{};
+    };
 
-    [[nodiscard]] SceneExportResult WriteCombinedGlb(const std::filesystem::path& outputPath, const Scene& scene, const std::vector<NavMesh>& navmeshes, const std::vector<DiagnosticMarker>& markers, const reproducibility::ExportMetadata& metadata, const SceneExportOptions& options = {});
-}
+    [[nodiscard]] SceneExportResult WriteCombinedGlb(const std::filesystem::path &outputPath, const Scene &scene,
+                                                     const std::vector<NavMesh> &navmeshes,
+                                                     const std::vector<DiagnosticMarker> &markers,
+                                                     const reproducibility::ExportMetadata &metadata,
+                                                     const SceneExportOptions &options = {});
+} // namespace navmesh::core

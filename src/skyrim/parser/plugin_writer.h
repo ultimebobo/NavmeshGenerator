@@ -10,7 +10,11 @@
 namespace navmesh::skyrim::offline
 {
     /// One cell and its generated Skyrim world-space NAVM, borrowed for a batch write.
-    struct NavmeshReplacement { const core::Cell* cell{}; const core::CandidateNavMesh* candidate{}; };
+    struct NavmeshReplacement
+    {
+        const core::Cell *cell{};
+        const core::CandidateNavMesh *candidate{};
+    };
     /** Serialize all replacements into one verified override ESP.
      * @param outputDirectory Writable output folder; existing plugins are refused.
      * @param inputPlugins Active physical plugin paths in load order.
@@ -22,10 +26,11 @@ namespace navmesh::skyrim::offline
      * @return True after every NAVM, door, and reciprocal border passes read-back.
      * @warning NAVI, XNDP, cover and unmatched authored links are not rebuilt.
      */
-    [[nodiscard]] bool WriteNavmeshOverrides(const std::filesystem::path& outputDirectory,
-        const std::vector<std::filesystem::path>& inputPlugins, const ResolvedLoadOrder& resolved,
-        const std::vector<NavmeshReplacement>& replacements,
-        std::filesystem::path& writtenPath, std::string& error);
+    [[nodiscard]] bool WriteNavmeshOverrides(const std::filesystem::path &outputDirectory,
+                                             const std::vector<std::filesystem::path> &inputPlugins,
+                                             const ResolvedLoadOrder &resolved,
+                                             const std::vector<NavmeshReplacement> &replacements,
+                                             std::filesystem::path &writtenPath, std::string &error);
     /** Write generated navigation as overrides of the selected cell's NAVMs.
      * @param outputDirectory Directory for a new ESP; existing files are never replaced.
      * @param inputPlugins Physical active plugin paths in resolved load order.
@@ -40,8 +45,9 @@ namespace navmesh::skyrim::offline
      * @warning Matched door triangles and reciprocal border portals are serialized.
      * Other authored links, cover data, NAVI, and REFR XNDP references are not rebuilt.
      */
-    [[nodiscard]] bool WriteNavmeshOverride(const std::filesystem::path& outputDirectory,
-        const std::vector<std::filesystem::path>& inputPlugins, const ResolvedLoadOrder& resolved,
-        const core::Cell& cell, const core::CandidateNavMesh& candidate,
-        std::filesystem::path& writtenPath, std::string& error);
-}
+    [[nodiscard]] bool WriteNavmeshOverride(const std::filesystem::path &outputDirectory,
+                                            const std::vector<std::filesystem::path> &inputPlugins,
+                                            const ResolvedLoadOrder &resolved, const core::Cell &cell,
+                                            const core::CandidateNavMesh &candidate, std::filesystem::path &writtenPath,
+                                            std::string &error);
+} // namespace navmesh::skyrim::offline

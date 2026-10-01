@@ -4,7 +4,15 @@
 
 namespace navmesh::validation
 {
-    enum class Severity { warning, error };
-    struct Finding { Severity severity; std::string message; };
-    [[nodiscard]] std::vector<Finding> Validate(const core::Cell& cell);
-}
+    enum class Severity
+    {
+        warning,
+        error
+    };
+    struct Finding
+    {
+        Severity severity;
+        std::string message;
+    };
+    [[nodiscard]] std::vector<Finding> Validate(const core::Cell &cell);
+} // namespace navmesh::validation

@@ -25,3 +25,37 @@
   unless a location-specific rule is explicitly required.
 - When changing behavior, do not add comments mentioning the previous behavior.
 - Do not hardcode values in the documentation. These values can evolve
+
+## Readability and design
+
+- Write project-owned code for a human reader. Use descriptive names, explicit
+  control-flow blocks, and one statement per line. Format C++ with the repository
+  `.clang-format`; restrict formatting to project-owned files under `src/` and
+  any tests being changed. Never format vendored dependencies.
+- Preserve dependency-sensitive include order, especially Windows SDK and NIF
+  headers. Formatting must not reorder includes across prerequisite headers.
+- Give each function one coherent responsibility and keep its abstraction level
+  consistent. Extract named helpers when a function mixes independent stages or
+  needs deep nesting. Prefer cohesive helpers over arbitrary line-count limits;
+  keep a longer algorithm together when splitting it would obscure its invariants.
+- Introduce each non-obvious algorithm stage with a comment explaining its
+  purpose, assumptions, and data invariants. Explain units, coordinate changes,
+  index remapping, ownership, and failure policy where they matter. Do not narrate
+  obvious statements or use comments to compensate for misleading names.
+- Apply SOLID proportionately: separate orchestration, domain algorithms, input
+  resolution, and serialization (single responsibility); add implementations
+  behind established extension points (open/closed); preserve interface contracts
+  in every implementation (Liskov substitution); expose only the operations a
+  caller needs (interface segregation); keep neutral algorithms independent of
+  platform and Skyrim I/O and use narrow existing boundaries for replaceable
+  policies (dependency inversion).
+- Prefer plain functions and value types for stateless work. Introduce a class
+  only for a cohesive responsibility with state or an actual polymorphic boundary.
+  Do not add speculative interfaces, inheritance, frameworks, or dependencies
+  solely to demonstrate SOLID.
+- Keep behavior-preserving refactors separate from feature changes. Preserve
+  output formats, diagnostics, processing order, cancellation, and error handling;
+  use existing regression fixtures and CLI checks to verify those contracts.
+- Document new module responsibilities in `docs/architecture.md` and `docs/api.md`.
+  Build the desktop executable and run relevant automated tests after refactoring;
+  ensure assertions are enabled when running the assert-based C++ test suite.

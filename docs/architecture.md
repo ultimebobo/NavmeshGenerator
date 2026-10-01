@@ -89,6 +89,32 @@ Skyrim plugin data
 
 This keeps the codebase testable, portable, and independent from a live Skyrim process.
 
+## Source responsibilities and readability
+
+`app::Run` is the common CLI and Windows entry point. It validates and resolves
+inputs, then dispatches a cell inspection or an affected-cell rebuild. The
+application helpers in `app/geometry_pipeline` compose extracted world-space
+geometry and its provenance. `app/batch_runner` owns batch orchestration,
+bounded geometry reuse, per-cell evidence, and combined writer dispatch.
+`cli/inspection_report` owns inspection OBJ, JSON, HTML, and console reporting;
+it consumes the runner's results without choosing generation policy.
+
+The Recast adapter separates input filtering and coordinate conversion, source
+indexing, voxel configuration, Recast resource ownership, neutral mesh
+conversion, adjacency, provenance joins, region discovery, exit matching, and
+reachability filtering into named internal helpers. Mesh compaction rebases
+vertices through one shared operation. Analysis separates surface support from
+edge topology, coincident-vertex checks, projected overlaps, and repair evidence.
+These stages retain their processing order and output contracts.
+
+Stateless stages use plain functions and neutral value types. The existing
+`CandidateGenerator` interface remains the extension point for generation
+implementations; individual algorithms do not need speculative class hierarchies.
+Long orchestration and binary-format routines explain their stages and index,
+ownership, coordinate, and failure invariants where keeping the sequence
+together makes it easier to review. The repository formatting configuration and
+[agent guidelines](../AGENTS.md) define the shared readability and SOLID rules.
+
 ## Affected-cell batch rebuilding
 
 The resolver retains compact placement evidence for every record origin and

@@ -149,6 +149,27 @@ See [docs/architecture.md](docs/architecture.md) for the pipeline and separation
 
 ## Source documentation
 
+Project-owned C++ follows the repository `.clang-format` and the readability and
+SOLID rules in [AGENTS.md](AGENTS.md). Prefer functions with a coherent
+responsibility and explain non-obvious algorithm stages and invariants. The
+[architecture guide](docs/architecture.md) maps the runner, geometry composition,
+inspection reporting, generation, and analysis responsibilities.
+
+To check formatting from PowerShell with clang-format available on PATH:
+
+```powershell
+clang-format --dry-run --Werror (rg --files src -g '*.cpp' -g '*.h')
+```
+
+Use a debug build to run the assert-based C++ regression suite, so its checks and
+fixture setup execute:
+
+```powershell
+xmake f -m debug
+xmake build navmesh-tests
+xmake run navmesh-tests
+```
+
 The C++ API reference is generated with Doxygen. Install Doxygen and run
 `doxygen Doxyfile` from the repository root, then open
 `build/doxygen/html/index.html`. The source guide is in [docs/api.md](docs/api.md).

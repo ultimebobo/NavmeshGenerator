@@ -45,18 +45,28 @@ namespace navmesh::analysis
         std::vector<Entry> entries;
         std::vector<core::Vec3> vertices;
 
-        struct BvhNode { core::AABB bounds{}; std::size_t first{}; std::size_t count{}; std::size_t left{}; std::size_t right{}; bool leaf{}; };
+        struct BvhNode
+        {
+            core::AABB bounds{};
+            std::size_t first{};
+            std::size_t count{};
+            std::size_t left{};
+            std::size_t right{};
+            bool leaf{};
+        };
         std::vector<BvhNode> nodes;
         std::vector<std::size_t> orderedEntries;
 
         /// Rebuild from triangles indexing the supplied world-space vertices.
-        void Build(const std::vector<core::Triangle>& triangles, const std::vector<core::Vec3>& vertices);
+        void Build(const std::vector<core::Triangle> &triangles, const std::vector<core::Vec3> &vertices);
         /// Return indices of triangles whose bounds intersect `bounds`.
-        [[nodiscard]] std::vector<std::size_t> QueryAABB(const core::AABB& bounds) const;
+        [[nodiscard]] std::vector<std::size_t> QueryAABB(const core::AABB &bounds) const;
         /// Find the closest surface point within `maxDistance`, if one exists.
-        [[nodiscard]] std::optional<SurfaceHit> NearestSurface(const core::Vec3& point, float maxDistance = 1000.0F) const;
+        [[nodiscard]] std::optional<SurfaceHit> NearestSurface(const core::Vec3 &point,
+                                                               float maxDistance = 1000.0F) const;
         /// Return the first surface hit along `direction` within `maxDistance`.
-        [[nodiscard]] std::optional<SurfaceHit> Raycast(const core::Vec3& origin, const core::Vec3& direction, float maxDistance = 1000.0F) const;
+        [[nodiscard]] std::optional<SurfaceHit> Raycast(const core::Vec3 &origin, const core::Vec3 &direction,
+                                                        float maxDistance = 1000.0F) const;
         [[nodiscard]] std::size_t Size() const noexcept;
     };
 
@@ -84,21 +94,27 @@ namespace navmesh::analysis
         float surfaceSearchRadius{};
         float maxSupportDistance{};
         float maxSlope{};
-        float minimumCoverage{ 0.60F };
-        float obstructionClearance{ 64.0F };
-        float ambiguityHeightDelta{ 8.0F };
+        float minimumCoverage{0.60F};
+        float obstructionClearance{64.0F};
+        float ambiguityHeightDelta{8.0F};
         // Set for exterior cells.  It allows topology inspection to identify
         // unstitched edges on the selected cell border without assuming a
         // border policy for interiors.
         std::optional<core::AABB> cellBounds;
     };
 
-    enum class SupportSourceType { Unknown, RenderFallback, Terrain, Collision };
+    enum class SupportSourceType
+    {
+        Unknown,
+        RenderFallback,
+        Terrain,
+        Collision
+    };
 
     struct TriangleSource
     {
-        SupportSourceType type{ SupportSourceType::Unknown };
-        float confidence{ 0.0F };
+        SupportSourceType type{SupportSourceType::Unknown};
+        float confidence{0.0F};
         std::string id;
     };
 
@@ -138,7 +154,7 @@ namespace navmesh::analysis
         std::size_t triangleIndex{};
         std::string sourceNifPath;
         std::optional<std::size_t> sourceTriangleIndex;
-        std::string sourceType{ "unknown" };
+        std::string sourceType{"unknown"};
         std::string collisionType;
         float sourceConfidence{};
         float confidence{};
@@ -173,7 +189,7 @@ namespace navmesh::analysis
         std::string kind;
         std::vector<std::uint32_t> polygons;
         float confidence{};
-        std::string disposition{ "manual_review" };
+        std::string disposition{"manual_review"};
         std::string evidence;
     };
 
@@ -188,21 +204,25 @@ namespace navmesh::analysis
         std::vector<RepairCandidate> repairCandidates;
     };
 
-    [[nodiscard]] float SurfaceSlopeDegrees(const core::Vec3& normal);
-    [[nodiscard]] std::string ClassifySupport(float heightDelta, float slopeDegrees, float maxSupportDistance, float maxSlope);
+    [[nodiscard]] float SurfaceSlopeDegrees(const core::Vec3 &normal);
+    [[nodiscard]] std::string ClassifySupport(float heightDelta, float slopeDegrees, float maxSupportDistance,
+                                              float maxSlope);
     /// Compare navmesh polygons to geometry using default source classifications.
-    [[nodiscard]] AnalysisReport AnalyzeNavMeshPolygons(const core::NavMesh& mesh, const core::Mesh& geometry, const AnalysisConfiguration& configuration);
+    [[nodiscard]] AnalysisReport AnalyzeNavMeshPolygons(const core::NavMesh &mesh, const core::Mesh &geometry,
+                                                        const AnalysisConfiguration &configuration);
     /// Compare polygons to geometry with an evidence class for each triangle.
     /// @param mesh Neutral navmesh whose polygons are classified.
     /// @param geometry World-space support triangles.
     /// @param sources Source evidence aligned with `geometry.triangles`.
     /// @param configuration Search and classification thresholds.
     /// @return Per-polygon classifications, topology findings, and summary statistics.
-    [[nodiscard]] AnalysisReport AnalyzeNavMeshPolygons(const core::NavMesh& mesh, const core::Mesh& geometry, const std::vector<TriangleSource>& sources, const AnalysisConfiguration& configuration);
-    [[nodiscard]] const char* SupportSourceName(SupportSourceType type);
+    [[nodiscard]] AnalysisReport AnalyzeNavMeshPolygons(const core::NavMesh &mesh, const core::Mesh &geometry,
+                                                        const std::vector<TriangleSource> &sources,
+                                                        const AnalysisConfiguration &configuration);
+    [[nodiscard]] const char *SupportSourceName(SupportSourceType type);
 
-    [[nodiscard]] GeometrySummary AnalyzeGeometry(const core::Mesh& mesh);
-    [[nodiscard]] NavMeshSummary AnalyzeNavMesh(const core::NavMesh& mesh);
+    [[nodiscard]] GeometrySummary AnalyzeGeometry(const core::Mesh &mesh);
+    [[nodiscard]] NavMeshSummary AnalyzeNavMesh(const core::NavMesh &mesh);
 
-    [[nodiscard]] NavMeshAnalysis Analyze(const core::NavMesh& mesh);
-}
+    [[nodiscard]] NavMeshAnalysis Analyze(const core::NavMesh &mesh);
+} // namespace navmesh::analysis

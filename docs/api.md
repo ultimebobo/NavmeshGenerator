@@ -16,6 +16,12 @@ this reference.
 - `navmesh::analysis`: spatial queries and navmesh discrepancy analysis.
 - `navmesh::validation`: cell validation findings.
 - `navmesh::app`: command-line options and the shared application runner.
+- `navmesh::app::detail::RunBatch`: affected-cell orchestration with bounded
+  geometry reuse and combined plugin writer dispatch.
+- `navmesh::app::detail` geometry-pipeline helpers: world-space extraction
+  composition, bounds filtering, and analysis provenance joins.
+- `navmesh::cli` inspection-report functions: inspection OBJ/JSON/HTML exports,
+  cell and load-order listings, and console analysis summaries.
 - `navmesh::skyrim::offline::CellImpactIndex`: affected-cell discovery, historical
   reference footprints, worldspace coordinate indexing and geometry suppliers.
 - `navmesh::skyrim::offline::WriteNavmeshOverrides`: combined batch serialization
@@ -39,3 +45,9 @@ doxygen Doxyfile
 Open `build/doxygen/html/index.html` in a browser. Generated files stay under
 `build/` and are ignored by Git. Doxygen is needed only to produce the reference,
 not to build the application.
+
+Internal generation and analysis stages are named by their responsibility and
+document their non-obvious assumptions beside the implementation. The
+[architecture guide](architecture.md) describes those boundaries; the
+[agent guidelines](../AGENTS.md) and repository `.clang-format` govern readability
+and proportionate use of SOLID for future changes.

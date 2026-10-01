@@ -18,7 +18,7 @@ namespace navmesh::core
     /// Replaceable algorithm boundary for neutral, inspection-only navmesh generation.
     class CandidateGenerator
     {
-    public:
+      public:
         virtual ~CandidateGenerator() = default;
 
         /** Generate world-space navigation geometry from authoritative scene triangles.
@@ -29,15 +29,16 @@ namespace navmesh::core
          * @param partitioningAlgorithm Recast region strategy; defaults to watershed.
          * @return Candidate mesh and evidence; throws on invalid input or a build failure.
          */
-        [[nodiscard]] virtual CandidateNavMesh Generate(const Scene& scene, const NavigationProfile& profile,
-            std::optional<AABB> cellBounds, std::vector<CandidateExit> exits,
+        [[nodiscard]] virtual CandidateNavMesh Generate(
+            const Scene &scene, const NavigationProfile &profile, std::optional<AABB> cellBounds,
+            std::vector<CandidateExit> exits,
             RegionPartitioningAlgorithm partitioningAlgorithm = RegionPartitioningAlgorithm::Watershed) const = 0;
     };
 
     /// Recast Navigation implementation of the neutral candidate generator.
     class RecastCandidateGenerator final : public CandidateGenerator
     {
-    public:
+      public:
         /** Rasterize authoritative Skyrim-world terrain and collision, then export only
          * connected regions that reach a nearby door or the exterior cell bounds.
          * An unanchored result has an empty mesh and a warning.
@@ -48,8 +49,9 @@ namespace navmesh::core
          * @param partitioningAlgorithm Recast region strategy; defaults to watershed.
          * @return Candidate mesh and evidence; throws on invalid input or a Recast build failure.
          */
-        [[nodiscard]] CandidateNavMesh Generate(const Scene& scene, const NavigationProfile& profile,
-            std::optional<AABB> cellBounds, std::vector<CandidateExit> exits,
+        [[nodiscard]] CandidateNavMesh Generate(
+            const Scene &scene, const NavigationProfile &profile, std::optional<AABB> cellBounds,
+            std::vector<CandidateExit> exits,
             RegionPartitioningAlgorithm partitioningAlgorithm = RegionPartitioningAlgorithm::Watershed) const override;
     };
-}
+} // namespace navmesh::core

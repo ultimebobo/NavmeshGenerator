@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/options.h"
+
 #include <functional>
 #include <string_view>
 
@@ -13,5 +14,5 @@ namespace navmesh::app
     /// Batch scopes resolve inputs once and export a report and per-cell candidates;
     /// generatePlugin writes one verified ESP after all candidates are ready.
     /// @return Process-style status code; nonzero indicates failure or cancellation.
-    int Run(const Options& options, const ProgressCallback& progress = {}, const CancellationCallback& cancelled = {});
-}
+    int Run(const Options &options, const ProgressCallback &progress = {}, const CancellationCallback &cancelled = {});
+} // namespace navmesh::app

@@ -23,7 +23,7 @@ namespace navmesh::skyrim::offline
         std::string modelPath;
         core::Vec3 position;
         core::Vec3 rotation;
-        float scale{ 1.0F };
+        float scale{1.0F};
         std::size_t vertices{};
         std::size_t triangles{};
         std::size_t invalidIndices{};
@@ -78,7 +78,13 @@ namespace navmesh::skyrim::offline
     /// @param cancelled Optional cancellation callback; returns partial geometry if true.
     /// @param assets Optional MO2 loose winners and archive paths.
     /// @return Extracted support and render geometry with per-reference failures.
-    [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path& dataDirectory, const core::Cell& cell, const std::filesystem::path& cacheDirectory = {}, const GeometryProgressCallback& progress = {}, const GeometryCancellationCallback& cancelled = {}, const ModelAssetSources* assets = nullptr);
-    [[nodiscard]] bool WriteGeometryObj(const std::filesystem::path& outputPath, const GeometryExtraction& geometry);
-    [[nodiscard]] bool WriteGeometryJson(const std::filesystem::path& outputPath, const core::Cell& cell, const GeometryExtraction& geometry, const reproducibility::ExportMetadata& metadata);
-}
+    [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path &dataDirectory, const core::Cell &cell,
+                                                     const std::filesystem::path &cacheDirectory = {},
+                                                     const GeometryProgressCallback &progress = {},
+                                                     const GeometryCancellationCallback &cancelled = {},
+                                                     const ModelAssetSources *assets = nullptr);
+    [[nodiscard]] bool WriteGeometryObj(const std::filesystem::path &outputPath, const GeometryExtraction &geometry);
+    [[nodiscard]] bool WriteGeometryJson(const std::filesystem::path &outputPath, const core::Cell &cell,
+                                         const GeometryExtraction &geometry,
+                                         const reproducibility::ExportMetadata &metadata);
+} // namespace navmesh::skyrim::offline

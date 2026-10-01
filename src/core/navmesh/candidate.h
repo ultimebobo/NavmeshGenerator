@@ -14,18 +14,18 @@ namespace navmesh::core
     /// Distances and areas use Skyrim world units; angles use degrees.
     struct NavigationProfile
     {
-        std::string name{ "human" };
-        float agentRadius{ 16.0F };
-        float agentHeight{ 128.0F };
-        float maxSlopeDegrees{ 45.0F };
+        std::string name{"human"};
+        float agentRadius{16.0F};
+        float agentHeight{128.0F};
+        float maxSlopeDegrees{45.0F};
         /// Maximum traversable step height in Skyrim world units.
-        float stepHeight{ 28.0F };
-        float clearance{ 128.0F };
-        float weldTolerance{ 0.05F };
+        float stepHeight{28.0F};
+        float clearance{128.0F};
+        float weldTolerance{0.05F};
         /// Minimum area for a disconnected walkable island, in square Skyrim world units.
-        float minimumRegionArea{ 8172.0F };
-        float contourSimplificationTolerance{ 0.05F };
-        std::string cellBorderPolicy{ "preserve_open_border" };
+        float minimumRegionArea{8172.0F};
+        float contourSimplificationTolerance{0.05F};
+        std::string cellBorderPolicy{"preserve_open_border"};
     };
 
     struct CandidateRegion
@@ -61,13 +61,22 @@ namespace navmesh::core
         std::uint32_t neighborPolygon{};
         std::uint8_t neighborEdge{};
     };
-    struct CandidateContour { std::uint32_t region{}; bool closed{}; std::vector<std::uint32_t> vertices; };
-    struct CandidateTopology { bool valid{ true }; std::vector<std::string> findings; };
+    struct CandidateContour
+    {
+        std::uint32_t region{};
+        bool closed{};
+        std::vector<std::uint32_t> vertices;
+    };
+    struct CandidateTopology
+    {
+        bool valid{true};
+        std::vector<std::string> findings;
+    };
     /// Input filter counts and output triangle counts for a candidate run.
     struct CandidateStatistics
     {
-        std::size_t inputTriangles{}, eligibleTriangles{}, rejectedSlope{}, rejectedClearance{}, rejectedObstruction{}, rejectedSource{},
-            rejectedDegenerate{}, rejectedSmallRegion{}, rejectedUnreachable{};
+        std::size_t inputTriangles{}, eligibleTriangles{}, rejectedSlope{}, rejectedClearance{}, rejectedObstruction{},
+            rejectedSource{}, rejectedDegenerate{}, rejectedSmallRegion{}, rejectedUnreachable{};
         /// Polygon count after filtering and before conservative interior simplification.
         std::size_t polygonsBeforeSimplification{};
         /// Final candidate triangle count after interior simplification.
@@ -78,7 +87,7 @@ namespace navmesh::core
     {
         NavigationProfile profile;
         /// Recast region partition strategy used to build this candidate.
-        std::string partitioningAlgorithm{ "watershed" };
+        std::string partitioningAlgorithm{"watershed"};
         NavMesh mesh;
         /// Primary input triangle for each output polygon, retained for simple source joins.
         std::vector<std::size_t> polygonSourceTriangles;
@@ -102,8 +111,9 @@ namespace navmesh::core
     /// @param exits Enabled placed DOOR references in Skyrim world coordinates. A door
     /// anchors only a nearby polygon on the same vertical level.
     /// @return Candidate geometry, source evidence, statistics, and topology findings.
-    [[nodiscard]] CandidateNavMesh GenerateCandidate(const Scene& scene, const NavigationProfile& profile,
-        std::optional<AABB> cellBounds = std::nullopt, std::vector<CandidateExit> exits = {});
+    [[nodiscard]] CandidateNavMesh GenerateCandidate(const Scene &scene, const NavigationProfile &profile,
+                                                     std::optional<AABB> cellBounds = std::nullopt,
+                                                     std::vector<CandidateExit> exits = {});
     /** Extend candidate boundary edges to matching neighboring NAVM edges on an exterior cell border.
      * @param candidate Generated mesh and source evidence to extend in place.
      * @param cellBounds Selected exterior CELL in Skyrim world coordinates.
@@ -114,13 +124,13 @@ namespace navmesh::core
      * geometry, region membership, source joins, and topology.
      * @throws std::invalid_argument when polygon source evidence is incomplete.
      */
-    [[nodiscard]] std::size_t StitchCandidateBorders(CandidateNavMesh& candidate, const AABB& cellBounds,
-        const std::vector<NavMesh>& neighbors);
+    [[nodiscard]] std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
+                                                     const std::vector<NavMesh> &neighbors);
     /// Check candidate polygon topology without modifying its geometry.
-    [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh& candidate);
+    [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh &candidate);
     /// Write the candidate and its source evidence as JSON; returns false on output failure.
-    [[nodiscard]] bool WriteCandidateJson(const std::filesystem::path& path, const CandidateNavMesh& candidate,
-        const Scene& scene, const std::string& metadataJson);
+    [[nodiscard]] bool WriteCandidateJson(const std::filesystem::path &path, const CandidateNavMesh &candidate,
+                                          const Scene &scene, const std::string &metadataJson);
     /// Write candidate triangles as an OBJ inspection mesh; returns false on output failure.
-    [[nodiscard]] bool WriteCandidateObj(const std::filesystem::path& path, const CandidateNavMesh& candidate);
-}
+    [[nodiscard]] bool WriteCandidateObj(const std::filesystem::path &path, const CandidateNavMesh &candidate);
+} // namespace navmesh::core
