@@ -6,7 +6,7 @@ The application now uses Recast Navigation for candidate generation. The
 polygon-based measurements and decisions below document the previous spike and
 remain useful as comparison evidence; they do not describe the active run path.
 The Recast adapter consumes supported terrain and collision, clips it to the
-extracted exterior CELL bounds, converts Skyrim world Z-up to Recast Y-up, and runs Recast's voxel rasterization, walkability
+selected exterior CELL bounds, converts Skyrim world Z-up to Recast Y-up, and runs Recast's voxel rasterization, walkability
 filters, radius erosion, configurable region partitioning, contour construction,
 and polygon mesh construction. Region partitioning defaults to watershed; the
 CLI and Windows UI also expose monotone and layer partitioning. The selected
@@ -44,8 +44,8 @@ from all three placements joined one connected region. These are local game-data
 measurements; the source assets are not committed.
 
 After polygon construction, the active generator keeps only connected components
-that reach an enabled placed DOOR or the outer border of the extracted exterior
-cell area. Door matching checks the closest point on a polygon at a compatible
+that reach an enabled placed DOOR or the border of the target exterior
+CELL. Door matching checks the closest point on a polygon at a compatible
 height and records the matched candidate triangle. Border matching allows for
 the walkable inset created by agent-radius erosion. When a resolved load order
 provides an adjacent NAVM, the selected-cell candidate joins a near-coincident
@@ -194,3 +194,11 @@ step or ramp provides a shared edge; matching XY coordinates alone do not join
 stacked floors. Supported collision missing from a walkway can still leave it
 uncovered, and unsupported crossings require inspection rather than a guessed
 bridge.
+
+## Batch target boundaries
+
+Plugin and load-order scopes reuse this generator per target CELL, with
+neighboring source geometry and persistent placements provided by the impact
+index. The candidate bounds remain the target CELL bounds. Generated borders
+must be reconciled to reciprocal generated triangle identities before combined
+plugin serialization. See [batch rebuilding](batch-rebuilding.md).

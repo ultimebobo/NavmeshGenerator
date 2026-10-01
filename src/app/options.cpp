@@ -28,7 +28,7 @@ namespace navmesh::app
             else if (argument == "--export-scene" && index + 1 < argc) options.exportScene = argv[++index];
             else if (argument == "--geometry-layers" && index + 1 < argc) options.geometryLayers = argv[++index];
             else if (argument == "--output-detail" && index + 1 < argc) options.outputDetail = argv[++index];
-            else if (argument == "--neighboring-cell-radius" && index + 1 < argc) options.neighboringCellRadius = std::max(0, std::stoi(argv[++index]));
+            else if (argument == "--neighboring-cell-radius" && index + 1 < argc) options.neighboringCellRadius = std::stoi(argv[++index]);
             else if (argument == "--scene-bounds" && index + 4 < argc) options.sceneBounds = std::array<float, 4>{ std::stof(argv[++index]), std::stof(argv[++index]), std::stof(argv[++index]), std::stof(argv[++index]) };
             else if (argument == "--diagnostics") options.diagnostics = true;
             else if (argument == "--terrain-only") options.terrainOnly = true;
@@ -49,6 +49,18 @@ namespace navmesh::app
                 else throw std::invalid_argument("--partitioning-algorithm must be watershed, monotone, or layers");
             }
             else if (argument == "--list-cells") options.listCells = true;
+            else if (argument == "--rebuild-plugin" && index + 1 < argc) {
+                if (options.rebuildScope != RebuildScope::Cell) throw std::invalid_argument("Choose one rebuild scope");
+                options.rebuildScope = RebuildScope::Plugin;
+                options.affectedPlugin = argv[++index];
+                options.generateCandidate = true;
+            }
+            else if (argument == "--rebuild-load-order") {
+                if (options.rebuildScope != RebuildScope::Cell) throw std::invalid_argument("Choose one rebuild scope");
+                options.rebuildScope = RebuildScope::LoadOrder;
+                options.generateCandidate = true;
+            }
+            else if (argument == "--rebuild-plugin") throw std::invalid_argument("--rebuild-plugin requires an active plugin filename");
         }
         return options;
     }

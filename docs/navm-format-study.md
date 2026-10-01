@@ -81,3 +81,14 @@ Localized source plugins work because no localized parent records are copied.
 
 The generated trailing section layout follows
 [OpenMW's NAVM loader](https://gitlab.com/OpenMW/openmw/-/raw/master/components/esm4/loadnavm.cpp).
+
+## Combined affected-cell overrides
+
+`WriteNavmeshOverrides` accepts multiple cell/candidate pairs from the same
+resolved snapshot and writes one ESP with a shared master table. Each cell keeps
+its own primary NAVM identity. Generated-to-generated links must target matching
+edges in the generated primary meshes and have reciprocal generated targets;
+replaced secondary NAVMs cannot serve as portal destinations. Authored neighbor
+records shared by several replacements are serialized once. Read-back checks
+include every cell's geometry, door table and portal entries. Any failure occurs
+before the temporary plugin is finalized. See [batch rebuilding](batch-rebuilding.md).

@@ -16,12 +16,17 @@ this reference.
 - `navmesh::analysis`: spatial queries and navmesh discrepancy analysis.
 - `navmesh::validation`: cell validation findings.
 - `navmesh::app`: command-line options and the shared application runner.
+- `navmesh::skyrim::offline::CellImpactIndex`: affected-cell discovery, historical
+  reference footprints, worldspace coordinate indexing and geometry suppliers.
+- `navmesh::skyrim::offline::WriteNavmeshOverrides`: combined batch serialization
+  with generated-to-generated and authored-neighbor reciprocal portal checks.
 
 The data flow and design constraints are described in
 [Architecture](architecture.md), [Coordinate system](coordinate-system.md),
-[Candidate surface algorithm](candidate-surface-algorithm.md), and
-[Operator workflow](operator-workflow.md). The generated namespaces, classes,
-files, and functions are available from the navigation pane.
+[Candidate surface algorithm](candidate-surface-algorithm.md),
+[Operator workflow](operator-workflow.md), and [Batch rebuilding](batch-rebuilding.md).
+The generated namespaces, classes, files, and functions are available from the
+navigation pane.
 
 ## Generate locally
 

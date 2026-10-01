@@ -51,7 +51,7 @@ The goal is to make a real downstream generation pass possible without hard-codi
 geometry and a neutral candidate navmesh. The shared CLI/Windows run path uses
 `RecastCandidateGenerator` from the Recast Navigation submodule. It accepts only
 terrain and supported collision triangles, converts Skyrim Z-up world positions
-to Recast Y-up coordinates, clips exterior input to the extracted CELL bounds,
+to Recast Y-up coordinates, clips exterior input to the target CELL bounds independently of its geometry suppliers,
 rasterizes and filters walkable spans, erodes them by
 agent radius, then builds regions, contours, and a polygon mesh. Recast polygons
 are triangulated into the project's neutral model for JSON, OBJ, and the
@@ -88,3 +88,16 @@ Skyrim plugin data
   -> guarded NAVM override serialization
 
 This keeps the codebase testable, portable, and independent from a live Skyrim process.
+
+## Affected-cell batch rebuilding
+
+The resolver retains compact placement evidence for every record origin and
+builds a FormID lookup index. `CellImpactIndex` indexes exterior cells by
+worldspace and coordinates, buckets persistent references by physical position,
+and follows changed base records to their placed uses. Plugin/load-order scopes
+select conservative affected targets and model-bound influence halos. The shared
+runner resolves inputs once, generates one CELL at a time and reuses a bounded
+LRU cache of source-cell geometry. Candidate evidence is compacted after each
+scene is released. The batch writer serializes all replacements together and
+verifies reciprocal generated triangle targets before finalizing one ESP.
+Selection and output contracts are in [batch rebuilding](batch-rebuilding.md).

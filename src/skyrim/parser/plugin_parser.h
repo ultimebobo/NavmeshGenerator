@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace navmesh::skyrim::offline
 {
@@ -21,7 +22,20 @@ namespace navmesh::skyrim::offline
     struct Subrecord { std::string type; ByteRange encodedRange; ByteRange dataRange; std::vector<std::uint8_t> encodedBytes; std::vector<std::uint8_t> data; bool extendedSize{}; };
     /// Indexed record with original file payload and decoded subrecord payload.
     struct PluginRecord { std::string type; std::uint32_t flags{}; ByteRange headerRange; ByteRange filePayloadRange; bool compressed{}; std::vector<std::uint8_t> filePayload; std::vector<std::uint8_t> decodedPayload; std::vector<Subrecord> subrecords; };
-    struct RecordOrigin { std::string plugin; std::uint32_t formId{}; ByteRange headerRange; };
+    /// Provenance and compact placement evidence for each version of a record.
+    struct RecordOrigin {
+        std::string plugin; std::uint32_t formId{}; ByteRange headerRange;
+        /// Resolved owner identities at this version, including moved/deleted references.
+        std::optional<std::uint32_t> cellFormId, worldspaceFormId, baseFormId;
+        /// Reference position in Skyrim world units, when DATA is present.
+        std::optional<core::Vec3> position;
+        /// Rotation-independent model bound radius from OBND, in model-local units.
+        std::optional<float> modelRadius;
+        /// Whether this version names a model asset, including models removed by overrides.
+        bool hasModel{};
+        /// Placed-reference scale for this version; multiplies model-local distances.
+        float scale{1.0F};
+    };
     struct NavmLayout {
         std::uint32_t version{}; std::uint16_t declaredBodySize{}; std::uint32_t vertexCount{}; std::uint32_t triangleCount{};
         ByteRange header; ByteRange vertices; ByteRange triangles; ByteRange trailingData; bool supported{};
@@ -40,6 +54,10 @@ namespace navmesh::skyrim::offline
     };
     struct ResolvedLoadOrder {
         std::vector<std::string> plugins; std::vector<ResolvedRecord> records; std::vector<core::Cell> cells; std::vector<Diagnostic> diagnostics;
+        /// FormID-to-record offsets built by ResolveLoadOrder; records must retain their order.
+        std::unordered_map<std::uint32_t, std::size_t> recordIndex;
+        /// Look up a resolved FormID without copying payloads; returns nullptr when
+        /// absent. Uses the resolver index or scans manually constructed fixtures.
         [[nodiscard]] const ResolvedRecord* FindWinning(std::uint32_t formId) const;
     };
     using LoadOrderProgressCallback = std::function<void(std::size_t completedPlugins, std::size_t totalPlugins, const std::filesystem::path& currentPlugin)>;

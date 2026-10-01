@@ -1,6 +1,6 @@
 # Run from the repository root: doxygen Doxyfile
 PROJECT_NAME           = "Navmesh Generator"
-PROJECT_BRIEF          = "Offline Skyrim navmesh analysis and guarded override generation"
+PROJECT_BRIEF          = "Offline Skyrim navmesh analysis and affected-cell batch override generation"
 OUTPUT_DIRECTORY       = build/doxygen
 CREATE_SUBDIRS         = NO
 OUTPUT_LANGUAGE        = English

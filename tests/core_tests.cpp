@@ -4,6 +4,7 @@
 #include "core/scene/scene.h"
 #include "skyrim/parser/plugin_parser.h"
 #include "skyrim/parser/plugin_writer.h"
+#include "skyrim/parser/affected_cells.h"
 #include "skyrim/mo2/mo2_importer.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
@@ -76,6 +77,9 @@ namespace
     {
         const auto root = std::filesystem::temp_directory_path() / "navmesh-loss-aware-reader-test"; std::filesystem::remove_all(root); std::filesystem::create_directories(root);
         const auto cell = CellPayload("CompressedCell", true); std::vector<std::uint8_t> base; PutText(base, "MODL", { 'm', 'e', 's', 'h', 'e', 's', '/', 't', 'e', 's', 't', '.', 'n', 'i', 'f', 0 });
+        std::vector<std::uint8_t> obnd;
+        for (const auto coordinate : {-3,-4,0,3,4,0}) PutU16(obnd,static_cast<std::uint16_t>(coordinate));
+        PutText(base,"OBND",obnd);
         WritePlugin(root / "Records.esp", {}, false, { { "CELL", 0x100, Compressed(cell) }, { "NAVM", 0x101, NavmPayload() }, { "STAT", 0x102, base } });
         // Mark the first non-TES4 record compressed in-place; this keeps the fixture builder intentionally small.
         std::fstream compressedFile(root / "Records.esp", std::ios::in | std::ios::out | std::ios::binary); compressedFile.seekp(24 + 8); const std::uint32_t compressedFlag = 0x40000; compressedFile.write(reinterpret_cast<const char*>(&compressedFlag), sizeof(compressedFlag)); compressedFile.close();
@@ -85,6 +89,7 @@ namespace
         const auto unknown = std::find_if(navm->raw->subrecords.begin(), navm->raw->subrecords.end(), [](const auto& sub) { return sub.type == "ZZZZ"; }); Require(unknown != navm->raw->subrecords.end() && unknown->data == std::vector<std::uint8_t>({ 0xA1, 0xB2, 0xC3 }));
         const auto* baseRecord = parsed.FindWinning(0x102); Require(baseRecord && baseRecord->modelPath == "meshes/test.nif" && baseRecord->raw);
 
+        Require(baseRecord->origins.front().modelRadius == 5.0F && baseRecord->origins.front().hasModel);
         WritePlugin(root / "Bad.esp", {}, false, { { "NAVM", 0x200, { 'N', 'V', 'N', 'M', 0x40, 0x00 } }, { "CELL", 0x201, { 'E', 'D', 'I', 'D', 0x08, 0x00, 'x' } }, { "NAVM", 0x202, NavmPayload(99) } });
         const auto malformed = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Bad.esp" } });
         Require(std::any_of(malformed.diagnostics.begin(), malformed.diagnostics.end(), [](const auto& d) { return d.kind == navmesh::skyrim::offline::DiagnosticKind::MalformedInput; }));
@@ -177,6 +182,18 @@ namespace
         const auto mixedPatched = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { sourcePath, patchPath, target } });
         Require(mixedPatched.cells.size() == 1 && mixedPatched.cells.front().navMeshes.size() == 3);
         Require(mixedPatched.FindWinning(0x01000300) && mixedPatched.FindWinning(0x01000300)->winning.plugin == "generated-navmesh.esp");
+
+        const auto batchOrder = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory=root, .plugins={sourcePath,regularPath} });
+        Require(batchOrder.cells.size() == 2);
+        auto secondCandidate = candidate; secondCandidate.mesh.vertices[1].x = 256;
+        Require(navmesh::skyrim::offline::WriteNavmeshOverrides(root / "batch-output",{sourcePath,regularPath},batchOrder,
+            {{&batchOrder.cells[0],&candidate},{&batchOrder.cells[1],&secondCandidate}},target,error));
+        const auto batchPatched = navmesh::skyrim::offline::ResolveLoadOrder({.dataDirectory=root,.plugins={sourcePath,regularPath,target}});
+        Require(batchPatched.cells.size() == 2 && batchPatched.FindWinning(0x200)->winning.plugin == "generated-navmesh.esp"
+            && batchPatched.FindWinning(0x01000200)->winning.plugin == "generated-navmesh.esp");
+        Require(batchPatched.cells[1].navMeshes[0].vertices[1].x == 256);
+        Require(!navmesh::skyrim::offline::WriteNavmeshOverrides(root / "duplicate-batch",{sourcePath},resolved,
+            {{&resolved.cells[0],&candidate},{&resolved.cells[0],&candidate}},target,error));
 
         std::vector<std::string> manyMasters;
         std::vector<std::filesystem::path> manyPaths;
@@ -300,6 +317,19 @@ namespace
         const auto& neighborData = adjacentNavmRecord->raw->decodedPayload;
         const auto neighborTail = static_cast<std::size_t>(adjacentNavmRecord->navm->trailingData.offset);
         Require(read32(neighborData,neighborTail) == 1 && read32(neighborData,neighborTail+8) == 0x200);
+        CandidateNavMesh adjacentCandidate;
+        adjacentCandidate.mesh = adjacent->navMeshes.front();
+        adjacentCandidate.mesh.polygons.front().neighbors.fill(std::numeric_limits<std::uint32_t>::max());
+        adjacentCandidate.borderLinks.push_back({0,0,0x200,2,1});
+        const bool batchWritten = navmesh::skyrim::offline::WriteNavmeshOverrides(root / "batch",{source},resolved,
+            {{&*selected,&candidate},{&*adjacent,&adjacentCandidate}},output,error);
+        if (!batchWritten) std::fprintf(stderr,"Batch transition rejected: %s\n",error.c_str());
+        Require(batchWritten);
+        const auto batch = navmesh::skyrim::offline::ResolveLoadOrder({.dataDirectory=root,.plugins={source,output}});
+        Require(batch.FindWinning(0x200)->navm->triangleCount == 3 && batch.FindWinning(0x201)->navm->triangleCount == 1);
+        adjacentCandidate.borderLinks.clear();
+        Require(!navmesh::skyrim::offline::WriteNavmeshOverrides(root / "missing-reciprocal",{source},resolved,
+            {{&*selected,&candidate},{&*adjacent,&adjacentCandidate}},output,error));
     }
     void TestAdjacentBorderBridges()
     {
@@ -330,6 +360,70 @@ namespace
         Require(candidate.mesh.polygons[3].neighbors[2] == 4
             && candidate.mesh.polygons[4].neighbors[0] == 3);
     }
+    void TestAffectedCells()
+    {
+        using namespace navmesh::skyrim::offline;
+        using navmesh::core::Cell;
+        ResolvedLoadOrder order;
+        order.plugins = { "Baseline.esm", "Move.esp", "Models.esm", "Later.esp" };
+        order.cells = { { .id=1, .exteriorCoordinates=std::array<std::int32_t,2>{0,0} },
+            { .id=2, .exteriorCoordinates=std::array<std::int32_t,2>{1,0} },
+            { .id=3, .exteriorCoordinates=std::array<std::int32_t,2>{-1,0} },
+            { .id=4, .exteriorCoordinates=std::array<std::int32_t,2>{10,0} },
+            { .id=5, .isInterior=true },
+            { .id=6, .exteriorCoordinates=std::array<std::int32_t,2>{0,0} },
+            { .id=7, .exteriorCoordinates=std::array<std::int32_t,2>{50,0} } };
+        for (const auto& cell : order.cells) {
+            ResolvedRecord record{ .type="CELL", .formId=cell.id, .exteriorCoordinates=cell.exteriorCoordinates };
+            if (!cell.isInterior) record.worldspaceFormId = cell.id == 6 ? 200 : 100;
+            record.winning = { "Baseline.esm",cell.id,{}, {}, record.worldspaceFormId };
+            record.origins = {record.winning}; order.records.push_back(record);
+        }
+        ResolvedRecord moved{ .type="REFR", .formId=60, .cellFormId=4, .worldspaceFormId=100 };
+        moved.origins = { {"Baseline.esm",60,{},1,100,50,navmesh::core::Vec3{100,100,0}},
+            {"Move.esp",60,{},4,100,50,navmesh::core::Vec3{41000,100,0}},
+            {"Later.esp",60,{},4,100,50,navmesh::core::Vec3{41100,100,0}} };
+        moved.winning = moved.origins.back(); order.records.push_back(moved);
+        ResolvedRecord base{ .type="STAT", .formId=50 };
+        base.origins = { {"Baseline.esm",50,{}}, {"Models.esm",50,{}} }; base.winning=base.origins.back(); order.records.push_back(base);
+        // An untouched REFR uses the edited base, and an interior stays independent
+        // from any exterior coordinates with the same numeric values.
+        ResolvedRecord interior{ .type="REFR", .formId=61, .cellFormId=5 };
+        interior.winning = {"Baseline.esm",61,{},5,{},50}; interior.origins={interior.winning}; order.records.push_back(interior);
+        // A persistent REFR belongs to a distant parent but physically occupies
+        // the negative-coordinate cell. Its deleted winner still affects that site.
+        ResolvedRecord persistent{ .type="REFR", .formId=62, .cellFormId=7, .worldspaceFormId=100 };
+        persistent.winning = {"Move.esp",62,{},7,100,51,navmesh::core::Vec3{-1,100,0}};
+        persistent.origins = {persistent.winning}; order.records.push_back(persistent);
+        order.cells.back().references.push_back({ .id=62, .baseObjectId=51, .modelPath="Persistent.nif", .position={-1,100,0}, .deleted=true });
+        const CellImpactIndex index(order);
+        const auto ids = [](const auto& cells) { std::set<std::uint32_t> result; for (const auto* cell : cells) result.insert(cell->id); return result; };
+        Require(ids(index.AffectedCells("mOvE.EsP",0)) == std::set<std::uint32_t>({1,2,3,4}));
+        Require(ids(index.AffectedCells("Models.esm",0)) == std::set<std::uint32_t>({1,2,3,4,5}));
+        Require(ids(index.AffectedCells("",0)) == std::set<std::uint32_t>({1,2,3,4,5}));
+        Require(index.GeometryCell(order.cells[2]).references.size() == 1);
+        Require(index.GeometryCell(order.cells.back()).references.empty());
+        Require(ids(index.Neighbors(order.cells.front(),1)) == std::set<std::uint32_t>({1,2,3}));
+        Require(index.Neighbors(order.cells[4],10).size() == 1);
+        bool rejected{}; try { (void)index.AffectedCells("Inactive.esp",0); } catch (const std::invalid_argument&) { rejected=true; } Require(rejected);
+        Require(ids(index.AffectedCells("Later.esp",0,{"meshes/persistent.nif"})) == std::set<std::uint32_t>({1,2,3,4}));
+        order.plugins.push_back("Large.esp");
+        ResolvedRecord largeBase{ .type="STAT", .formId=70, .modelPath="Large.nif" };
+        largeBase.winning = {"Baseline.esm",70,{}};
+        largeBase.winning.modelRadius = 30000.0F; largeBase.winning.hasModel = true;
+        largeBase.origins = {largeBase.winning}; order.records.push_back(largeBase);
+        ResolvedRecord largeRef{ .type="REFR", .formId=63, .cellFormId=1, .worldspaceFormId=100 };
+        largeRef.winning = {"Large.esp",63,{},1,100,70,navmesh::core::Vec3{100,100,0}};
+        largeRef.winning.scale = 2; largeRef.origins = {largeRef.winning}; order.records.push_back(largeRef);
+        order.cells.front().references.push_back({.id=63,.baseObjectId=70,.modelPath="Large.nif",.position={100,100,0},.scale=2});
+        const CellImpactIndex bounded(order);
+        Require(ids(bounded.AffectedCells("Large.esp",0)) == std::set<std::uint32_t>({1,2,3,4}));
+        Require(ids(bounded.GeometryNeighbors(order.cells[3],1)).contains(1));
+        order.records[order.records.size()-2].origins.front().modelRadius.reset();
+        const CellImpactIndex unbounded(order);
+        Require(ids(unbounded.AffectedCells("Large.esp",0)) == std::set<std::uint32_t>({1,2,3,4,7}));
+    }
+
     void TestResolvedLoadOrder()
     {
         const auto root = std::filesystem::temp_directory_path() / "navmesh-load-order-test"; std::filesystem::remove_all(root); std::filesystem::create_directories(root);
@@ -1062,6 +1156,10 @@ int main(int argc, char** argv)
     if (argc > 1 && std::string_view(argv[1]) == "--candidate-only") { TestCandidateGeneration(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--recast-only") { TestRecastSceneGeneration(); return 0; }
     if (argc > 2 && std::string_view(argv[1]) == "--local-stair-obj") { TestLocalStairs(argv[2]); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--batch-only") {
+        TestAffectedCells(); TestNavmeshOverrideWriter(); TestReciprocalCellTransitions(); return 0;
+    }
+    TestAffectedCells();
     TestResolvedLoadOrder();
     TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();

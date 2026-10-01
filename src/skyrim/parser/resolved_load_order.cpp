@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <cmath>
 #include <fstream>
 #include <iterator>
 #include <unordered_map>
@@ -217,6 +218,19 @@ namespace navmesh::skyrim::offline
                 if (!resolvedReference) result.diagnostics.push_back({ DiagnosticKind::UnresolvedFormId, sources[i].path.filename().string(), "Cannot resolve referenced FormID " + std::to_string(reference) + " in " + record.type + "." });
                 else reference = *resolvedReference;
             }
+            record.winning.cellFormId = record.cellFormId;
+            record.winning.worldspaceFormId = record.worldspaceFormId;
+            if (!record.referencedFormIds.empty()) record.winning.baseFormId = record.referencedFormIds.front();
+            if (record.transform) record.winning.position = core::Vec3{ (*record.transform)[0], (*record.transform)[1], (*record.transform)[2] };
+            record.winning.scale = record.referenceScale.value_or(1.0F);
+            record.winning.hasModel = record.modelPath && !record.modelPath->empty();
+            if (record.raw) for (const auto& sub : record.raw->subrecords) if (sub.type == "OBND" && sub.data.size() == 12) {
+                std::array<std::int16_t,6> bounds{}; std::memcpy(bounds.data(),sub.data.data(),12);
+                const auto x = static_cast<float>(std::max(std::abs(static_cast<int>(bounds[0])),std::abs(static_cast<int>(bounds[3]))));
+                const auto y = static_cast<float>(std::max(std::abs(static_cast<int>(bounds[1])),std::abs(static_cast<int>(bounds[4]))));
+                const auto z = static_cast<float>(std::max(std::abs(static_cast<int>(bounds[2])),std::abs(static_cast<int>(bounds[5]))));
+                record.winning.modelRadius = std::hypot(std::hypot(x,y),z);
+            }
             if (const auto found = winners.find(*global); found != winners.end()) {
                 // LAND overrides commonly change texture/colour data without
                 // repeating VHGT.  Preserve the inherited height subrecord in
@@ -234,7 +248,9 @@ namespace navmesh::skyrim::offline
                 record.origins = std::move(origins);
                 result.records[found->second] = std::move(record);
             }
-            else { record.origins.push_back(record.winning); winners.emplace(*global, result.records.size()); result.records.push_back(std::move(record)); }
+            else {
+                record.origins.push_back(record.winning); winners.emplace(*global, result.records.size()); result.records.push_back(std::move(record));
+            }
         }
         std::unordered_map<std::uint32_t, std::size_t> cellsById;
         for (const auto& record : result.records) if (record.type == "CELL") {
@@ -274,8 +290,14 @@ namespace navmesh::skyrim::offline
             if (reference.modelPath.empty() && record.modelPath) reference.modelPath = *record.modelPath;
             result.cells[cell->second].references.push_back(std::move(reference));
         }
+        result.recordIndex = std::move(winners);
         return result;
     }
 
-    const ResolvedRecord* ResolvedLoadOrder::FindWinning(std::uint32_t formId) const { const auto it = std::find_if(records.begin(), records.end(), [=](const auto& r) { return r.formId == formId; }); return it == records.end() ? nullptr : &*it; }
+    const ResolvedRecord* ResolvedLoadOrder::FindWinning(std::uint32_t formId) const {
+        if (const auto it = recordIndex.find(formId); it != recordIndex.end()) return &records[it->second];
+        if (!recordIndex.empty()) return nullptr;
+        const auto it = std::find_if(records.begin(), records.end(), [=](const auto& r) { return r.formId == formId; });
+        return it == records.end() ? nullptr : &*it;
+    }
 }

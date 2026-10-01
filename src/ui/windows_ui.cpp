@@ -31,6 +31,7 @@ namespace
     constexpr int CheckBase = 200;
     constexpr int TargetBase = 300;
     constexpr int PartitioningAlgorithmControl = 400;
+    constexpr int RebuildScopeControl = 401;
     constexpr int PartitioningAlgorithmControlHeight = 100;
 
     struct Field { const char* key; const char* label; const char* hint; };
@@ -46,26 +47,27 @@ namespace
         Field{"analysis", "Analysis OBJ path", "Optional custom path for the navmesh/support comparison OBJ."},
         Field{"world", "Worldspace", "Optional worldspace name for direct plugin cell lookup."},
         Field{"cell", "Legacy cell selector", "Optional direct-reader cell selector; form ID, editor ID, or coordinates are clearer alternatives."},
-        Field{"form", "Cell form ID", "Hexadecimal CELL form ID, for example 00027D1C."},
-        Field{"editor", "Cell editor ID", "CELL editor ID, such as KilkreathRuins03."},
+        Field{"form", "Cell form ID", "Hexadecimal CELL form ID from List cells."},
+        Field{"editor", "Cell editor ID", "Exact CELL editor ID from List cells."},
         Field{"x", "Exterior cell X", "Exterior CELL X coordinate. Select Coordinates to use it."},
         Field{"y", "Exterior cell Y", "Exterior CELL Y coordinate. Select Coordinates to use it."},
         Field{"radius", "Surface search radius", "Maximum horizontal search radius for support geometry, in game units."},
         Field{"support", "Max support distance", "Maximum vertical distance to a support surface, in game units."},
         Field{"slope", "Max slope", "Maximum support-surface slope in degrees."},
-        Field{"neighboring_cell_radius", "Neighboring cells", "Exterior CELL radius around the selected cell; use 1 to include references placed in adjacent cells."},
+        Field{"neighboring_cell_radius", "Neighboring cells", "Exterior geometry and impact halo in cells. Generation always includes adjacent geometry and stays clipped to each target CELL."},
+        Field{"affected_plugin", "Affected plugin", "Active ESP/ESM/ESL filename for Plugin scope. The full resolved load order supplies winning geometry and overrides."},
     };
     constexpr std::array Checks{
         Field{"list", "List cells only", "Discover and export cells without extracting geometry or analysis."},
         Field{"diagnostics", "Write diagnostics HTML", "Create an HTML report with representative support examples."},
         Field{"terrain", "Terrain only", "Skip reference-model geometry and export decoded exterior terrain only."},
         Field{"candidate", "Generate candidate NAVM", "Use Recast Navigation to rasterize terrain and supported collision, then export candidate JSON/OBJ and show it in the scene GLB."},
-        Field{"generate_plugin", "Write plugin", "Write an ESP, ESL-flagged when eligible, after its source plugins. Matched door and border portals are written; other authored links need validation. Requires a resolved load order and Neighboring cells set to 0."},
+        Field{"generate_plugin", "Write plugin", "Write an ESP, ESL-flagged when eligible, after its source plugins. Matched door and border portals are written; other authored links need validation. Requires a resolved load order. Cell, Plugin, and Load order scopes are supported."},
     };
 
     struct WindowState {
         HWND window{}, tooltip{}, progress{}, status{}, percent{}, title{}, subtitle{}, lookupLabel{};
-        HWND partitioningAlgorithmLabel{};
+        HWND partitioningAlgorithmLabel{}, rebuildScopeLabel{};
         std::array<HWND, Fields.size()> fieldLabels{}, fieldHelps{};
         std::array<HWND, 4> sectionLabels{};
         std::array<HWND, Checks.size()> checkHelps{};
@@ -135,7 +137,7 @@ namespace
             else if (index < 9) y = 276;
             else if (index < 15) y = 365 + ((index - 9) / 3) * 57;
             else y = 534 + ((index - 15) / 3) * 57;
-            const int x = columns[index % 3];
+            const int x = columns[index == 19 ? 2 : index % 3];
             Move(state.fieldLabels[index], x, y, columnWidth - helpWidth - 8, 18);
             Move(GetDlgItem(state.window, FieldBase + index), x, y + 19, columnWidth - helpWidth - 8, 29);
             Move(state.fieldHelps[index], x + columnWidth - helpWidth, y + 21, helpWidth, helpWidth);
@@ -144,14 +146,16 @@ namespace
         Move(state.partitioningAlgorithmLabel, columns[1], 591, columnWidth - helpWidth - 8, 18);
         Move(GetDlgItem(state.window, PartitioningAlgorithmControl), columns[1], 610,
             columnWidth - helpWidth - 8, PartitioningAlgorithmControlHeight);
+        Move(state.rebuildScopeLabel, columns[2], 650, columnWidth-8, 18);
+        Move(GetDlgItem(state.window, RebuildScopeControl), columns[2], 669, columnWidth-8, 120);
         const int selectionX = margin + 127;
         for (int index{}; index < 3; ++index) Move(GetDlgItem(state.window, TargetBase + index), selectionX + index * 125, 652, 116, 24);
         for (int index{}; index < static_cast<int>(Checks.size()); ++index) {
-            const int x = columns[index % 3], y = index < 3 ? 685 : 719;
+            const int x = columns[index % 3], y = index < 3 ? 715 : 749;
             Move(GetDlgItem(state.window, CheckBase + index), x, y, columnWidth - 30, 24);
             Move(state.checkHelps[index], x + columnWidth - 25, y, 22, 22);
         }
-        const int footerTop = std::max(772, height - 145);
+        const int footerTop = std::max(805, height - 145);
         Move(state.progress, margin, footerTop, std::max(300, width - margin * 2 - 75), 20);
         Move(state.percent, width - margin - 60, footerTop, 60, 20);
         Move(state.status, margin, footerTop + 29, width - margin * 2, 22);
@@ -166,15 +170,21 @@ namespace
         result.plugin = Text(window, FieldBase + 3); result.data = Text(window, FieldBase + 4); result.loadOrder = Text(window, FieldBase + 5);
         result.output = Text(window, FieldBase + 6); result.exportGeometry = Text(window, FieldBase + 7); result.exportAnalysis = Text(window, FieldBase + 8);
         result.worldspace = Trim(Text(window, FieldBase + 9)); result.cell = Trim(Text(window, FieldBase + 10));
+        const auto scope = static_cast<int>(SendMessageA(GetDlgItem(window, RebuildScopeControl), CB_GETCURSEL, 0, 0));
+        result.rebuildScope = listOnly ? navmesh::app::RebuildScope::Cell : scope == 1 ? navmesh::app::RebuildScope::Plugin
+            : scope == 2 ? navmesh::app::RebuildScope::LoadOrder : navmesh::app::RebuildScope::Cell;
+        result.affectedPlugin = Trim(Text(window, FieldBase+19));
+        if (result.rebuildScope != navmesh::app::RebuildScope::Cell) result.cell.clear();
+        const bool lookupCell = !listOnly && result.rebuildScope == navmesh::app::RebuildScope::Cell;
         const auto target = static_cast<int>(SendMessageA(GetDlgItem(window, TargetBase), BM_GETCHECK, 0, 0));
         try {
-            if (target == BST_CHECKED) {
+            if (lookupCell && target == BST_CHECKED) {
                 const auto formId = Trim(Text(window, FieldBase + 11)); if (formId.empty()) throw std::runtime_error("Enter a cell form ID or select another lookup method.");
                 result.cellFormId = static_cast<std::uint32_t>(std::stoul(formId, nullptr, 16));
-            } else if (SendMessageA(GetDlgItem(window, TargetBase + 1), BM_GETCHECK, 0, 0) == BST_CHECKED) {
+            } else if (lookupCell && SendMessageA(GetDlgItem(window, TargetBase + 1), BM_GETCHECK, 0, 0) == BST_CHECKED) {
                 result.editorId = Trim(Text(window, FieldBase + 12)); if (result.editorId.empty()) throw std::runtime_error("Enter a CELL editor ID or select another lookup method.");
             }
-            else if (SendMessageA(GetDlgItem(window, TargetBase + 2), BM_GETCHECK, 0, 0) == BST_CHECKED) { result.cellX = std::stoi(Text(window, FieldBase + 13)); result.cellY = std::stoi(Text(window, FieldBase + 14)); }
+            else if (lookupCell && SendMessageA(GetDlgItem(window, TargetBase + 2), BM_GETCHECK, 0, 0) == BST_CHECKED) { result.cellX = std::stoi(Text(window, FieldBase + 13)); result.cellY = std::stoi(Text(window, FieldBase + 14)); }
             result.surfaceSearchRadius = std::stof(Text(window, FieldBase + 15)); result.maxSupportDistance = std::stof(Text(window, FieldBase + 16)); result.maxSlope = std::stof(Text(window, FieldBase + 17));
             result.neighboringCellRadius = std::stoi(Text(window, FieldBase + 18));
             if (result.neighboringCellRadius < 0) throw std::invalid_argument("negative neighboring-cell radius");
@@ -185,7 +195,10 @@ namespace
         result.generateCandidate = SendMessageA(GetDlgItem(window, CheckBase + 3), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.generatePlugin = !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 4), BM_GETCHECK, 0, 0) == BST_CHECKED;
         if (result.generatePlugin) result.generateCandidate = true;
-        if (result.generatePlugin && result.neighboringCellRadius != 0) throw std::runtime_error("Set Neighboring cells to 0 when writing a plugin.");
+        if (result.rebuildScope != navmesh::app::RebuildScope::Cell) {
+            result.generateCandidate = true;
+            if (result.rebuildScope == navmesh::app::RebuildScope::Plugin && result.affectedPlugin.empty()) throw std::runtime_error("Enter the active plugin filename for Plugin scope.");
+        }
         if (result.generatePlugin && result.mo2.empty() && result.loadOrder.empty()) throw std::runtime_error("Plugin generation needs an MO2 profile or developer load-order input.");
         const auto algorithm = static_cast<int>(SendMessageA(GetDlgItem(window, PartitioningAlgorithmControl), CB_GETCURSEL, 0, 0));
         result.partitioningAlgorithm = algorithm == 1 ? navmesh::core::RegionPartitioningAlgorithm::Monotone
@@ -201,6 +214,8 @@ namespace
         const auto algorithm = static_cast<int>(SendMessageA(GetDlgItem(window, PartitioningAlgorithmControl), CB_GETCURSEL, 0, 0));
         const char* algorithmName = algorithm == 1 ? "monotone" : algorithm == 2 ? "layers" : "watershed";
         WritePrivateProfileStringA("options", "partitioning_algorithm", algorithmName, path.c_str());
+        const auto scope = SendMessageA(GetDlgItem(window, RebuildScopeControl), CB_GETCURSEL, 0, 0);
+        WritePrivateProfileStringA("options", "rebuild_scope", scope == 1 ? "plugin" : scope == 2 ? "load_order" : "cell", path.c_str());
         for (int i{}; i != 3; ++i) if (SendMessageA(GetDlgItem(window, TargetBase + i), BM_GETCHECK, 0, 0) == BST_CHECKED) WritePrivateProfileStringA("options", "target", std::to_string(i).c_str(), path.c_str());
     }
     void Start(HWND window, bool listOnly)
@@ -254,6 +269,15 @@ namespace
             AddSection(*state, 3, "ANALYSIS THRESHOLDS", 511);
             for (int i{}; i < 3; ++i) AddField(*state, i + 15, columns[i], 534);
             AddField(*state, 18, columns[0], 591);
+            AddField(*state, 19, columns[2], 591);
+            state->rebuildScopeLabel = Label(*state,"Rebuild scope",columns[2],650,250);
+            auto scope = CreateWindowExA(WS_EX_CLIENTEDGE,"COMBOBOX","",WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                columns[2],669,254,120,window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(RebuildScopeControl)),nullptr,nullptr);
+            Font(scope,state->body); Theme(scope);
+            for (const char* text : {"Cell","Plugin","Load order"}) SendMessageA(scope,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(text));
+            AddTooltip(*state,scope,"Plugin: cells possibly affected by that active plugin. Load order: changes after the first baseline plugin. Both include adjacent impact cells.");
+            const auto savedScope = ReadConfig(state->config,"rebuild_scope","cell");
+            SendMessageA(scope,CB_SETCURSEL,savedScope == "plugin" ? 1 : savedScope == "load_order" ? 2 : 0,0);
             state->partitioningAlgorithmLabel = Label(*state, "Partitioning algorithm", columns[1], 591, 250);
             auto algorithm = CreateWindowExA(WS_EX_CLIENTEDGE, "COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
                 columns[1], 610, 254, PartitioningAlgorithmControlHeight, window,
@@ -281,7 +305,7 @@ namespace
             return 0;
         }
         case WM_GETMINMAXINFO: {
-            auto* info = reinterpret_cast<MINMAXINFO*>(lParam); info->ptMinTrackSize.x = 960; info->ptMinTrackSize.y = 960; return 0;
+            auto* info = reinterpret_cast<MINMAXINFO*>(lParam); info->ptMinTrackSize.x = 960; info->ptMinTrackSize.y = 1000; return 0;
         }
         case WM_SIZE: if (state && state->progress) { Layout(*state); InvalidateRect(window, nullptr, TRUE); } return 0;
         case WM_ERASEBKGND: return TRUE;
@@ -337,6 +361,6 @@ int navmesh::ui::RunWindowsUi(const navmesh::app::Options&)
 {
     INITCOMMONCONTROLSEX controls{.dwSize = sizeof(controls), .dwICC = ICC_PROGRESS_CLASS | ICC_WIN95_CLASSES}; InitCommonControlsEx(&controls);
     const WNDCLASSA klass{.lpfnWndProc = Procedure, .hInstance = GetModuleHandleA(nullptr), .hCursor = LoadCursor(nullptr, IDC_ARROW), .hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1), .lpszClassName = "NavmeshGeneratorWindow"}; RegisterClassA(&klass);
-    auto window = CreateWindowExA(0, klass.lpszClassName, "Navmesh Generator", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1040, 980, nullptr, nullptr, klass.hInstance, nullptr);
+    auto window = CreateWindowExA(0, klass.lpszClassName, "Navmesh Generator", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1040, 1020, nullptr, nullptr, klass.hInstance, nullptr);
     ShowWindow(window, SW_SHOW); UpdateWindow(window); MSG message; while (GetMessageA(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageA(&message); } return static_cast<int>(message.wParam);
 }

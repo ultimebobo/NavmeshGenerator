@@ -3,6 +3,9 @@
 #include "cli/json_report.h"
 #include "skyrim/parser/plugin_parser.h"
 #include "skyrim/parser/plugin_writer.h"
+#include "skyrim/parser/affected_cells.h"
+#include <deque>
+#include <set>
 #include "skyrim/mo2/mo2_importer.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
@@ -468,6 +471,224 @@ namespace
     }
 }
 
+namespace
+{
+    /// Generate one CELL at a time, retaining only candidate evidence and a bounded
+    /// geometry cache. Full scene meshes never accumulate across the load order.
+    int RunBatch(const navmesh::app::Options& options, const navmesh::skyrim::offline::ResolvedLoadOrder& resolved,
+        const navmesh::skyrim::offline::ModelAssetSources* assets, const std::vector<std::filesystem::path>& paths,
+        const navmesh::app::ProgressCallback& progress, const navmesh::app::CancellationCallback& cancelled)
+    {
+        using namespace navmesh;
+        const auto stop = [&] { return cancelled && cancelled(); };
+        const skyrim::offline::CellImpactIndex index(resolved);
+        std::set<std::string> changedModels;
+        bool archiveModelsChanged{};
+        if (assets) {
+            const auto inside = [](const std::filesystem::path& path, const std::filesystem::path& root) {
+                const auto relative = path.lexically_relative(root);
+                return !relative.empty() && *relative.begin() != "..";
+            };
+            if (options.rebuildScope == app::RebuildScope::LoadOrder) {
+                for (const auto& [logical,physical] : assets->looseModels) if (!inside(physical,options.data)) changedModels.insert(logical);
+                archiveModelsChanged = std::any_of(assets->archives.begin(),assets->archives.end(),[&](const auto& archive) { return !inside(archive,options.data); });
+            } else {
+                const auto selected = std::find_if(paths.begin(),paths.end(),[&](const auto& path) { return EqualsIgnoreCase(path.filename().string(),options.affectedPlugin); });
+                if (selected != paths.end() && !inside(*selected,options.data))
+                    for (const auto& [logical,physical] : assets->looseModels) if (inside(physical,selected->parent_path())) changedModels.insert(logical);
+                const auto pluginStem = std::filesystem::path(options.affectedPlugin).stem().string();
+                archiveModelsChanged = std::any_of(assets->archives.begin(),assets->archives.end(),[&](const auto& archive) {
+                    const auto stem = archive.stem().string();
+                    return EqualsIgnoreCase(stem,pluginStem) || (stem.size() > pluginStem.size() && stem[pluginStem.size()] == ' '
+                        && EqualsIgnoreCase(stem.substr(0,pluginStem.size()),pluginStem));
+                });
+            }
+        }
+        const auto targets = index.AffectedCells(options.rebuildScope == app::RebuildScope::Plugin ? options.affectedPlugin : "",
+            options.neighboringCellRadius,changedModels,archiveModelsChanged);
+        struct Result {
+            const core::Cell* cell{};
+            core::CandidateNavMesh candidate;
+            core::Scene evidence;
+            std::string metadata, status;
+        };
+        std::vector<Result> results;
+        results.reserve(targets.size());
+        for (const auto* target : targets) results.push_back({ .cell=target, .status="pending" });
+        std::map<std::uint32_t, skyrim::offline::GeometryExtraction> cache;
+        std::deque<std::uint32_t> cacheOrder;
+        std::size_t cacheTriangles{}, cacheHits{}, extractedCells{}, originalPolygons{}, generatedPolygons{};
+        const auto batchMetadata = reproducibility::ToJson(reproducibility::ExportMetadata{
+            .inputPlugin=options.affectedPlugin,
+            .warnings={"Load-order scope treats plugins after the first active baseline plugin as changes.",
+                "Skipped targets and writer limitations are recorded in the batch report and docs/batch-rebuilding.md."}},"    ");
+        const auto summaryPath = options.output / "batch-report.json";
+        const auto summary = [&](const std::string& state, const std::string& error = "") {
+            std::ofstream out(summaryPath, std::ios::trunc);
+            out << "{\n  \"metadata\": " << batchMetadata << ",\n";
+            out << std::format("  \"scope\":\"{}\",\"plugin\":\"{}\",\"status\":\"{}\",\"error\":\"{}\",\n",
+                options.rebuildScope == app::RebuildScope::Plugin ? "plugin" : "load_order", JsonEscape(options.affectedPlugin), state, JsonEscape(error));
+            out << std::format("  \"selected_cells\":{},\"geometry_cells_extracted\":{},\"geometry_cache_hits\":{},\n  \"original_polygons\":{},\"generated_polygons\":{},\n  \"cells\":[\n",
+                targets.size(), extractedCells, cacheHits, originalPolygons, generatedPolygons);
+            for (std::size_t i{}; i < results.size(); ++i) out << std::format("    {{\"form_id\":\"{:08X}\",\"status\":\"{}\",\"polygons\":{}}}{}\n",
+                results[i].cell->id, JsonEscape(results[i].status), results[i].candidate.mesh.polygons.size(), i+1 == results.size() ? "" : ",");
+            out << "  ]\n}\n";
+            return out.good();
+        };
+        const auto exports = [&] {
+            for (const auto& result : results) if (!result.metadata.empty()) {
+                const auto directory = options.output/"cells"/std::format("{:08X}",result.cell->id);
+                std::filesystem::create_directories(directory);
+                if (!core::WriteCandidateJson(directory/"candidate-navm.json",result.candidate,result.evidence,result.metadata)
+                    || !core::WriteCandidateObj(directory/"candidate-navm.obj",result.candidate)) return false;
+                std::ofstream sidecar(directory/"candidate-navm.obj.metadata.json",std::ios::trunc);
+                sidecar << "{\n  \"metadata\": " << result.metadata << "\n}\n";
+                if (!sidecar) return false;
+            }
+            return true;
+        };
+        const auto fail = [&](const std::string& error) { exports(); summary("failed",error); std::cerr << error << '\n'; return 2; };
+        if (!summary("running")) return fail("Cannot write batch-report.json");
+        for (std::size_t targetIndex{}; targetIndex < targets.size(); ++targetIndex) {
+            if (stop()) { summary("cancelled"); return 3; }
+            const auto& cell = *targets[targetIndex];
+            auto& result = results[targetIndex];
+            for (const auto& mesh : cell.navMeshes) originalPolygons += mesh.polygons.size();
+            if (cell.navMeshes.empty()) { result.status = "skipped_no_existing_navm"; continue; }
+            if (const auto* record = resolved.FindWinning(cell.id); record && record->raw && (record->raw->flags & 0x20U)) {
+                result.status = "skipped_deleted_cell"; continue;
+            }
+            const auto update = [&](std::string_view status) {
+                if (progress) progress(30+static_cast<int>(60*targetIndex/std::max<std::size_t>(1,targets.size())),
+                    std::format("CELL {}/{} {:08X}: {}",targetIndex+1,targets.size(),cell.id,status));
+            };
+            update("Extracting neighboring geometry");
+            skyrim::offline::GeometryExtraction geometry;
+            for (const auto* neighbor : index.GeometryNeighbors(cell,std::max(1,options.neighboringCellRadius))) {
+                auto found = cache.find(neighbor->id);
+                if (found == cache.end()) {
+                    auto geometryCell = index.GeometryCell(*neighbor);
+                    auto extracted = options.terrainOnly ? skyrim::offline::GeometryExtraction{} : skyrim::offline::ExtractGeometry(
+                        options.data,geometryCell,options.output/".bsa-cache",
+                        [&](std::size_t done,std::size_t total) { update(std::format("Geometry {:08X}: reference {}/{}",neighbor->id,done,total)); },stop,assets);
+                    if (stop()) { result.status = "cancelled"; summary("cancelled"); return 3; }
+                    auto terrain = skyrim::offline::ExtractTerrain(resolved,*neighbor);
+                    skyrim::offline::GeometryExtraction terrainGeometry;
+                    terrainGeometry.scene = std::move(terrain.scene); terrainGeometry.mesh = std::move(terrain.mesh);
+                    terrainGeometry.terrainSupported = terrain.landRecordsDecoded != 0;
+                    terrainGeometry.terrainLandRecords = terrain.landRecordsFound;
+                    terrainGeometry.terrainLandDecoded = terrain.landRecordsDecoded;
+                    terrainGeometry.terrainLandMissing = terrain.landRecordsMissing;
+                    AppendGeometry(extracted,std::move(terrainGeometry));
+                    cacheTriangles += extracted.mesh.triangles.size()+extracted.scene.renderFallbackMesh.triangles.size();
+                    found = cache.emplace(neighbor->id,std::move(extracted)).first;
+                    cacheOrder.push_back(neighbor->id); ++extractedCells;
+                } else {
+                    ++cacheHits;
+                    std::erase(cacheOrder,neighbor->id); cacheOrder.push_back(neighbor->id);
+                }
+                AppendGeometry(geometry,skyrim::offline::GeometryExtraction(found->second));
+                // LRU is bounded both by entry count and triangle volume. A single
+                // oversized entry may be used for this target but is not retained.
+                while (cache.size() > 16 || cacheTriangles > 2000000) {
+                    const auto id = cacheOrder.front(); cacheOrder.pop_front();
+                    const auto& entry = cache.at(id);
+                    cacheTriangles -= entry.mesh.triangles.size()+entry.scene.renderFallbackMesh.triangles.size(); cache.erase(id);
+                }
+            }
+            std::optional<core::AABB> bounds;
+            if (cell.exteriorCoordinates) {
+                const auto [x,y] = *cell.exteriorCoordinates;
+                bounds = core::AABB{ .min = {x*4096.0F,y*4096.0F,std::numeric_limits<float>::lowest()},
+                    .max = {(static_cast<float>(x)+1)*4096.0F,(static_cast<float>(y)+1)*4096.0F,std::numeric_limits<float>::max()} };
+            }
+            std::vector<core::CandidateExit> exits;
+            // Physical bucketing includes DOORs from persistent worldspace parents.
+            for (const auto& reference : index.GeometryCell(cell).references)
+                if (reference.baseRecordType == "DOOR" && !reference.deleted && !reference.initiallyDisabled)
+                    exits.push_back({ .referenceId = reference.id, .position = reference.position });
+            update("Generating NAVM");
+            try {
+                result.candidate = core::RecastCandidateGenerator{}.Generate(geometry.scene,core::NavigationProfile{},bounds,std::move(exits),options.partitioningAlgorithm);
+                if (bounds) {
+                    std::vector<core::NavMesh> adjacent;
+                    for (const auto* neighbor : index.Neighbors(cell,1)) {
+                        if (!neighbor->exteriorCoordinates || neighbor->id == cell.id) continue;
+                        const auto [x,y] = *neighbor->exteriorCoordinates;
+                        if (std::abs(static_cast<std::int64_t>(x)-(*cell.exteriorCoordinates)[0])
+                            +std::abs(static_cast<std::int64_t>(y)-(*cell.exteriorCoordinates)[1]) != 1) continue;
+                        adjacent.insert(adjacent.end(),neighbor->navMeshes.begin(),neighbor->navMeshes.end());
+                    }
+                    (void)core::StitchCandidateBorders(result.candidate,*bounds,adjacent);
+                }
+            } catch (const std::exception& error) { result.status = "failed"; return fail(std::format("CELL {:08X}: {}",cell.id,error.what())); }
+            if (!result.candidate.topology.valid) { result.status = "invalid_topology"; return fail("Candidate topology validation failed"); }
+            result.status = result.candidate.mesh.polygons.empty() ? "skipped_empty_candidate" : "generated";
+            generatedPolygons += result.candidate.mesh.polygons.size();
+            reproducibility::ExportMetadata metadata{ .inputPlugin=options.affectedPlugin, .selectedCell = &cell,
+                .coverage = { .references = cell.references.size(), .geometryVertices = geometry.mesh.vertices.size(), .geometryTriangles = geometry.mesh.triangles.size(),
+                    .terrainSupported = geometry.terrainSupported, .collisionGeometrySupported = geometry.collisionModelsLoaded != 0 },
+                .warnings = { "Batch candidates use neighboring geometry but remain clipped to their target CELL.",
+                    "Cells without existing NAVM or a nonempty supported candidate are skipped; see batch-report.json." } };
+            result.metadata = reproducibility::ToJson(metadata,"    ");
+            // Compact source evidence after generation; retain no scene mesh and
+            // only provenance entries actually used by candidate polygons.
+            result.evidence.geometrySources = std::move(geometry.scene.geometrySources);
+            std::map<std::size_t,std::size_t> remap;
+            const auto source = [&](std::size_t old) {
+                const auto [it,added] = remap.emplace(old,result.evidence.triangleProvenance.size());
+                if (added) result.evidence.triangleProvenance.push_back(geometry.scene.triangleProvenance.at(old));
+                return it->second;
+            };
+            for (auto& value : result.candidate.polygonSourceTriangles) value = source(value);
+            for (auto& values : result.candidate.polygonContributingTriangles) for (auto& value : values) value = source(value);
+            for (auto& region : result.candidate.regions) for (auto& value : region.sourceTriangles) value = source(value);
+            if (stop()) { result.status = "cancelled"; summary("cancelled"); return 3; }
+        }
+        // Replace authored neighbor triangle identities with reciprocal generated
+        // edges. Endpoint equality is required; incompatible partitions fail closed.
+        std::map<std::uint32_t,Result*> generatedByCell;
+        for (auto& result : results) if (result.status == "generated") generatedByCell.emplace(result.cell->id,&result);
+        const auto near = [](core::Vec3 a,core::Vec3 b) { return std::abs(a.x-b.x)<=1 && std::abs(a.y-b.y)<=1 && std::abs(a.z-b.z)<=1; };
+        for (auto& result : results) for (auto& link : result.candidate.borderLinks) {
+            const auto* record = resolved.FindWinning(link.neighborNavmeshId);
+            if (!record || !record->cellFormId) return fail("Border target has no CELL ownership");
+            const auto other = generatedByCell.find(*record->cellFormId);
+            if (other == generatedByCell.end()) continue;
+            const auto& face = result.candidate.mesh.polygons.at(link.polygon);
+            const auto a = result.candidate.mesh.vertices.at(face.vertices[link.edge]);
+            const auto b = result.candidate.mesh.vertices.at(face.vertices[(link.edge+1)%3]);
+            bool matched{};
+            for (const auto& reverse : other->second->candidate.borderLinks) {
+                const auto& target = other->second->candidate.mesh.polygons.at(reverse.polygon);
+                const auto c = other->second->candidate.mesh.vertices.at(target.vertices[reverse.edge]);
+                const auto d = other->second->candidate.mesh.vertices.at(target.vertices[(reverse.edge+1)%3]);
+                if (!near(a,d) || !near(b,c)) continue;
+                const auto& meshes = other->second->cell->navMeshes;
+                link.neighborNavmeshId = std::max_element(meshes.begin(),meshes.end(),[](const auto& x,const auto& y) { return x.polygons.size()<y.polygons.size(); })->id;
+                link.neighborPolygon = reverse.polygon; link.neighborEdge = reverse.edge; matched = true; break;
+            }
+            if (!matched) return fail(std::format("Generated border partitions do not match between CELL {:08X} and {:08X}",result.cell->id,other->second->cell->id));
+        }
+        if (!exports()) return fail("Cannot write batch candidate exports");
+        if (stop()) { summary("cancelled"); return 3; }
+        if (options.generatePlugin && !generatedByCell.empty()) {
+            std::vector<skyrim::offline::NavmeshReplacement> replacements;
+            for (const auto& result : results) if (result.status == "generated") replacements.push_back({result.cell,&result.candidate});
+            std::filesystem::path written; std::string error;
+            if (progress) progress(92,"Writing batch NAVM override plugin");
+            if (!skyrim::offline::WriteNavmeshOverrides(options.output,paths,resolved,replacements,written,error)) return fail(error);
+            std::cout << "Generated batch NAVM override plugin: " << written.string() << '\n';
+        }
+        if (!summary("complete")) return fail("Cannot finalize batch-report.json");
+        const auto status = std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; generated polygons: {}",
+            targets.size(),generatedByCell.size(),targets.size()-generatedByCell.size(),originalPolygons,generatedPolygons);
+        std::cout << status << '\n';
+        if (progress) progress(100,status);
+        return 0;
+    }
+}
+
 int navmesh::app::Run(const Options& input, const ProgressCallback& progress, const CancellationCallback& cancelled)
 {
     auto options = input;
@@ -475,14 +696,24 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
     const auto wasCancelled = [&] { return cancelled && cancelled(); };
     update(0, "Validating inputs");
     if (options.mo2.empty() && options.plugin.empty() && options.loadOrder.empty()) {
-        std::cerr << "Usage: navmesh-offline --mo2 <instance-or-portable-root> --profile <existing-profile> [--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex>] [--generate-plugin] --output <dir>\nDeveloper/test override: --data <Data> --load-order <plugins.txt>.\n";
+        std::cerr << "Usage: navmesh-offline --mo2 <instance-or-portable-root> --profile <existing-profile> [--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --rebuild-plugin <active filename> | --rebuild-load-order] [--generate-plugin] --output <dir>\nDeveloper/test override: --data <Data> --load-order <plugins.txt>.\n";
         return 1;
     }
     if (!options.mo2.empty() && options.profile.empty()) { std::cerr << "--mo2 requires --profile naming an existing MO2 profile.\n"; return 1; }
-    if (options.generatePlugin && (options.listCells || (options.mo2.empty() && options.loadOrder.empty()) || options.neighboringCellRadius != 0)) {
-        std::cerr << "Plugin generation requires a resolved MO2/load-order input, one selected cell, and --neighboring-cell-radius 0.\n";
+    if (options.generatePlugin && (options.listCells || (options.mo2.empty() && options.loadOrder.empty()))) {
+        std::cerr << "Plugin generation requires a resolved MO2/load-order input and a rebuild selection.\n";
         return 1;
     }
+    if (options.rebuildScope != RebuildScope::Cell) {
+        if (options.mo2.empty() && options.loadOrder.empty()) { std::cerr << "Batch rebuilding requires MO2 or --load-order input.\n"; return 1; }
+        if (options.listCells || !options.cell.empty() || options.cellFormId || !options.editorId.empty() || options.cellX || options.cellY
+            || !options.exportGeometry.empty() || !options.exportAnalysis.empty() || !options.exportScene.empty() || options.sceneBounds) {
+            std::cerr << "Batch rebuilding cannot combine cell selectors, listing, scene bounds, or custom export paths.\n"; return 1;
+        }
+        if (options.rebuildScope == RebuildScope::Plugin && options.affectedPlugin.empty()) { std::cerr << "Select an active plugin filename.\n"; return 1; }
+        options.generateCandidate = true;
+    }
+    if (options.neighboringCellRadius < 0) { std::cerr << "Neighboring-cell radius cannot be negative.\n"; return 1; }
     if (options.generatePlugin) options.generateCandidate = true;
 
     std::optional<navmesh::skyrim::offline::ResolvedLoadOrder> resolved;
@@ -567,6 +798,14 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
 
     std::filesystem::create_directories(options.output);
     if (resolved) WriteLoadOrderJson(options.output / "load-order.json", *resolved);
+    if (options.rebuildScope != RebuildScope::Cell) {
+        if (resolved->plugins.empty()) { std::cerr << "The load order contains no active plugin inputs.\n"; return 2; }
+        std::vector<std::filesystem::path> paths;
+        if (mo2Input) paths = mo2Input->pluginPaths;
+        else for (auto path : navmesh::skyrim::offline::ReadLoadOrderManifest(options.loadOrder))
+            paths.push_back(path.is_absolute() ? path : options.data / path);
+        return RunBatch(options, *resolved, mo2Input ? &modelAssets : nullptr, paths, progress, cancelled);
+    }
     auto cell = resolved ? std::optional<navmesh::core::Cell>{} : navmesh::skyrim::offline::LoadCell(options.plugin, options.cell, options.worldspace, options.cellX, options.cellY, options.cellFormId, options.editorId);
     if (resolved) for (const auto& candidate : resolved->cells) {
         const auto formMatch = options.cellFormId && candidate.id == *options.cellFormId;
@@ -592,19 +831,14 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
         std::cout << "\n";
     }
 
-    // Exterior cells are streamed one at a time and appended with re-based
-    // provenance. This keeps selection/indexing scalable instead of first
-    // materializing every neighbouring cell's meshes in a single extraction.
     std::vector<navmesh::core::Cell> sceneCells{ *cell };
-    if (resolved && cell->exteriorCoordinates && options.neighboringCellRadius > 0) {
-        const auto* selectedRecord = resolved->FindWinning(cell->id);
-        for (const auto& candidate : resolved->cells) {
-            if (!candidate.exteriorCoordinates || candidate.id == cell->id) continue;
-            const auto dx = std::abs((*candidate.exteriorCoordinates)[0] - (*cell->exteriorCoordinates)[0]);
-            const auto dy = std::abs((*candidate.exteriorCoordinates)[1] - (*cell->exteriorCoordinates)[1]);
-            if (dx > options.neighboringCellRadius || dy > options.neighboringCellRadius) continue;
-            const auto* candidateRecord = resolved->FindWinning(candidate.id);
-            if (selectedRecord && candidateRecord && candidateRecord->worldspaceFormId == selectedRecord->worldspaceFormId) sceneCells.push_back(candidate);
+    if (resolved) {
+        const navmesh::skyrim::offline::CellImpactIndex index(*resolved);
+        sceneCells.clear();
+        for (const auto* source : index.GeometryNeighbors(*cell, options.generateCandidate ? std::max(1, options.neighboringCellRadius) : options.neighboringCellRadius)) {
+            auto geometryCell = index.GeometryCell(*source);
+            geometryCell.navMeshes = source->navMeshes;
+            sceneCells.push_back(std::move(geometryCell));
         }
     }
     navmesh::skyrim::offline::GeometryExtraction geometry;
@@ -680,19 +914,8 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
                 if (reference.recordType == "REFR" && reference.baseRecordType == "DOOR"
                     && !reference.deleted && !reference.initiallyDisabled)
                     exits.push_back({ .referenceId = reference.id, .position = reference.position });
-            if (sceneCell.exteriorCoordinates) {
-                const auto [x,y] = *sceneCell.exteriorCoordinates;
-                if (!candidateBounds) candidateBounds = navmesh::core::AABB{
-                    .min = { x*4096.0F,y*4096.0F,std::numeric_limits<float>::lowest() },
-                    .max = { (x+1)*4096.0F,(y+1)*4096.0F,std::numeric_limits<float>::max() } };
-                else {
-                    candidateBounds->min.x = std::min(candidateBounds->min.x,x*4096.0F);
-                    candidateBounds->min.y = std::min(candidateBounds->min.y,y*4096.0F);
-                    candidateBounds->max.x = std::max(candidateBounds->max.x,(x+1)*4096.0F);
-                    candidateBounds->max.y = std::max(candidateBounds->max.y,(y+1)*4096.0F);
-                }
-            }
         }
+        candidateBounds = analysisConfig.cellBounds;
         if (resolved && candidateBounds) {
             const auto* selectedRecord = resolved->FindWinning(cell->id);
             std::unordered_map<std::uint32_t,std::optional<std::uint32_t>> worldspaceByCell;
@@ -718,7 +941,7 @@ int navmesh::app::Run(const Options& input, const ProgressCallback& progress, co
                 std::move(exits), options.partitioningAlgorithm);
             update(85, "Candidate NAVM generated");
             if (wasCancelled()) return 3;
-            if (resolved && analysisConfig.cellBounds && options.neighboringCellRadius == 0) {
+            if (resolved && analysisConfig.cellBounds) {
                 update(86, "Matching adjacent NAVM borders");
                 std::vector<navmesh::core::NavMesh> adjacent;
                 const auto* selectedRecord = resolved->FindWinning(cell->id);
