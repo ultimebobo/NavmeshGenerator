@@ -35,6 +35,9 @@ namespace navmesh::app
         std::string affectedPlugin;
         /// Write generated navigation as NAVM overrides or new records in uncovered cells.
         bool generatePlugin{};
+        /// Copy the affected plugin with generated NAVMs instead of writing a NAVM-only patch.
+        /// Requires Plugin scope and generatePlugin; keeps the source filename and master indices.
+        bool copyPlugin{};
         /// Skip generation for cells with any winning NAVM record, including empty or unsupported records.
         /// Requires resolved MO2/load-order input; uncovered cells may receive new NAVM records.
         bool skipExistingNavmesh{};

@@ -82,6 +82,19 @@ primary NAVM. Adjacent geometry remains unchanged. Other authored links, cover
 data, NAVI, and REFR XNDP references remain outside this
 writer's supported remapping.
 
+Plugin-scope authoring can instead copy the selected source with generated
+navigation. `skyrim/parser/plugin_copy` validates the complete raw record/group
+envelope, preserves encoded unrelated records and TES4 metadata, merges NAVMs
+by identity and group placement, and updates group sizes, HEDR accounting, and
+ONAM override registration for master-flagged copies or existing ONAM tables.
+It inspects every source record type for allocation safety without expanding
+the extraction reader's index. The writer rebases generated references through
+the unchanged source master order and implicit self slot. Dependencies outside
+that table are rejected, and source full/light flags constrain new identities.
+The resulting copy keeps its original filename and resources and replaces the
+source when installed. NAVI and other unsupported connection metadata remain
+subject to the writer's existing limitations.
+
 ## Design boundary
 
 The critical architecture boundary is:

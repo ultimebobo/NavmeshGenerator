@@ -6,6 +6,30 @@ other settings. Plugin and load-order rebuilding require a resolved MO2 profile
 or the developer load-order manifest. They generate inspection candidates;
 **Write plugin** / `--generate-plugin` additionally writes a combined patch.
 
+For authoring, **Copy selected plugin** / `--copy-plugin` enables writing and
+uses the selected Plugin-scope file as the output template. The UI persists the
+option and rejects it in Cell or Load order scope. The result is written under
+the source filename in the output folder and is intended to replace the selected
+plugin while retaining its assets. It preserves encoded unrelated records,
+TES4 flags, and existing master indices. Header accounting is updated; master
+copies and copies with ONAM tables register generated overrides there while
+retaining existing entries. Generated NAVMs replace source NAVMs by
+identity or are inserted into their cell groups. New identities are allocated
+after the source's allocation cursor and all source-owned record IDs, including
+record types outside the parser's extraction index.
+
+Copy mode cannot introduce dependencies outside the selected plugin's existing
+master table, because arbitrary retained payloads cannot safely be rebased.
+Generated references may name the selected plugin itself or its masters; other
+owners stop export. New NAVMs must fit the source plugin's existing full/light
+format. The copy retains its extension and flags rather than selecting a patch
+format. Source plugins and existing output files are never overwritten. Every
+generated or modified NAVM is read back before the copy is finalized.
+
+```powershell
+navmesh-offline.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --copy-plugin --output "<new output folder>"
+```
+
 ```powershell
 navmesh-offline.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --generate-plugin --output "<new output folder>"
 navmesh-offline.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-load-order --generate-plugin --output "<new output folder>"
@@ -56,7 +80,8 @@ geometry. Their source cells do not expand the scene's terrain or NAVM coverage.
 ## Outputs and failure policy
 
 `batch-report.json` identifies the selection, completion/failure state, cell
-statuses, polygon totals, extraction count and geometry-cache reuse. Each
+statuses, polygon totals, extraction count, geometry-cache reuse, and whether
+`copy_plugin` was selected. Each
 processed target has candidate JSON/OBJ beneath `cells/<resolved FormID>/`.
 Candidate source evidence is compacted to the provenance entries used by its
 polygons. JSON exports contain run metadata, and candidate OBJs have metadata

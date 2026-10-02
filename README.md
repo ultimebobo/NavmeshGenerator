@@ -70,6 +70,28 @@ reported as skipped. Incompatible generated border partitions stop patch writing
 See [batch rebuilding](docs/batch-rebuilding.md) for the baseline contract,
 outputs, caching and writer limitations.
 
+For mod authoring, select **Plugin** rebuild scope and enable **Copy selected
+plugin** in the Windows UI, or use `--copy-plugin`:
+
+```powershell
+navmesh-offline.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --copy-plugin --output "<new output folder>"
+```
+
+This option enables plugin writing and creates `<output>/<selected filename>`
+with generated navigation and the selected plugin's other records. It preserves
+the filename, extension, TES4 flags, master order, and encoded non-NAVM records,
+including unknown and compressed records. New NAVM identities avoid all existing
+source identities and must fit the source's full/light format. Existing outputs
+and input plugins are never overwritten. The UI saves this setting.
+
+Use the exported copy **in place of** the selected plugin, with its original
+assets and localization resources. It is a replacement plugin, while the
+default `--generate-plugin` export remains a separate NAVM-only patch. Copy mode
+requires Plugin scope and rejects generated references to plugins outside the
+source's existing master table. Winning geometry still comes from the full
+resolved load order. NAVI, XNDP, cover, and unmatched authored-link limitations
+also apply to the copy; retained records do not imply rebuilt navigation data.
+
 Enable **Skip cells with existing navmesh** in the Windows UI, or add
 `--skip-existing-navmesh` to a generation command, to fill uncovered selected
 cells while preserving authored navigation. The setting is optional and saved
@@ -125,6 +147,7 @@ The CLI writes files into the target output directory:
 - `input-report.json` — MO2 profile snapshot and virtual-file winners, emitted first for every MO2 run.
 - `load-order.json` — when using `--load-order`, every winning record with its plugin and ordered origin chain.
 - With `--generate-plugin`, `generated-navmesh.esp` overrides existing NAVM records or allocates new records for uncovered cells. The ESP receives the ESL flag when its master table and new identities fit a light plugin. This option also generates candidate exports. The writer refuses to replace an existing output file and verifies every NAVM by reading it back.
+- With `--copy-plugin` in Plugin scope, the selected plugin's original filename is used for a complete copy with generated NAVMs. Source flags and master indices are preserved. `batch-report.json` records `copy_plugin`; when no eligible navigation is generated, no plugin is written.
 
 Every JSON export contains a versioned `metadata` block. OBJ and HTML exports have an adjacent `<export>.metadata.json` sidecar. The metadata identifies the tool version, input plugin, selected cell, coordinate convention, source coverage, and known limitations. Its schema is [docs/schemas/export-metadata.schema.json](docs/schemas/export-metadata.schema.json); coordinate details are in [docs/coordinate-system.md](docs/coordinate-system.md).
 
@@ -149,7 +172,7 @@ The repository contains only synthetic, redistributable fixture builders; it doe
 - Install the BSA bridge dependencies with `python -m pip install -r tools/requirements.txt` before extracting archived assets. If Python is not on PATH, set `NAVMESH_PYTHON` to the Python executable.
 - Archived assets are cached under `<output>/.bsa-cache`; delete that directory to rebuild the cache.
 - Exterior `LAND` decoding supports the collision-relevant VHGT height grid only: 33×33 samples per cell, 128-unit spacing, and world origin `(cellX * 4096, cellY * 4096)`. It intentionally excludes visual LOD and texture layers. Use `--terrain-only` with a resolved load order to export only that terrain diagnostic surface. Missing or malformed `LAND` records are reported and produce no replacement plane.
-- Some Skyrim record variants and non-standard modded data layouts may still be rejected or reported as unsupported. The writer does not copy localized parent records into the generated plugin.
+- Some Skyrim record variants and non-standard modded data layouts may still be rejected or reported as unsupported. NAVM-only patches leave localized parent records in the load order; plugin copies preserve source records and require the original localization resources.
 - Discrepancy detection is deliberately conservative. Collision support has priority over terrain, terrain has priority over render fallback, and only sufficiently consistent samples can classify a polygon. Ambiguous or out-of-coverage polygons are displayed as limitations rather than defects. Repair candidates remain report-only/manual-review evidence.
 
 The verified NVNM layout and writer acceptance rules are documented in [docs/navm-format-study.md](docs/navm-format-study.md).

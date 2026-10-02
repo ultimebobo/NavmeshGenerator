@@ -11,7 +11,7 @@ MARKDOWN_SUPPORT       = YES
 USE_MDFILE_AS_MAINPAGE = docs/api.md
 
 # Document only code owned by this project; lib and tools contain vendored code.
-# Recursive src discovery includes app composition helpers and CLI inspection reports.
+# Recursive src discovery includes app composition helpers, inspection reports, and plugin-copy serialization.
 INPUT                 = src docs README.md AGENTS.md fixtures/README.md tests/integration/README.md
 FILE_PATTERNS         = *.h *.hpp *.cpp *.md
 RECURSIVE             = YES

@@ -1,4 +1,5 @@
 #include "skyrim/parser/plugin_writer.h"
+#include "skyrim/parser/plugin_copy.h"
 
 #include <algorithm>
 #include <cctype>
@@ -224,14 +225,20 @@ namespace
         const std::vector<std::pair<std::uint32_t, navmesh::core::NavMesh>> &expected,
         const std::map<std::uint32_t, std::vector<std::pair<std::uint16_t, std::uint32_t>>> &doorsByMesh,
         const std::vector<std::pair<std::uint32_t, std::uint32_t>> &expectedCells,
-        const std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t>> &expectedLinks)
+        const std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t>> &expectedLinks,
+        bool copiedPlugin = false)
     {
         std::vector<ResolvedRecord> records;
         std::vector<std::string> masters;
         std::vector<navmesh::skyrim::offline::Diagnostic> diagnostics;
         bool light{};
         if (!navmesh::skyrim::offline::DirectPluginReader{}.Read(path, records, masters, light, diagnostics) ||
-            !diagnostics.empty())
+            std::any_of(diagnostics.begin(), diagnostics.end(),
+                        [&](const auto &diagnostic)
+                        {
+                            return !copiedPlugin ||
+                                   diagnostic.kind != navmesh::skyrim::offline::DiagnosticKind::UnsupportedVersion;
+                        }))
         {
             return false;
         }
@@ -239,7 +246,8 @@ namespace
         {
             return false;
         }
-        if (static_cast<std::size_t>(std::count_if(records.begin(), records.end(), [](const auto &record)
+        if (!copiedPlugin &&
+            static_cast<std::size_t>(std::count_if(records.begin(), records.end(), [](const auto &record)
                                                    { return record.type == "NAVM"; })) != expected.size())
         {
             return false;
@@ -356,7 +364,8 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
                                                      const std::vector<std::filesystem::path> &inputPlugins,
                                                      const ResolvedLoadOrder &resolved,
                                                      const std::vector<NavmeshReplacement> &replacements,
-                                                     std::filesystem::path &writtenPath, std::string &error)
+                                                     std::filesystem::path &writtenPath, std::string &error,
+                                                     const std::string &copyPlugin)
 {
     const auto fail = [&](const char *reason)
     {
@@ -650,6 +659,10 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
     }
     std::vector<SourceInfo> sources;
     std::vector<std::string> requiredSources = doorOwners;
+    if (!copyPlugin.empty())
+    {
+        requiredSources.push_back(copyPlugin);
+    }
     for (const auto &replacement : replacements)
     {
         if (replacement.cell->navMeshes.empty())
@@ -725,6 +738,48 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             }
         }
     }
+    std::optional<detail::PluginCopy> copy;
+    std::string copiedName;
+    if (!copyPlugin.empty())
+    {
+        const auto selected = std::find_if(sources.begin(), sources.end(),
+                                           [&](const auto &source) { return SameName(source.name, copyPlugin); });
+        detail::PluginCopy prepared;
+        if (selected == sources.end() || !detail::PreparePluginCopy(selected->bytes, prepared, error))
+        {
+            return false;
+        }
+        // Keep the self slot virtual while reusing NAVM rebasing. It is never emitted
+        // as a TES4 master, and arbitrary copied payloads retain their original indices.
+        copiedName = selected->name;
+        const auto selectedPath = std::find_if(inputPlugins.begin(), inputPlugins.end(), [&](const auto &inputPath)
+                                               { return SameName(inputPath.filename().string(), copiedName); });
+        copiedName = selectedPath->filename().string();
+        masters = prepared.masters;
+        masters.push_back(copiedName);
+        copy = std::move(prepared);
+        // Record identities must remain meaningful when the copy replaces the source.
+        // Winning overrides may come from other plugins, but their introducing owners
+        // must be addressable through this unchanged table before serialization starts.
+        const auto representable = [&](std::uint32_t id)
+        { return RebaseResolvedFormId(resolved, masters, id).has_value(); };
+        for (const auto *record : records)
+        {
+            if (!representable(record->formId))
+            {
+                return fail("Copy export requires NAVM owners in the selected plugin's existing master table. "
+                            "Use the NAVM-only patch export for additional dependencies.");
+            }
+        }
+        for (const auto &[id, record] : neighborRecords)
+        {
+            if (!representable(id))
+            {
+                return fail("Copy export requires neighboring NAVM owners in the selected plugin's existing master "
+                            "table. Use the NAVM-only patch export for additional dependencies.");
+            }
+        }
+    }
     for (auto &[cellId, entries] : doorsByCell)
     {
         for (auto &[triangle, doorId] : entries)
@@ -737,23 +792,30 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             doorId = *rebased;
         }
     }
-    if (masters.size() > 254)
+    if (masters.size() > (copy ? 255U : 254U))
     {
         return fail("Too many masters for a generated plugin.");
     }
-    // New identities belong to this output plugin, above the reserved local range.
-    // Use a regular ESP when the new records cannot fit in the light-plugin range.
-    constexpr std::uint32_t firstNewObjectId = 0x800U;
-    if (newNavmeshCount > 0x1000000U - firstNewObjectId)
+    // New identities belong to the output's self slot. Copies keep their allocation
+    // cursor and format; patches choose a full/light format based on their new records.
+    const std::uint32_t firstNewObjectId = copy ? copy->nextObjectId : 0x800U;
+    const bool light =
+        copy ? (copy->flags & 0x200U) != 0 : masters.size() <= 253 && newNavmeshCount <= 0x1000U - firstNewObjectId;
+    const auto objectIdLimit = light ? 0x1000U : 0x1000000U;
+    if (newNavmeshCount && (firstNewObjectId >= objectIdLimit || newNavmeshCount > objectIdLimit - firstNewObjectId))
     {
-        return fail("Too many new NAVM records for a generated plugin.");
+        return fail("New NAVM identities do not fit the output plugin's full/light format.");
     }
-    const bool light = masters.size() <= 253 && newNavmeshCount <= 0x1000U - firstNewObjectId;
+    const auto selfIndex = static_cast<std::uint32_t>(masters.size() - (copy ? 1 : 0));
     std::uint32_t nextObjectId = firstNewObjectId;
     for (const auto &master : masters)
     {
         const auto it = std::find_if(inputPlugins.begin(), inputPlugins.end(),
                                      [&](const auto &p) { return SameName(p.filename().string(), master); });
+        if (it == inputPlugins.end())
+        {
+            return fail("A copied plugin master is absent from the input load order.");
+        }
         std::ifstream file(*it, std::ios::binary);
         std::array<std::uint8_t, 12> header{};
         file.read(reinterpret_cast<char *>(header.data()), static_cast<std::streamsize>(header.size()));
@@ -762,12 +824,12 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             return fail("Cannot read a required source master.");
         }
     }
-    const auto path = outputDirectory / "generated-navmesh.esp";
+    const auto path = outputDirectory / (copy ? copiedName : "generated-navmesh.esp");
     if (std::filesystem::exists(path))
     {
         return fail("Plugin output already exists; choose an empty output folder.");
     }
-    if (std::filesystem::exists(outputDirectory / "generated-navmesh.esl"))
+    if (!copy && std::filesystem::exists(outputDirectory / "generated-navmesh.esl"))
     {
         return fail("An older generated-navmesh.esl exists in the output folder; choose an empty output folder.");
     }
@@ -993,10 +1055,8 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             }
             Set32(bytes, 4, static_cast<std::uint32_t>(payload.size()));
             Set32(bytes, 8, Get32(bytes, 8) & ~(0x40000U | 0x20U));
-            const auto rebasedId =
-                newNavmesh
-                    ? std::optional<std::uint32_t>{static_cast<std::uint32_t>(masters.size()) << 24 | nextObjectId++}
-                    : RebaseFormId(source, masters, Get32(bytes, 12));
+            const auto rebasedId = newNavmesh ? std::optional<std::uint32_t>{selfIndex << 24 | nextObjectId++}
+                                              : RebaseFormId(source, masters, Get32(bytes, 12));
             if (!rebasedId)
             {
                 return fail("Cannot rebase source NAVM FormID.");
@@ -1291,6 +1351,15 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
     output.insert(output.end(), headerPayload.begin(), headerPayload.end());
     auto groups = Serialize(root);
     output.insert(output.end(), groups.begin(), groups.end());
+    auto emittedMasters = masters;
+    if (copy)
+    {
+        if (!detail::MergePluginCopy(*copy, groups, nextObjectId, output, error))
+        {
+            return false;
+        }
+        emittedMasters = copy->masters;
+    }
     if (!outputDirectory.empty())
     {
         std::filesystem::create_directories(outputDirectory);
@@ -1310,7 +1379,8 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             return fail("Cannot write generated plugin.");
         }
     }
-    if (!ReadBack(temporary, masters, light, expected, doorsByMesh, expectedCells, expectedLinks))
+    if (!ReadBack(temporary, emittedMasters, light, expected, doorsByMesh, expectedCells, expectedLinks,
+                  copy.has_value()))
     {
         std::filesystem::remove(temporary);
         return fail("Generated plugin failed NAVM read-back verification.");

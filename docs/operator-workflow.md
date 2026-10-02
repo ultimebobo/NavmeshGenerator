@@ -4,6 +4,17 @@ This document defines the user-facing command contract. You select an existing M
 
 Analysis commands read the input profile without changing it. The guarded plugin-generation option writes a new plugin only beneath the `--output` directory supplied by the user.
 
+For mod authors, select **Plugin** scope, enter the active filename in **Affected
+plugin**, and enable **Copy selected plugin**. The saved option enables plugin
+writing and exports a copy under the original filename with generated NAVMs and
+the plugin's other encoded records. The CLI equivalent is `--rebuild-plugin
+"<active plugin.esp>" --copy-plugin`. Use this copy in place of the source with
+the original assets and localization resources. It preserves source flags and
+master order; generated references outside that master table and new identities
+that exceed the source's full/light format stop export. Existing output files
+and source plugins are never overwritten. The default **Write plugin** export
+still produces a separate NAVM-only patch. See [batch rebuilding](batch-rebuilding.md).
+
 ## One input model for the whole product
 
 ```powershell

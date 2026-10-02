@@ -30,6 +30,11 @@ this reference.
 - `navmesh::skyrim::offline::WriteNavmeshOverrides`: combined batch serialization
   of existing overrides and new plugin-owned NAVMs, with generated-to-generated
   and authored-neighbor reciprocal portal checks.
+- `navmesh::skyrim::offline::detail::PluginCopy`, `PreparePluginCopy`, and
+  `MergePluginCopy`: complete raw-envelope validation, identity allocation limits,
+  and NAVM insertion into a byte-preserving source copy. `WriteNavmeshOverrides`
+  accepts an optional active filename for this authoring export and verifies
+  modified NAVMs against the source's unchanged master table and full/light flags.
 - `navmesh::skyrim::offline::CellsWithExistingNavmesh`: winning NAVM ownership for
   the shared runner's optional uncovered-cell generation policy, independent of
   whether polygon geometry can be decoded.

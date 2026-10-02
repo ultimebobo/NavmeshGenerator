@@ -15,7 +15,7 @@ namespace navmesh::skyrim::offline
         const core::Cell *cell{};
         const core::CandidateNavMesh *candidate{};
     };
-    /** Serialize generated navigation into one verified ESP, allocating a new NAVM for uncovered cells.
+    /** Serialize generated navigation into a verified patch or source copy, allocating NAVMs for uncovered cells.
      * @param outputDirectory Writable output folder; existing plugins are refused.
      * @param inputPlugins Active physical plugin paths in load order.
      * @param resolved Winning records from the same input snapshot.
@@ -25,8 +25,12 @@ namespace navmesh::skyrim::offline
      * core::AuthoredBorderTolerance; other candidate vertices must stay inside.
      * Cells without any winning NAVM receive a plugin-owned identity and temporary
      * CELL child placement; unsupported existing records cannot be treated as uncovered.
-     * @param writtenPath Receives the finalized ESP path on success.
-     * @param error Receives a failure reason; no final ESP is published on failure.
+     * @param writtenPath Receives the finalized plugin path on success.
+     * @param error Receives a failure reason; no final plugin is published on failure.
+     * @param copyPlugin Optional active filename to copy with generated NAVMs. Preserves
+     * all other records, the filename, TES4 flags, and existing master indices. Generated
+     * references must belong to that plugin or its existing masters; new IDs must fit
+     * its existing full/light format. The copy replaces the source when installed.
      * @return True after every NAVM, door, and reciprocal border passes read-back.
      * @warning NAVI, XNDP, cover and unmatched authored links are not rebuilt.
      */
@@ -34,7 +38,8 @@ namespace navmesh::skyrim::offline
                                              const std::vector<std::filesystem::path> &inputPlugins,
                                              const ResolvedLoadOrder &resolved,
                                              const std::vector<NavmeshReplacement> &replacements,
-                                             std::filesystem::path &writtenPath, std::string &error);
+                                             std::filesystem::path &writtenPath, std::string &error,
+                                             const std::string &copyPlugin = {});
     /** Write generated navigation as overrides, or a new NAVM when the selected cell has none.
      * @param outputDirectory Directory for a new ESP; existing files are never replaced.
      * @param inputPlugins Physical active plugin paths in resolved load order.

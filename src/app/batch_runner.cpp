@@ -153,6 +153,7 @@ namespace navmesh::app::detail
             std::ofstream out(summaryPath, std::ios::trunc);
             out << "{\n  \"metadata\": " << batchMetadata << ",\n";
             out << "  \"skip_existing_navmesh\":" << (options.skipExistingNavmesh ? "true" : "false") << ",\n";
+            out << "  \"copy_plugin\":" << (options.copyPlugin ? "true" : "false") << ",\n";
             out << std::format("  \"scope\":\"{}\",\"plugin\":\"{}\",\"status\":\"{}\",\"error\":\"{}\",\n",
                                options.rebuildScope == app::RebuildScope::Plugin ? "plugin" : "load_order",
                                JsonEscape(options.affectedPlugin), state, JsonEscape(error));
@@ -487,13 +488,16 @@ namespace navmesh::app::detail
             std::string error;
             if (progress)
             {
-                progress(92, "Writing batch NAVM override plugin");
+                progress(92,
+                         options.copyPlugin ? "Writing selected plugin copy" : "Writing batch NAVM override plugin");
             }
-            if (!skyrim::offline::WriteNavmeshOverrides(options.output, paths, resolved, replacements, written, error))
+            if (!skyrim::offline::WriteNavmeshOverrides(options.output, paths, resolved, replacements, written, error,
+                                                        options.copyPlugin ? options.affectedPlugin : ""))
             {
                 return fail(error);
             }
-            std::cout << "Generated batch NAVM override plugin: " << written.string() << '\n';
+            std::cout << (options.copyPlugin ? "Generated plugin copy: " : "Generated batch NAVM override plugin: ")
+                      << written.string() << '\n';
         }
         if (!summary("complete"))
         {

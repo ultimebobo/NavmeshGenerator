@@ -83,7 +83,8 @@ namespace
             std::cerr
                 << "Usage: navmesh-offline --mo2 <instance-or-portable-root> --profile <existing-profile> "
                    "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --rebuild-plugin <active "
-                   "filename> | --rebuild-load-order] [--generate-plugin] [--skip-existing-navmesh] --output "
+                   "filename> | --rebuild-load-order] [--generate-plugin] [--copy-plugin] [--skip-existing-navmesh] "
+                   "--output "
                    "<dir>\nDeveloper/test override: "
                    "--data <Data> --load-order <plugins.txt>.\n";
             return 1;
@@ -96,6 +97,11 @@ namespace
         if (options.generatePlugin && (options.listCells || (options.mo2.empty() && options.loadOrder.empty())))
         {
             std::cerr << "Plugin generation requires a resolved MO2/load-order input and a rebuild selection.\n";
+            return 1;
+        }
+        if (options.copyPlugin && (options.rebuildScope != RebuildScope::Plugin || !options.generatePlugin))
+        {
+            std::cerr << "--copy-plugin requires Plugin rebuild scope (--rebuild-plugin) and plugin generation.\n";
             return 1;
         }
         if (options.rebuildScope != RebuildScope::Cell)

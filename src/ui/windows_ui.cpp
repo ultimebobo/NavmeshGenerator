@@ -83,6 +83,10 @@ namespace
               "Generate only in selected cells without any winning NAVM record. Preserves authored geometry; "
               "matched borders may add reciprocal links. Requires MO2 or load-order input and generation. "
               "Empty, unsupported, and deleted NAVM records also protect their cells."},
+        Field{"copy_plugin", "Copy selected plugin",
+              "Write a copy of the affected plugin with generated navigation. Requires Plugin scope. Preserves "
+              "other records, the filename, flags, and master indices. Use the copy in place of the source plugin. "
+              "Links requiring dependencies outside its existing master table cannot be exported."},
     };
 
     struct WindowState
@@ -240,7 +244,7 @@ namespace
         }
         for (int index{}; index < static_cast<int>(Checks.size()); ++index)
         {
-            const int x = columns[index % 3], y = index < 3 ? 715 : 749;
+            const int x = columns[index % 3], y = 715 + (index / 3) * 28;
             Move(GetDlgItem(state.window, CheckBase + index), x, y, columnWidth - 30, 24);
             Move(state.checkHelps[index], x + columnWidth - 25, y, 22, 22);
         }
@@ -324,6 +328,16 @@ namespace
             !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 4), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.skipExistingNavmesh =
             !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 5), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        result.copyPlugin =
+            !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 6), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        if (result.copyPlugin)
+        {
+            if (result.rebuildScope != navmesh::app::RebuildScope::Plugin)
+            {
+                throw std::runtime_error("Copy selected plugin requires Plugin rebuild scope.");
+            }
+            result.generatePlugin = true;
+        }
         if (result.generatePlugin)
         {
             result.generateCandidate = true;

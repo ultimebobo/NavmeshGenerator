@@ -92,6 +92,19 @@ doors, or cells. Independent-tool and disposable-profile game validation are
 required before an output plugin is used.
 Localized source plugins work because no localized parent records are copied.
 
+The optional Plugin-scope copy export retains all unrelated source records,
+including localized payloads and TES4 localization flags. It keeps the source
+filename so the original external assets and localization resources remain
+applicable; those resources are not duplicated by the exporter. The source's
+master order and implicit self index remain unchanged. Generated references
+outside that table are rejected, and allocated identities must fit the source's
+existing full/light format. Replaced NAVMs, affected group sizes, HEDR accounting,
+and ONAM registration change. Master-flagged copies register generated overrides
+in ONAM, retaining existing entries; an existing ONAM table is also extended in
+other copies. This follows [xEdit's ONAM description](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/whatsnew.md),
+which identifies the table as overridden records in temporary CELL child groups.
+Preserved NAVI, XNDP, and other authored data are not rebuilt.
+
 The generated trailing section layout follows
 [OpenMW's NAVM loader](https://gitlab.com/OpenMW/openmw/-/raw/master/components/esm4/loadnavm.cpp).
 

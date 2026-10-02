@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 
 EXE = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 else Path("build/windows/x64/releasedbg/navmesh-offline.exe").resolve()
 
@@ -153,6 +154,185 @@ class BatchRebuild(unittest.TestCase):
         self.run_cli("--rebuild-load-order", "--cell-formid", "100", code=1)
         self.run_cli("--rebuild-plugin", "Patch.esp", "--rebuild-load-order", code=1)
         self.run_cli("--rebuild-load-order", "--neighboring-cell-radius", "-1", code=1)
+
+    def test_plugin_copy_preserves_records_header_and_source(self):
+        selected = self.root / "Patch.esp"
+        original = selected.read_bytes()
+        header_size = struct.unpack_from("<I", original, 4)[0]
+        header = original[24:24 + header_size] + sub("CNAM", b"Fixture author\0") + sub("ZZZZ", b"opaque header")
+        opaque_payload = sub("XXXX", struct.pack("<I", 70000)) + b"DATA\0\0" + b"x" * 70000
+        opaque = record("QUST", 0x01000850, struct.pack("<I", len(opaque_payload)) + zlib.compress(opaque_payload), 0x40000)
+        # TES4 localization and master flags must survive even for an ESP filename.
+        original = record("TES4", 0, header, 0x81) + original[24 + header_size:]
+        original += group(int.from_bytes(b"QUST", "little"), 0, opaque)
+        selected.write_bytes(original)
+        output = self.run_cli("--rebuild-plugin", "pAtCh.EsP", "--copy-plugin")
+        copied = output / "Patch.esp"
+        self.assertTrue(copied.exists())
+        self.assertFalse((output / "generated-navmesh.esp").exists())
+        self.assertEqual(selected.read_bytes(), original)
+        self.assertIn(opaque, copied.read_bytes())
+        emitted = read_records(copied)
+        self.assertEqual([item for item in emitted if item[0] not in ("TES4", "NAVM")],
+                         [item for item in read_records(selected) if item[0] != "TES4"])
+        old_header = read_records(selected)[0]
+        new_header = emitted[0]
+        self.assertEqual(new_header[:3], old_header[:3])
+        # HEDR accounting changes and masters register generated overrides in ONAM.
+        self.assertEqual(new_header[3][:10], old_header[3][:10])
+        self.assertEqual(new_header[3][18:len(old_header[3])], old_header[3][18:])
+        onam = new_header[3][len(old_header[3]):]
+        self.assertEqual(onam[:4], b"ONAM")
+        self.assertEqual(set(struct.unpack(f"<{(len(onam) - 6) // 4}I", onam[6:])),
+                         {form for kind, form, flags, payload in emitted if kind == "NAVM" and form >> 24 == 0})
+        self.assertEqual(struct.unpack_from("<I", new_header[3], 14)[0], 0x851)
+        self.assertNotIn(sub("MAST", b"Patch.esp\0"), new_header[3])
+        self.assertTrue(json.loads((output / "batch-report.json").read_text())["copy_plugin"])
+        # Read the copy as a replacement under its original identity.
+        (self.root / "plugins.txt").write_text(f"Baseline.esm\n{copied}\n")
+        self.run_cli("--list-cells", output="copy-read-back")
+
+    def test_plugin_copy_new_ids_avoid_unindexed_records(self):
+        self.write_baseline({0: navm(0), 2: navm(2)})
+        selected = self.root / "Patch.esp"
+        unknown = record("QUST", 0x01000850, sub("EDID", b"OpaqueIdentity\0"))
+        selected.write_bytes(selected.read_bytes() + group(int.from_bytes(b"QUST", "little"), 0, unknown))
+        original = selected.read_bytes()
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin", "--skip-existing-navmesh")
+        copied = output / "Patch.esp"
+        records = read_records(copied)
+        self.assertIn(0x01000851, [form for kind, form, flags, payload in records if kind == "NAVM"])
+        self.assertIn(unknown, copied.read_bytes())
+        self.assertEqual(struct.unpack_from("<I", records[0][3], 14)[0], 0x852)
+        self.assertEqual(selected.read_bytes(), original)
+        self.assertFalse(records[0][2] & 0x200)
+
+    def test_copy_preserves_light_format_and_extension(self):
+        self.write_baseline({0: navm(0), 2: navm(2)})
+        selected = self.root / "Patch.esp"
+        source = bytearray(selected.read_bytes())
+        struct.pack_into("<I", source, 8, 0x200)
+        # HEDR's allocation cursor must also be honored when higher than existing IDs.
+        struct.pack_into("<I", source, 38, 0x900)
+        for filename, flags in [("Author.esl", 0x200), ("Author.esm", 1)]:
+            with self.subTest(filename=filename):
+                struct.pack_into("<I", source, 8, flags)
+                (self.root / filename).write_bytes(source)
+                (self.root / "plugins.txt").write_text(f"Baseline.esm\n{filename}\n")
+                output = self.run_cli("--rebuild-plugin", filename, "--copy-plugin", "--skip-existing-navmesh",
+                                      output=filename + "-output")
+                records = read_records(output / filename)
+                self.assertEqual(records[0][2], flags)
+                self.assertIn(0x01000900, [form for kind, form, record_flags, payload in records if kind == "NAVM"])
+
+    def test_copy_light_id_exhaustion_fails_without_output(self):
+        self.write_baseline({0: navm(0), 2: navm(2)})
+        selected = self.root / "Patch.esp"
+        source = bytearray(selected.read_bytes())
+        struct.pack_into("<I", source, 8, 0x200)
+        struct.pack_into("<I", source, 38, 0x1000)
+        selected.write_bytes(source)
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin", "--skip-existing-navmesh", code=2)
+        self.assertFalse((output / "Patch.esp").exists())
+        self.assertFalse((output / "Patch.esp.tmp").exists())
+        self.assertIn("full/light format", json.loads((output / "batch-report.json").read_text())["error"])
+        self.assertEqual(selected.read_bytes(), source)
+
+    def test_copy_replaces_owned_navm_once(self):
+        self.write_baseline({1: navm(1), 2: navm(2)})
+        selected = self.root / "Patch.esp"
+        owned = group(int.from_bytes(b"WRLD", "little"), 0,
+                      group(0x400, 1, group(0x100, 6, group(0x100, 9, record("NAVM", 0x01000800, navm(0))))))
+        selected.write_bytes(selected.read_bytes() + owned)
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin")
+        records = read_records(output / "Patch.esp")
+        meshes = [item for item in records if item[0] == "NAVM" and item[1] == 0x01000800]
+        self.assertEqual(len(meshes), 1)
+        self.assertNotEqual(navm_geometry(meshes[0][3]), navm_geometry(navm(0)))
+
+    def test_copy_rejects_dependencies_outside_source_master_table(self):
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        header += sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
+        children = group(0x100, 6, group(0x100, 9, record("NAVM", 0x01000800, navm(0))))
+        (self.root / "Later.esp").write_bytes(record("TES4", 0, header)
+                                             + group(int.from_bytes(b"WRLD", "little"), 0, group(0x400, 1, children)))
+        (self.root / "plugins.txt").write_text("Baseline.esm\nPatch.esp\nLater.esp\n")
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin", code=2)
+        self.assertFalse((output / "Patch.esp").exists())
+        self.assertFalse((output / "Patch.esp.tmp").exists())
+        self.assertEqual(json.loads((output / "batch-report.json").read_text())["status"], "failed")
+
+    def test_copy_refuses_overwriting_source_or_existing_output(self):
+        selected = self.root / "Patch.esp"
+        source = selected.read_bytes()
+        self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin", output=".", code=2)
+        self.assertEqual(selected.read_bytes(), source)
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin")
+        copied = (output / "Patch.esp").read_bytes()
+        self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin", code=2)
+        self.assertEqual((output / "Patch.esp").read_bytes(), copied)
+        self.assertEqual(selected.read_bytes(), source)
+
+    def test_copy_requires_plugin_scope(self):
+        self.run_cli("--rebuild-load-order", "--copy-plugin", code=1)
+        self.run_cli("--cell-formid", "100", "--copy-plugin", code=1)
+        self.run_cli("--list-cells", "--copy-plugin", code=1)
+
+    def test_copy_preserves_unmodified_unsupported_navm(self):
+        self.write_baseline({0: navm(0), 2: navm(2)})
+        selected = self.root / "Patch.esp"
+        cell = sub("EDID", b"RemoteAuthoredCell\0") + sub("XCLC", struct.pack("<ii", 10, 0))
+        unsupported = bytearray(navm(10))
+        struct.pack_into("<I", unsupported, 6, 99)
+        authored = record("NAVM", 0x01000801, bytes(unsupported))
+        remote = record("CELL", 0x01000800, cell) + group(0x01000800, 6, group(0x01000800, 9, authored))
+        selected.write_bytes(selected.read_bytes() + group(int.from_bytes(b"WRLD", "little"), 0, group(0x400, 1, remote)))
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin", "--skip-existing-navmesh")
+        self.assertIn(authored, (output / "Patch.esp").read_bytes())
+        records = read_records(output / "Patch.esp")
+        self.assertIn(0x01000802, [form for kind, form, flags, payload in records if kind == "NAVM"])
+
+    def test_copy_rejects_malformed_tail_and_duplicate_opaque_ids(self):
+        selected = self.root / "Patch.esp"
+        original = selected.read_bytes()
+        opaque = record("QUST", 0x01000850, b"opaque data")
+        for suffix in [b"truncated", group(int.from_bytes(b"QUST", "little"), 0, opaque + opaque),
+                       record("TES4", 0, sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800)))]:
+            with self.subTest(suffix=suffix[:12]):
+                selected.write_bytes(original + suffix)
+                output = self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin", code=2)
+                self.assertFalse((output / "Patch.esp").exists())
+                self.assertFalse((output / "Patch.esp.tmp").exists())
+                self.assertEqual(selected.read_bytes(), original + suffix)
+
+    def test_copy_extends_existing_extended_onam_without_self_entries(self):
+        self.write_baseline({0: navm(0), 2: navm(2)})
+        selected = self.root / "Patch.esp"
+        original = selected.read_bytes()
+        header_size = struct.unpack_from("<I", original, 4)[0]
+        forms = struct.pack("<I", 0x300) * 16384
+        onam = sub("XXXX", struct.pack("<I", len(forms))) + b"ONAM\0\0" + forms
+        header = original[24:24 + header_size] + onam
+        selected.write_bytes(record("TES4", 0, header) + original[24 + header_size:])
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin", "--skip-existing-navmesh")
+        records = read_records(output / "Patch.esp")
+        copied_header = records[0][3]
+        prefix_size = header_size
+        self.assertEqual(copied_header[prefix_size:prefix_size + 4], b"XXXX")
+        data_size = struct.unpack_from("<I", copied_header, prefix_size + 6)[0]
+        payload = copied_header[prefix_size + 16:prefix_size + 16 + data_size]
+        self.assertTrue(payload.startswith(forms))
+        appended = struct.unpack(f"<{(len(payload) - len(forms)) // 4}I", payload[len(forms):])
+        expected = {form for kind, form, flags, data in records if kind == "NAVM" and form >> 24 == 0}
+        self.assertEqual(set(appended), expected)
+
+    def test_copy_without_masters_retains_source_identity(self):
+        output = self.run_cli("--rebuild-plugin", "Baseline.esm", "--copy-plugin")
+        records = read_records(output / "Baseline.esm")
+        self.assertEqual(records[0][2], 1)
+        self.assertNotIn(b"MAST", records[0][3])
+        self.assertNotIn(b"ONAM", records[0][3])
+        self.assertEqual({form for kind, form, flags, data in records if kind == "NAVM"}, {0x200, 0x201, 0x202})
 
     def test_single_cell_keeps_geometry_halo(self):
         output = self.run_cli("--cell-formid", "100", "--generate-plugin", "--neighboring-cell-radius", "1")
