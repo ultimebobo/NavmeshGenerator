@@ -62,6 +62,13 @@ a reachable door and an exterior scene without a reachable door or border yield
 an empty candidate and a warning. Entrance positions are shown as orange markers
 in the candidate GLB layer, including entrances that did not match a polygon.
 
+With `--skip-existing-navmesh`, only cells without winning NAVM records are
+generated. Border stitching retains their generated regions even when no
+authored portal exists. Matched authored neighbors can receive reciprocal links
+while keeping their geometry; unmatched borders, including between newly covered
+cells, remain unlinked. The override generation policy still removes regions
+without a matched border portal or door.
+
 Source-triangle provenance is recovered by the closest source height at each
 generated triangle's XY centroid. This is an approximate audit join after
 voxelization. Recast's smoothing and erosion can remove small supported areas;

@@ -115,6 +115,10 @@ namespace navmesh::app
                 options.generatePlugin = true;
                 options.generateCandidate = true;
             }
+            else if (argument == "--skip-existing-navmesh")
+            {
+                options.skipExistingNavmesh = true;
+            }
             else if (argument == "--surface-search-radius" && index + 1 < argc)
             {
                 options.surfaceSearchRadius = std::stof(argv[++index]);

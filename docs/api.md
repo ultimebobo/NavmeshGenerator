@@ -28,7 +28,11 @@ this reference.
 - `navmesh::skyrim::offline::CellImpactIndex`: affected-cell discovery, historical
   reference footprints, worldspace coordinate indexing and geometry suppliers.
 - `navmesh::skyrim::offline::WriteNavmeshOverrides`: combined batch serialization
-  with generated-to-generated and authored-neighbor reciprocal portal checks.
+  of existing overrides and new plugin-owned NAVMs, with generated-to-generated
+  and authored-neighbor reciprocal portal checks.
+- `navmesh::skyrim::offline::CellsWithExistingNavmesh`: winning NAVM ownership for
+  the shared runner's optional uncovered-cell generation policy, independent of
+  whether polygon geometry can be decoded.
 
 The data flow and design constraints are described in
 [Architecture](architecture.md), [Coordinate system](coordinate-system.md),

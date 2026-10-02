@@ -38,25 +38,69 @@ def navm(x, y=0):
     return sub("NVNM", body)
 
 
+def read_records(path):
+    """Inspect emitted record identities and payloads independently of the C++ reader."""
+    data = path.read_bytes()
+    records = []
+
+    def visit(start, end):
+        while start < end:
+            kind = data[start:start + 4].decode()
+            size = struct.unpack_from("<I", data, start + 4)[0]
+            if kind == "GRUP":
+                visit(start + 24, start + size)
+                start += size
+            else:
+                flags, form = struct.unpack_from("<II", data, start + 8)
+                records.append((kind, form, flags, data[start + 24:start + 24 + size]))
+                start += 24 + size
+        assert start == end
+
+    visit(0, len(data))
+    return records
+
+
+def navm_geometry(payload):
+    """Read the versioned NVNM geometry prefix, allowing appended portal sections."""
+    assert payload[:4] == b"NVNM"
+    body = payload[6:]
+    vertices = struct.unpack_from("<I", body, 16)[0]
+    triangle_at = 20 + vertices * 12
+    triangles = struct.unpack_from("<I", body, triangle_at)[0]
+    positions = body[20:triangle_at]
+    # Portal flags and neighbor indices may change; vertex indices must stay authored.
+    faces = [body[triangle_at + 4 + index * 16:triangle_at + 10 + index * 16]
+             for index in range(triangles)]
+    return positions, faces
+
+
 class BatchRebuild(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="navmesh-batch-cli-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        cells = b""
-        for x in range(3):
-            cell = 0x100 + x
-            payload = sub("EDID", f"Exterior{x}\0".encode()) + sub("XCLC", struct.pack("<ii", x, 0))
-            children = record("LAND", 0x300 + x, land()) + record("NAVM", 0x200 + x, navm(x))
-            cells += record("CELL", cell, payload) + group(cell, 6, group(cell, 9, children))
+        self.write_baseline()
         header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
-        world = record("WRLD", 0x400, sub("EDID", b"FixtureWorld\0")) + group(0x400, 1, cells)
-        (self.root / "Baseline.esm").write_bytes(record("TES4", 0, header, 1) + group(int.from_bytes(b"WRLD", "little"), 0, world))
         # Only LAND changes; the winning CELL still belongs to the baseline.
         patch = group(0x400, 1, group(0x100, 6, group(0x100, 9, record("LAND", 0x300, land()))))
         patch_header = header + sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
         (self.root / "Patch.esp").write_bytes(record("TES4", 0, patch_header) + group(int.from_bytes(b"WRLD", "little"), 0, patch))
         (self.root / "plugins.txt").write_text("Baseline.esm\nPatch.esp\n")
+
+    def write_baseline(self, navmeshes=None):
+        if navmeshes is None:
+            navmeshes = {x: navm(x) for x in range(3)}
+        cells = b""
+        for x in range(3):
+            cell = 0x100 + x
+            payload = sub("EDID", f"Exterior{x}\0".encode()) + sub("XCLC", struct.pack("<ii", x, 0))
+            children = record("LAND", 0x300 + x, land())
+            if x in navmeshes:
+                children += record("NAVM", 0x200 + x, navmeshes[x])
+            cells += record("CELL", cell, payload) + group(cell, 6, group(cell, 9, children))
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        world = record("WRLD", 0x400, sub("EDID", b"FixtureWorld\0")) + group(0x400, 1, cells)
+        (self.root / "Baseline.esm").write_bytes(record("TES4", 0, header, 1) + group(int.from_bytes(b"WRLD", "little"), 0, world))
 
     def run_cli(self, *args, output="output", code=0, terrain_only=True):
         completed = subprocess.run([str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
@@ -115,6 +159,98 @@ class BatchRebuild(unittest.TestCase):
         candidate = json.loads((output / "candidate-navm.json").read_text())
         self.assertGreater(len(candidate["polygons"]), 0)
         self.assertTrue(all(0 <= vertex[0] <= 4096 for vertex in candidate["vertices"]))
+
+    def test_skip_existing_cells_before_extraction(self):
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--skip-existing-navmesh")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertTrue(report["skip_existing_navmesh"])
+        self.assertEqual([cell["status"] for cell in report["cells"]], ["skipped_existing_navm"] * 2)
+        self.assertEqual(report["geometry_cells_extracted"], 0)
+        self.assertFalse((output / "generated-navmesh.esp").exists())
+        single = self.run_cli("--cell-formid", "100", "--generate-plugin", "--skip-existing-navmesh", output="single-skip")
+        self.assertEqual(json.loads((single / "generation-report.json").read_text())["status"], "skipped_existing_navm")
+        self.assertIn("metadata", json.loads((single / "generation-report.json").read_text()))
+        self.assertFalse((single / "candidate-navm.json").exists())
+
+    def test_generate_uncovered_cell_and_preserve_authored_geometry(self):
+        self.write_baseline({0: navm(0), 2: navm(2)})
+        source = (self.root / "Baseline.esm").read_bytes()
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--skip-existing-navmesh")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual([cell["status"] for cell in report["cells"]], ["skipped_existing_navm", "generated"])
+        self.assertGreater(report["generated_polygons"], 0)
+        emitted = read_records(output / "generated-navmesh.esp")
+        meshes = {form: payload for kind, form, flags, payload in emitted if kind == "NAVM"}
+        self.assertIn(0x01000800, meshes)
+        self.assertEqual(struct.unpack_from("<Ihh", meshes[0x01000800], 14), (0x400, 0, 1))
+        self.assertNotIn(0x201, meshes)
+        for form, payload in meshes.items():
+            if form in (0x200, 0x202):
+                self.assertEqual(navm_geometry(payload), navm_geometry(navm(form - 0x200)))
+        self.assertEqual((self.root / "Baseline.esm").read_bytes(), source)
+        with (self.root / "plugins.txt").open("a") as manifest:
+            manifest.write(str(output / "generated-navmesh.esp") + "\n")
+        self.run_cli("--cell-formid", "101", "--generate-plugin", "--skip-existing-navmesh", output="skip-newly-covered")
+
+    def test_single_uncovered_cell_generates_candidate_and_plugin(self):
+        self.write_baseline({1: navm(1), 2: navm(2)})
+        for operation in ("--generate-candidate", "--generate-plugin"):
+            output = self.run_cli("--cell-formid", "100", operation, "--skip-existing-navmesh", output=operation[2:])
+            candidate = json.loads((output / "candidate-navm.json").read_text())
+            self.assertTrue(candidate["topology"]["valid"])
+            self.assertGreater(len(candidate["polygons"]), 0)
+            self.assertEqual((output / "generated-navmesh.esp").exists(), operation == "--generate-plugin")
+
+    def test_later_plugin_navm_protects_cell(self):
+        self.write_baseline({})
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        header += sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
+        children = group(0x100, 6, group(0x100, 9, record("NAVM", 0x01000800, navm(0))))
+        (self.root / "Patch.esp").write_bytes(record("TES4", 0, header)
+                                             + group(int.from_bytes(b"WRLD", "little"), 0, group(0x400, 1, children)))
+        output = self.run_cli("--cell-formid", "100", "--generate-candidate", "--skip-existing-navmesh")
+        self.assertEqual(json.loads((output / "generation-report.json").read_text())["status"], "skipped_existing_navm")
+
+    def test_deleted_navm_identity_protects_cell(self):
+        self.write_baseline({})
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        header += sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
+        children = group(0x100, 6, group(0x100, 9, record("NAVM", 0x01000800, b"", flags=0x20)))
+        (self.root / "Patch.esp").write_bytes(record("TES4", 0, header)
+                                             + group(int.from_bytes(b"WRLD", "little"), 0, group(0x400, 1, children)))
+        output = self.run_cli("--cell-formid", "100", "--generate-plugin", "--skip-existing-navmesh")
+        self.assertEqual(json.loads((output / "generation-report.json").read_text())["status"], "skipped_existing_navm")
+
+    def test_multiple_uncovered_cells_get_unique_plugin_owned_records(self):
+        self.write_baseline({})
+        output = self.run_cli("--rebuild-load-order", "--neighboring-cell-radius", "1",
+                              "--generate-plugin", "--skip-existing-navmesh")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertTrue(all(cell["status"] == "generated" for cell in report["cells"]))
+        emitted = read_records(output / "generated-navmesh.esp")
+        ids = [form for kind, form, flags, payload in emitted if kind == "NAVM"]
+        self.assertEqual(len(ids), report["selected_cells"])
+        self.assertEqual(len(set(ids)), len(ids))
+        self.assertTrue(all(form >> 24 == 1 for form in ids))
+        header = next(payload for kind, form, flags, payload in emitted if kind == "TES4")
+        self.assertEqual(struct.unpack_from("<I", header, 14)[0], 0x800 + len(ids))
+
+    def test_empty_and_unsupported_navm_records_protect_cells(self):
+        unsupported = bytearray(navm(0))
+        struct.pack_into("<I", unsupported, 6, 99)
+        empty = sub("NVNM", struct.pack("<6I", 12, 0, 0x400, 1, 0, 0))
+        self.write_baseline({0: bytes(unsupported), 1: empty})
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--skip-existing-navmesh")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual([cell["status"] for cell in report["cells"]], ["skipped_existing_navm"] * 2)
+        self.assertEqual(report["geometry_cells_extracted"], 0)
+
+    def test_skip_option_requires_generation_and_resolved_input(self):
+        self.run_cli("--cell-formid", "100", "--skip-existing-navmesh", code=1)
+        self.run_cli("--list-cells", "--skip-existing-navmesh", code=1)
+        completed = subprocess.run([str(EXE), "--plugin", str(self.root / "Baseline.esm"),
+                                    "--generate-candidate", "--skip-existing-navmesh"], capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 1)
 
     def test_scene_neighborhood_excludes_distant_geometry_supplier_cells(self):
         # Distant references can supply intersecting models without adding their

@@ -122,15 +122,18 @@ namespace navmesh::core
      * @param candidate Generated mesh and source evidence to extend in place.
      * @param cellBounds Selected exterior CELL in Skyrim world coordinates.
      * @param neighbors Existing NAVMs in adjacent cells of the same worldspace.
+     * @param removeUnlinkedRegions Remove regions without a matched portal or door.
+     * Disable for new navigation in uncovered cells, where authored portals may not exist.
      * @return Number of reciprocal border portals added.
      * @warning Only near-coincident full edges at compatible heights are joined. Authored
      * border drift within AuthoredBorderTolerance is preserved at matched portal endpoints.
-     * Regions without a matched border portal or door are removed. This modifies candidate
+     * When requested, regions without a matched border portal or door are removed. This modifies candidate
      * geometry, region membership, source joins, and topology.
      * @throws std::invalid_argument when polygon source evidence is incomplete.
      */
     [[nodiscard]] std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
-                                                     const std::vector<NavMesh> &neighbors);
+                                                     const std::vector<NavMesh> &neighbors,
+                                                     bool removeUnlinkedRegions = true);
     /// Check candidate polygon topology without modifying its geometry.
     [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh &candidate);
     /// Write the candidate and its source evidence as JSON; returns false on output failure.

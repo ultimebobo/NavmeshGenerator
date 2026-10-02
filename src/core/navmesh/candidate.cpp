@@ -1236,7 +1236,7 @@ namespace
 namespace navmesh::core
 {
     std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
-                                       const std::vector<NavMesh> &neighbors)
+                                       const std::vector<NavMesh> &neighbors, bool removeUnlinkedRegions)
     {
         if (candidate.mesh.polygons.empty())
         {
@@ -1369,6 +1369,15 @@ namespace navmesh::core
                 candidate.borderLinks.push_back({first + 1, 1, best->navmesh, best->polygon, best->side});
                 used.emplace(best->navmesh, best->polygon, best->side);
             }
+        }
+        if (!removeUnlinkedRegions)
+        {
+            // New CELL navigation has no authored portal requirement. Keep the generated
+            // regions while rebuilding adjacency after any bridges added above.
+            BuildAdjacency(candidate.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
+            candidate.statistics.outputPolygons = candidate.mesh.polygons.size();
+            candidate.topology = ValidateCandidateTopology(candidate);
+            return candidate.borderLinks.size() - initialLinks;
         }
         std::vector<bool> portalPolygons(candidate.mesh.polygons.size());
         for (const auto &link : candidate.borderLinks)

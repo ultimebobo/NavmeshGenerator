@@ -79,6 +79,10 @@ namespace
               "Write an ESP, ESL-flagged when eligible, after its source plugins. Matched door and border portals are "
               "written; other authored links need validation. Requires a resolved load order. Cell, Plugin, and Load "
               "order scopes are supported."},
+        Field{"skip_existing_navmesh", "Skip cells with existing navmesh",
+              "Generate only in selected cells without any winning NAVM record. Preserves authored geometry; "
+              "matched borders may add reciprocal links. Requires MO2 or load-order input and generation. "
+              "Empty, unsupported, and deleted NAVM records also protect their cells."},
     };
 
     struct WindowState
@@ -318,6 +322,8 @@ namespace
         result.generateCandidate = SendMessageA(GetDlgItem(window, CheckBase + 3), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.generatePlugin =
             !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 4), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        result.skipExistingNavmesh =
+            !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 5), BM_GETCHECK, 0, 0) == BST_CHECKED;
         if (result.generatePlugin)
         {
             result.generateCandidate = true;

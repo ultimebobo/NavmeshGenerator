@@ -62,8 +62,15 @@ Candidate source evidence is compacted to the provenance entries used by its
 polygons. JSON exports contain run metadata, and candidate OBJs have metadata
 sidecars. Batch runs omit the large per-cell scene and discrepancy exports.
 
-Cells without an existing NAVM, deleted cells and empty candidates are explicitly
-reported as skipped. The override writer does not allocate new NAVM identities.
+Without `--skip-existing-navmesh`, cells without an existing NAVM are reported
+as skipped. With that option, any winning NAVM record protects its CELL and is
+reported as `skipped_existing_navm` before geometry extraction. Empty,
+unsupported, and deleted NAVM records also protect their authored identities.
+The Windows UI exposes and persists **Skip cells with existing navmesh**.
+Uncovered selected cells generate candidates and receive new plugin-owned NAVM
+identities when writing a patch. New records use the winning CELL's hierarchy
+and its temporary child group. The report records `skip_existing_navmesh`.
+Deleted cells and empty candidates are explicitly reported as skipped.
 Unsupported candidates or source layouts stop the batch with an error. A plugin
 is written only after all eligible candidates have been generated. When no
 eligible replacements exist, the report is produced without a patch.
@@ -76,6 +83,13 @@ partitions fail the batch before a final ESP is created. Adjacent cells outside
 the rebuilding set keep their geometry and receive reciprocal portal overrides
 where required. Existing output plugins are refused. Every emitted NAVM is read
 back before the temporary file is finalized.
+
+In uncovered-cell mode, authored neighbor vertices and triangles are preserved;
+matched borders may add reciprocal portal links to them. New CELL navigation
+retains border-reaching regions without an authored portal requirement. Unmatched
+borders remain unlinked, including between newly covered cells, and require
+independent connection review. The generated ESP is light-flagged only when its
+master table and newly allocated identities fit the light format.
 
 The existing writer limitations still apply: NAVI, teleport-door XNDP, cover and
 unmatched authored links are not rebuilt. Inspect the patch independently before

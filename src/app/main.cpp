@@ -83,7 +83,8 @@ namespace
             std::cerr
                 << "Usage: navmesh-offline --mo2 <instance-or-portable-root> --profile <existing-profile> "
                    "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --rebuild-plugin <active "
-                   "filename> | --rebuild-load-order] [--generate-plugin] --output <dir>\nDeveloper/test override: "
+                   "filename> | --rebuild-load-order] [--generate-plugin] [--skip-existing-navmesh] --output "
+                   "<dir>\nDeveloper/test override: "
                    "--data <Data> --load-order <plugins.txt>.\n";
             return 1;
         }
@@ -118,6 +119,13 @@ namespace
                 return 1;
             }
             options.generateCandidate = true;
+        }
+        if (options.skipExistingNavmesh &&
+            (options.listCells || (!options.generateCandidate && !options.generatePlugin) ||
+             (options.mo2.empty() && options.loadOrder.empty())))
+        {
+            std::cerr << "--skip-existing-navmesh requires generation with resolved MO2/load-order input.\n";
+            return 1;
         }
         if (options.neighboringCellRadius < 0)
         {
@@ -395,6 +403,24 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     if (wasCancelled())
     {
         return 3;
+    }
+    if (options.skipExistingNavmesh && navmesh::skyrim::offline::CellsWithExistingNavmesh(*resolved).contains(cell->id))
+    {
+        const auto status = std::format("Skipped CELL {:08X}: existing NAVM records preserved.", cell->id);
+        std::ofstream report(options.output / "generation-report.json", std::ios::trunc);
+        const navmesh::reproducibility::ExportMetadata metadata{
+            .selectedCell = &*cell,
+            .warnings = {"Generation skipped because the selected CELL owns winning NAVM records."}};
+        report << "{\n  \"metadata\": " << navmesh::reproducibility::ToJson(metadata, "    ") << ",\n";
+        report << std::format("  \"form_id\":\"{:08X}\",\"status\":\"skipped_existing_navm\"\n}}\n", cell->id);
+        if (!report)
+        {
+            std::cerr << "Cannot write generation-report.json.\n";
+            return 2;
+        }
+        std::cout << status << '\n';
+        update(100, status);
+        return 0;
     }
     if (resolved)
     {
@@ -687,8 +713,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                         adjacent.insert(adjacent.end(), other.navMeshes.begin(), other.navMeshes.end());
                     }
                 }
-                const auto links =
-                    navmesh::core::StitchCandidateBorders(*candidate, *analysisConfig.cellBounds, adjacent);
+                const auto links = navmesh::core::StitchCandidateBorders(*candidate, *analysisConfig.cellBounds,
+                                                                         adjacent, !options.skipExistingNavmesh);
                 if (!links && std::any_of(candidate->regions.begin(), candidate->regions.end(),
                                           [](const auto &region) { return region.reachesBorder; }))
                 {

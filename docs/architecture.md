@@ -136,3 +136,11 @@ LRU cache of source-cell geometry. Candidate evidence is compacted after each
 scene is released. The batch writer serializes all replacements together and
 verifies reciprocal generated triangle targets before finalizing one ESP.
 Selection and output contracts are in [batch rebuilding](batch-rebuilding.md).
+
+The shared runner applies the optional uncovered-cell policy before geometry
+extraction. `CellsWithExistingNavmesh` indexes winning record ownership rather
+than decoded polygon counts, so unsupported and empty records protect their
+cells. The writer allocates plugin-owned identities for uncovered cells, derives
+child placement from the winning CELL, and validates both new and overridden
+NAVMs through the same read-back path. Authored neighboring geometry is retained
+when reciprocal portal links are added.

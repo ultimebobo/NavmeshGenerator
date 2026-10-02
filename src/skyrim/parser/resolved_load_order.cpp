@@ -272,6 +272,19 @@ namespace
 
 namespace navmesh::skyrim::offline
 {
+    std::set<std::uint32_t> CellsWithExistingNavmesh(const ResolvedLoadOrder &resolved)
+    {
+        std::set<std::uint32_t> cells;
+        for (const auto &record : resolved.records)
+        {
+            if (record.type == "NAVM" && record.cellFormId)
+            {
+                cells.insert(*record.cellFormId);
+            }
+        }
+        return cells;
+    }
+
     bool DirectPluginReader::Read(const std::filesystem::path &path, std::vector<ResolvedRecord> &records,
                                   std::vector<std::string> &masters, bool &isLight,
                                   std::vector<Diagnostic> &diagnostics, bool includeReferencesAndNavmeshes) const

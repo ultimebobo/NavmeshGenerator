@@ -69,6 +69,7 @@ namespace navmesh::app::detail
         using namespace navmesh;
         const auto stop = [&] { return cancelled && cancelled(); };
         const skyrim::offline::CellImpactIndex index(resolved);
+        const auto existingNavmeshCells = skyrim::offline::CellsWithExistingNavmesh(resolved);
         // Associate asset winners with the rebuild scope before selecting conservative affected targets.
         std::set<std::string> changedModels;
         bool archiveModelsChanged{};
@@ -151,6 +152,7 @@ namespace navmesh::app::detail
         {
             std::ofstream out(summaryPath, std::ios::trunc);
             out << "{\n  \"metadata\": " << batchMetadata << ",\n";
+            out << "  \"skip_existing_navmesh\":" << (options.skipExistingNavmesh ? "true" : "false") << ",\n";
             out << std::format("  \"scope\":\"{}\",\"plugin\":\"{}\",\"status\":\"{}\",\"error\":\"{}\",\n",
                                options.rebuildScope == app::RebuildScope::Plugin ? "plugin" : "load_order",
                                JsonEscape(options.affectedPlugin), state, JsonEscape(error));
@@ -216,7 +218,12 @@ namespace navmesh::app::detail
             {
                 originalPolygons += mesh.polygons.size();
             }
-            if (cell.navMeshes.empty())
+            if (options.skipExistingNavmesh && existingNavmeshCells.contains(cell.id))
+            {
+                result.status = "skipped_existing_navm";
+                continue;
+            }
+            if (!options.skipExistingNavmesh && cell.navMeshes.empty())
             {
                 result.status = "skipped_no_existing_navm";
                 continue;
@@ -334,7 +341,8 @@ namespace navmesh::app::detail
                         }
                         adjacent.insert(adjacent.end(), neighbor->navMeshes.begin(), neighbor->navMeshes.end());
                     }
-                    (void)core::StitchCandidateBorders(result.candidate, *bounds, adjacent);
+                    (void)core::StitchCandidateBorders(result.candidate, *bounds, adjacent,
+                                                       !options.skipExistingNavmesh);
                 }
             }
             catch (const std::exception &error)
@@ -358,7 +366,7 @@ namespace navmesh::app::detail
                              .terrainSupported = geometry.terrainSupported,
                              .collisionGeometrySupported = geometry.collisionModelsLoaded != 0},
                 .warnings = {"Batch candidates use neighboring geometry but remain clipped to their target CELL.",
-                             "Cells without existing NAVM or a nonempty supported candidate are skipped; see "
+                             "Generation eligibility and empty candidates are recorded in "
                              "batch-report.json."}};
             result.metadata = reproducibility::ToJson(metadata, "    ");
             // Compact source evidence after generation; retain no scene mesh and

@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -158,6 +159,13 @@ namespace navmesh::skyrim::offline
     /// @return Winning records, cells, and explicit diagnostics for unsupported input.
     [[nodiscard]] ResolvedLoadOrder ResolveLoadOrder(const LoadOrderInput &input,
                                                      const IPluginReader &reader = DirectPluginReader{});
+
+    /** Identify cells with winning NAVM records without requiring decodable geometry.
+     * @param resolved Snapshot indexed with references and navmeshes enabled.
+     * @return Resolved CELL FormIDs owning any NAVM, including empty, unsupported,
+     * or deleted records. Tombstones protect authored identities from recreation.
+     */
+    [[nodiscard]] std::set<std::uint32_t> CellsWithExistingNavmesh(const ResolvedLoadOrder &resolved);
 
     [[nodiscard]] std::vector<core::Cell> ListCells(const std::filesystem::path &pluginPath);
 

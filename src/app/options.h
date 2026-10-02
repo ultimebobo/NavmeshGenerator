@@ -33,8 +33,11 @@ namespace navmesh::app
         RebuildScope rebuildScope{RebuildScope::Cell};
         /// Active plugin filename whose edits select affected cells in Plugin scope.
         std::string affectedPlugin;
-        /// Write generated navigation over the selected cells' existing NAVM records.
+        /// Write generated navigation as NAVM overrides or new records in uncovered cells.
         bool generatePlugin{};
+        /// Skip generation for cells with any winning NAVM record, including empty or unsupported records.
+        /// Requires resolved MO2/load-order input; uncovered cells may receive new NAVM records.
+        bool skipExistingNavmesh{};
         /// Recast region strategy used for candidate generation; watershed is the default.
         core::RegionPartitioningAlgorithm partitioningAlgorithm{core::RegionPartitioningAlgorithm::Watershed};
         /// Exterior geometry/impact halo in CELL units; generation always includes

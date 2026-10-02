@@ -15,7 +15,7 @@ namespace navmesh::skyrim::offline
         const core::Cell *cell{};
         const core::CandidateNavMesh *candidate{};
     };
-    /** Serialize all replacements into one verified override ESP.
+    /** Serialize generated navigation into one verified ESP, allocating a new NAVM for uncovered cells.
      * @param outputDirectory Writable output folder; existing plugins are refused.
      * @param inputPlugins Active physical plugin paths in load order.
      * @param resolved Winning records from the same input snapshot.
@@ -23,6 +23,8 @@ namespace navmesh::skyrim::offline
      * between rebuilt cells must target their generated primary NAVM triangles.
      * Matched authored portal endpoints may extend beyond nominal CELL bounds by
      * core::AuthoredBorderTolerance; other candidate vertices must stay inside.
+     * Cells without any winning NAVM receive a plugin-owned identity and temporary
+     * CELL child placement; unsupported existing records cannot be treated as uncovered.
      * @param writtenPath Receives the finalized ESP path on success.
      * @param error Receives a failure reason; no final ESP is published on failure.
      * @return True after every NAVM, door, and reciprocal border passes read-back.
@@ -33,7 +35,7 @@ namespace navmesh::skyrim::offline
                                              const ResolvedLoadOrder &resolved,
                                              const std::vector<NavmeshReplacement> &replacements,
                                              std::filesystem::path &writtenPath, std::string &error);
-    /** Write generated navigation as overrides of the selected cell's NAVMs.
+    /** Write generated navigation as overrides, or a new NAVM when the selected cell has none.
      * @param outputDirectory Directory for a new ESP; existing files are never replaced.
      * @param inputPlugins Physical active plugin paths in resolved load order.
      * @param resolved Winning records from that same load order.
@@ -45,7 +47,7 @@ namespace navmesh::skyrim::offline
      * @param error Human-readable reason when the source cannot be safely serialized.
      * @return True only after a successful write and independent reader round trip;
      * false with an error when a required border portal cannot be serialized.
-     * @note The ESP is ESL-flagged when its override-only record set fits a light plugin.
+     * @note The ESP is ESL-flagged when its master table and new identities fit a light plugin.
      * @warning Matched door triangles and reciprocal border portals are serialized.
      * Other authored links, cover data, NAVI, and REFR XNDP references are not rebuilt.
      */

@@ -369,6 +369,8 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
     }
     std::map<std::uint32_t, const NavmeshReplacement *> byCell;
     std::map<std::uint32_t, core::NavMesh> generatedMeshes;
+    const auto existingNavmeshCells = CellsWithExistingNavmesh(resolved);
+    std::size_t newNavmeshCount{};
     for (const auto &item : replacements)
     {
         if (!item.cell || !item.candidate || !byCell.emplace(item.cell->id, &item).second)
@@ -377,7 +379,18 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
         }
         if (item.cell->navMeshes.empty())
         {
-            return fail("A selected CELL has no existing NAVM to override.");
+            if (existingNavmeshCells.contains(item.cell->id))
+            {
+                return fail("A selected CELL has existing NAVM records without supported geometry.");
+            }
+            const auto *cellRecord = resolved.FindWinning(item.cell->id);
+            if (!cellRecord || cellRecord->type != "CELL" || !cellRecord->raw || cellRecord->groupHeaders.empty() ||
+                (cellRecord->raw->flags & 0x20U))
+            {
+                return fail("A new NAVM requires a live CELL with supported group placement.");
+            }
+            ++newNavmeshCount;
+            continue;
         }
         const auto primary =
             std::max_element(item.cell->navMeshes.begin(), item.cell->navMeshes.end(),
@@ -400,10 +413,6 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
         if (candidate.mesh.vertices.size() > 65535 || candidate.mesh.polygons.size() > 65535)
         {
             return fail("Generated NAVM exceeds 16-bit vertex or triangle indices.");
-        }
-        if (cell.navMeshes.empty())
-        {
-            return fail("The selected cell has no existing NAVM records to override.");
         }
         std::vector<std::pair<std::uint16_t, std::uint32_t>> doorEntries;
         for (const auto &exit : candidate.exits)
@@ -449,7 +458,7 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
                                                 });
                 const auto door = std::any_of(candidate.exits.begin(), candidate.exits.end(), [&](const auto &exit)
                                               { return exit.region == region.id && exit.polygon.has_value(); });
-                if (!linked && !door)
+                if (!linked && !door && !cell.navMeshes.empty())
                 {
                     return fail("A border-reaching candidate region has no matched NAVM edge or door portal.");
                 }
@@ -614,6 +623,10 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             }
             const auto *record = resolved.FindWinning(link.neighborNavmeshId);
             const auto other = record && record->cellFormId ? byCell.find(*record->cellFormId) : byCell.end();
+            if (replacement.cell->navMeshes.empty())
+            {
+                return fail("A rebuilt neighbor cannot link back to a new NAVM without a generated identity.");
+            }
             const auto primary =
                 std::max_element(replacement.cell->navMeshes.begin(), replacement.cell->navMeshes.end(),
                                  [](const auto &a, const auto &b) { return a.polygons.size() < b.polygons.size(); });
@@ -637,6 +650,13 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
     }
     std::vector<SourceInfo> sources;
     std::vector<std::string> requiredSources = doorOwners;
+    for (const auto &replacement : replacements)
+    {
+        if (replacement.cell->navMeshes.empty())
+        {
+            requiredSources.push_back(resolved.FindWinning(replacement.cell->id)->winning.plugin);
+        }
+    }
     for (const auto *navm : records)
     {
         requiredSources.push_back(navm->winning.plugin);
@@ -721,8 +741,15 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
     {
         return fail("Too many masters for a generated plugin.");
     }
-    // Every emitted NAVM overrides a FormID from a listed master, so no new light-plugin FormIDs are allocated.
-    const bool light = masters.size() <= 253;
+    // New identities belong to this output plugin, above the reserved local range.
+    // Use a regular ESP when the new records cannot fit in the light-plugin range.
+    constexpr std::uint32_t firstNewObjectId = 0x800U;
+    if (newNavmeshCount > 0x1000000U - firstNewObjectId)
+    {
+        return fail("Too many new NAVM records for a generated plugin.");
+    }
+    const bool light = masters.size() <= 253 && newNavmeshCount <= 0x1000U - firstNewObjectId;
+    std::uint32_t nextObjectId = firstNewObjectId;
     for (const auto &master : masters)
     {
         const auto it = std::find_if(inputPlugins.begin(), inputPlugins.end(),
@@ -749,6 +776,7 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
     std::vector<std::pair<std::uint32_t, std::uint32_t>> expectedCells;
     std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t>> expectedLinks;
     std::map<std::uint32_t, std::vector<std::pair<std::uint16_t, std::uint32_t>>> doorsByMesh;
+    std::map<std::uint32_t, std::uint32_t> outputPrimaryByCell;
     for (const auto &replacement : replacements)
     {
         const auto &cell = *replacement.cell;
@@ -778,19 +806,59 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
         }
         // A candidate uses one triangle-index space; keeping it in one NAVM avoids invalid cross-record indices.
         std::optional<std::uint32_t> outputCellGroup;
-        for (std::size_t index{}; index < cell.navMeshes.size(); ++index)
+        const bool newNavmesh = cell.navMeshes.empty();
+        for (std::size_t index{}; index < std::max<std::size_t>(1, cell.navMeshes.size()); ++index)
         {
-            const auto *navm = resolved.FindWinning(cell.navMeshes[index].id);
+            const auto *navm =
+                newNavmesh ? resolved.FindWinning(cell.id) : resolved.FindWinning(cell.navMeshes[index].id);
             const auto sourceIt = std::find_if(sources.begin(), sources.end(), [&](const auto &source)
                                                { return SameName(source.name, navm->winning.plugin); });
             const auto &source = *sourceIt;
             const core::NavMesh emptyMesh;
             const core::NavMesh &mesh = index == primary ? linkedMesh : emptyMesh;
             Bytes nvnm;
-            const auto &old = navm->raw->decodedPayload;
-            const auto &layout = *navm->navm;
-            nvnm.insert(nvnm.end(), old.begin() + layout.header.offset, old.begin() + layout.header.offset + 16);
-            if (Get32(nvnm, 8))
+            if (newNavmesh)
+            {
+                // Encode the same world-space location prefix as authored NAVM.
+                // CELL group labels remain source-local until placement is rebased below.
+                U32(nvnm, 12);
+                U32(nvnm, 0);
+                const auto world = navm->worldspaceFormId
+                                       ? RebaseResolvedFormId(resolved, masters, *navm->worldspaceFormId)
+                                       : std::optional<std::uint32_t>{0};
+                if (!world || (cell.exteriorCoordinates && !*world && !navm->worldspaceFormId))
+                {
+                    return fail("Cannot resolve new NAVM worldspace.");
+                }
+                U32(nvnm, *world);
+                if (cell.exteriorCoordinates)
+                {
+                    const auto [x, y] = *cell.exteriorCoordinates;
+                    if (x < std::numeric_limits<std::int16_t>::min() || x > std::numeric_limits<std::int16_t>::max() ||
+                        y < std::numeric_limits<std::int16_t>::min() || y > std::numeric_limits<std::int16_t>::max())
+                    {
+                        return fail("New NAVM exterior coordinates exceed the format range.");
+                    }
+                    U16(nvnm, static_cast<std::uint16_t>(y));
+                    U16(nvnm, static_cast<std::uint16_t>(x));
+                }
+                else
+                {
+                    const auto cellId = RebaseResolvedFormId(resolved, masters, cell.id);
+                    if (!cellId)
+                    {
+                        return fail("Cannot resolve new NAVM interior CELL.");
+                    }
+                    U32(nvnm, *cellId);
+                }
+            }
+            else
+            {
+                const auto &old = navm->raw->decodedPayload;
+                const auto &layout = *navm->navm;
+                nvnm.insert(nvnm.end(), old.begin() + layout.header.offset, old.begin() + layout.header.offset + 16);
+            }
+            if (!newNavmesh && Get32(nvnm, 8))
             {
                 const auto world = RebaseFormId(source, masters, Get32(nvnm, 8));
                 if (!world)
@@ -799,7 +867,7 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
                 }
                 Set32(nvnm, 8, *world);
             }
-            else if (!cell.exteriorCoordinates)
+            else if (!newNavmesh && !cell.exteriorCoordinates)
             {
                 const auto interiorCell = RebaseFormId(source, masters, Get32(nvnm, 12));
                 if (!interiorCell)
@@ -894,15 +962,22 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
                 U16(nvnm, static_cast<std::uint16_t>(triangle));
             }
             Bytes payload;
-            for (const auto &sub : navm->raw->subrecords)
+            if (newNavmesh)
             {
-                if (sub.type == "NVNM")
+                PutSubrecord(payload, "NVNM", nvnm);
+            }
+            else
+            {
+                for (const auto &sub : navm->raw->subrecords)
                 {
-                    PutSubrecord(payload, "NVNM", nvnm);
-                }
-                else
-                {
-                    payload.insert(payload.end(), sub.encodedBytes.begin(), sub.encodedBytes.end());
+                    if (sub.type == "NVNM")
+                    {
+                        PutSubrecord(payload, "NVNM", nvnm);
+                    }
+                    else
+                    {
+                        payload.insert(payload.end(), sub.encodedBytes.begin(), sub.encodedBytes.end());
+                    }
                 }
             }
             Bytes bytes = SourceRecord(source.bytes, *navm);
@@ -911,9 +986,17 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
                 return fail("Source NAVM record range is invalid.");
             }
             bytes.resize(24);
+            if (newNavmesh)
+            {
+                std::copy_n("NAVM", 4, bytes.begin());
+                Set32(bytes, 8, 0);
+            }
             Set32(bytes, 4, static_cast<std::uint32_t>(payload.size()));
             Set32(bytes, 8, Get32(bytes, 8) & ~(0x40000U | 0x20U));
-            const auto rebasedId = RebaseFormId(source, masters, Get32(bytes, 12));
+            const auto rebasedId =
+                newNavmesh
+                    ? std::optional<std::uint32_t>{static_cast<std::uint32_t>(masters.size()) << 24 | nextObjectId++}
+                    : RebaseFormId(source, masters, Get32(bytes, 12));
             if (!rebasedId)
             {
                 return fail("Cannot rebase source NAVM FormID.");
@@ -937,6 +1020,22 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             }
             ResolvedRecord placement;
             placement.groupHeaders = navm->groupHeaders;
+            if (newNavmesh)
+            {
+                // The winning CELL's ancestors provide exterior block/sub-block or
+                // interior placement. New NAVMs live in its temporary child group.
+                for (const auto groupType : {6U, 9U})
+                {
+                    Bytes header{'G', 'R', 'U', 'P'};
+                    U32(header, 24);
+                    U32(header, navm->winning.formId);
+                    U32(header, groupType);
+                    header.resize(24);
+                    std::array<std::uint8_t, 24> groupHeader{};
+                    std::copy(header.begin(), header.end(), groupHeader.begin());
+                    placement.groupHeaders.push_back(groupHeader);
+                }
+            }
             for (auto &header : placement.groupHeaders)
             {
                 Bytes group(header.begin(), header.end());
@@ -962,7 +1061,8 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             }
             Add(root, placement, std::move(bytes));
         }
-        const auto primaryFormId = RebaseResolvedFormId(resolved, masters, cell.navMeshes[primary].id);
+        const auto primaryFormId = newNavmesh ? std::optional<std::uint32_t>{expected.back().first}
+                                              : RebaseResolvedFormId(resolved, masters, cell.navMeshes[primary].id);
         if (!primaryFormId)
         {
             return fail("Cannot rebase generated NAVM FormID.");
@@ -972,6 +1072,7 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             return fail("Generated NAVM has no CELL group.");
         }
         doorsByMesh.emplace(*primaryFormId, doorEntries);
+        outputPrimaryByCell.emplace(cell.id, *primaryFormId);
     }
     for (auto &[neighborId, mesh] : neighborMeshes)
     {
@@ -1048,14 +1149,7 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
         Bytes appended;
         for (const auto &replacement : replacements)
         {
-            const auto primary =
-                std::max_element(replacement.cell->navMeshes.begin(), replacement.cell->navMeshes.end(),
-                                 [](const auto &a, const auto &b) { return a.polygons.size() < b.polygons.size(); });
-            const auto primaryFormId = RebaseResolvedFormId(resolved, masters, primary->id);
-            if (!primaryFormId)
-            {
-                return fail("Cannot rebase generated NAVM FormID.");
-            }
+            const auto primaryFormId = outputPrimaryByCell.at(replacement.cell->id);
             for (const auto &link : replacement.candidate->borderLinks)
             {
                 if (link.neighborNavmeshId == neighborId)
@@ -1098,7 +1192,7 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
                     Set16(nvnm, triangleOffset + 6 + link.neighborEdge * 2, static_cast<std::uint16_t>(index));
                     Set16(nvnm, triangleOffset + 12, face.flags);
                     U32(appended, 0);
-                    U32(appended, *primaryFormId);
+                    U32(appended, primaryFormId);
                     U16(appended, static_cast<std::uint16_t>(link.polygon));
                 }
             }
@@ -1178,6 +1272,10 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
         U32(hedr, 0x800);
     }
     Set32(hedr, 4, static_cast<std::uint32_t>(expected.size()));
+    if (newNavmeshCount)
+    {
+        Set32(hedr, 8, nextObjectId);
+    }
     Bytes headerPayload;
     PutSubrecord(headerPayload, "HEDR", hedr);
     for (const auto &master : masters)

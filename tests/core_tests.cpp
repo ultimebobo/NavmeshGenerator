@@ -226,6 +226,62 @@ namespace
         Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "full-slot-output", manyPaths, manyOrder,
             manyOrder.cells.front(), candidate, target, error) && target.extension() == ".esp" && !eslFlagged(target));
     }
+    void TestNewNavmeshRecords()
+    {
+        using namespace navmesh::skyrim::offline;
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-new-records-test";
+        std::filesystem::remove_all(root);
+        std::filesystem::create_directories(root);
+        // Both interior parents are source-owned; the output must allocate different
+        // identities without copying localized CELL payloads into its record groups.
+        std::vector<std::uint8_t> cells;
+        PutRecord(cells, "CELL", 0x100, CellPayload("UncoveredInteriorA"));
+        PutRecord(cells, "CELL", 0x101, CellPayload("UncoveredInteriorB"));
+        std::vector<std::uint8_t> plugin;
+        PutRecord(plugin, "TES4", 0, {}, 0x80U);
+        PutGroup(plugin, 0x4c4c4543, 0, cells);
+        const auto source = root / "InteriorSource.esp";
+        {
+            std::ofstream file(source, std::ios::binary);
+            file.write(reinterpret_cast<const char *>(plugin.data()), static_cast<std::streamsize>(plugin.size()));
+        }
+        const auto resolved = ResolveLoadOrder({.dataDirectory = root, .plugins = {source}});
+        Require(resolved.cells.size() == 2 && CellsWithExistingNavmesh(resolved).empty());
+        navmesh::core::CandidateNavMesh candidate;
+        candidate.mesh.vertices = {{0, 0, 0}, {128, 0, 0}, {0, 128, 0}};
+        navmesh::core::NavPolygon triangle;
+        triangle.vertices = {0, 1, 2};
+        triangle.neighbors.fill(std::numeric_limits<std::uint32_t>::max());
+        candidate.mesh.polygons.push_back(triangle);
+        std::filesystem::path target;
+        std::string error;
+        Require(WriteNavmeshOverrides(root / "output", {source}, resolved,
+                                      {{&resolved.cells[0], &candidate}, {&resolved.cells[1], &candidate}}, target,
+                                      error));
+        const auto patched = ResolveLoadOrder({.dataDirectory = root, .plugins = {source, target}});
+        Require(patched.cells.size() == 2);
+        Require(CellsWithExistingNavmesh(patched).size() == 2);
+        Require(patched.cells[0].navMeshes.size() == 1 && patched.cells[1].navMeshes.size() == 1);
+        Require(patched.cells[0].navMeshes[0].id != patched.cells[1].navMeshes[0].id);
+        for (const auto &cell : patched.cells)
+        {
+            const auto *navm = patched.FindWinning(cell.navMeshes[0].id);
+            Require(navm && navm->raw && navm->navm && navm->winning.plugin == "generated-navmesh.esp");
+            Require(patched.FindWinning(cell.id)->winning.plugin == "InteriorSource.esp");
+            const auto offset = static_cast<std::size_t>(navm->navm->header.offset);
+            std::uint32_t world{}, interior{};
+            std::memcpy(&world, navm->raw->decodedPayload.data() + offset + 8, sizeof(world));
+            std::memcpy(&interior, navm->raw->decodedPayload.data() + offset + 12, sizeof(interior));
+            Require(world == 0 && interior == cell.id);
+            Require(cell.navMeshes[0].vertices.size() == 3 && cell.navMeshes[0].polygons.size() == 1);
+        }
+        auto invalid = candidate;
+        invalid.mesh.vertices[0].x = std::numeric_limits<float>::quiet_NaN();
+        Require(!WriteNavmeshOverride(root / "invalid", {source}, resolved, resolved.cells.front(), invalid, target,
+                                      error));
+        Require(!std::filesystem::exists(root / "invalid" / "generated-navmesh.esp"));
+    }
+
     void TestReciprocalCellTransitions(float borderDrift = 0.0F, bool linkSecondary = false)
     {
         using namespace navmesh::core;
@@ -1354,8 +1410,13 @@ int main(int argc, char** argv)
     if (argc > 1 && std::string_view(argv[1]) == "--candidate-only") { TestCandidateGeneration(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--recast-only") { TestRecastSceneGeneration(); return 0; }
     if (argc > 2 && std::string_view(argv[1]) == "--local-stair-obj") { TestLocalStairs(argv[2]); return 0; }
-    if (argc > 1 && std::string_view(argv[1]) == "--batch-only") {
-        TestAffectedCells(); TestNavmeshOverrideWriter(); TestReciprocalCellTransitions(); return 0;
+    if (argc > 1 && std::string_view(argv[1]) == "--batch-only")
+    {
+        TestAffectedCells();
+        TestNavmeshOverrideWriter();
+        TestNewNavmeshRecords();
+        TestReciprocalCellTransitions();
+        return 0;
     }
     TestGeometryNeighborhoodCulling();
     TestAffectedCells();
@@ -1364,6 +1425,7 @@ int main(int argc, char** argv)
     TestMo2ProfileImport();
     TestLossAwareRecordReader();
     TestNavmeshOverrideWriter();
+    TestNewNavmeshRecords();
     TestReciprocalCellTransitions();
     TestAdjacentBorderBridges();
     TestAuthoredBorderTolerance();

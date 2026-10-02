@@ -70,14 +70,21 @@ Small authored border deviations are preserved at the matched portal endpoints,
 using the same border tolerance as candidate stitching; other candidate vertices
 must stay within the selected exterior CELL. The source plugin is never modified.
 The output is always an ESP; its ESL
-flag is set when the override-only records and master table fit the light format,
+flag is set when newly allocated identities and the master table fit the light format,
 including when a dependency is a regular ESP. All NAVMs are
 read back and compared with the serialized geometry.
 
 The generated candidate must be nonempty, topologically valid, and stay within
 the selected exterior cell when applicable, apart from bounded extensions at
-matched authored border portal endpoints. A cell with no existing NAVM or
-unresolved source dependencies is rejected. Additional authored
+matched authored border portal endpoints. Unresolved source dependencies are
+rejected. An uncovered CELL receives a new plugin-owned NAVM identity, a fresh
+NVNM location prefix, and placement in the winning CELL's temporary child group.
+The master table includes the CELL source and its dependencies; parent CELL
+payloads are not copied. New identities are allocated consecutively above the
+reserved local range, and TES4 HEDR records the next available identity. The ESP
+uses the light flag only when those identities and its master table fit the
+light format. Existing unsupported NAVM records cannot be treated as uncovered.
+Additional authored
 NAVM subrecords are rejected because they may contain geometry references.
 Unmatched authored external and door connections, cover data, NAVI, and REFR
 XNDP references are not rebuilt. They can still break navigation between NAVMs,
@@ -98,3 +105,10 @@ replaced secondary NAVMs cannot serve as portal destinations. Authored neighbor
 records shared by several replacements are serialized once. Read-back checks
 include every cell's geometry, door table and portal entries. Any failure occurs
 before the temporary plugin is finalized. See [batch rebuilding](batch-rebuilding.md).
+
+`--skip-existing-navmesh` selects uncovered targets and protects all cells owning
+winning NAVM records. New NAVM records may retain border-reaching regions without
+authored portal matches. Matched borders still receive reciprocal authored-neighbor
+links without replacing that neighbor's geometry. Unmatched borders remain
+unlinked, including between newly covered cells. NAVI and the other connection
+limitations above apply to new identities as well.
