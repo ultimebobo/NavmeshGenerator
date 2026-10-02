@@ -1,6 +1,7 @@
 #include "analysis/navmesh_analysis.h"
 #include "app/batch_runner.h"
 #include "app/geometry_pipeline.h"
+#include "skyrim/extraction/asset_cache.h"
 #include "app/run.h"
 #include "cli/inspection_report.h"
 #include "cli/json_report.h"
@@ -15,6 +16,7 @@
 #include "validation/validation.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -84,6 +86,8 @@ namespace
                 << "Usage: navmesh-offline --mo2 <instance-or-portable-root> --profile <existing-profile> "
                    "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --rebuild-plugin <active "
                    "filename> | --rebuild-load-order] [--generate-plugin] [--copy-plugin] [--skip-existing-navmesh] "
+                   "[--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
+                   "[--cache-budget-mib <MiB>] [--working-memory-mib <MiB>] [--workers <count>] [--estimate-only] "
                    "--output "
                    "<dir>\nDeveloper/test override: "
                    "--data <Data> --load-order <plugins.txt>.\n";
@@ -133,6 +137,38 @@ namespace
             std::cerr << "--skip-existing-navmesh requires generation with resolved MO2/load-order input.\n";
             return 1;
         }
+        if (options.estimateOnly && (options.rebuildScope == RebuildScope::Cell || options.listCells))
+        {
+            std::cerr << "--estimate-only requires Plugin or Load order generation scope.\n";
+            return 1;
+        }
+        if (options.batchOutput != "auto" && options.batchOutput != "full" && options.batchOutput != "compact" &&
+            options.batchOutput != "plugin_only")
+        {
+            std::cerr << "--batch-output must be auto, full, compact, or plugin_only.\n";
+            return 1;
+        }
+        if (options.workers == 0 || options.workers > 64 || options.workingMemoryMiB < 64 ||
+            options.workingMemoryMiB > 1048576 || options.cacheBudgetMiB > 1048576)
+        {
+            std::cerr << "Workers must be between 1 and 64; working memory must be between 64 and 1048576 MiB; cache "
+                         "budget must not exceed 1048576 MiB.\n";
+            return 1;
+        }
+        if (options.batchOutput == "plugin_only" && !options.listCells &&
+            ((!options.generatePlugin && !options.estimateOnly) ||
+             options.rebuildScope == navmesh::app::RebuildScope::Cell))
+        {
+            std::cerr << "plugin_only output requires batch plugin generation or cost estimation.\n";
+            return 1;
+        }
+        if (options.batchOutput == "auto")
+        {
+            options.batchOutput = (options.generatePlugin || options.estimateOnly) &&
+                                          options.rebuildScope != navmesh::app::RebuildScope::Cell
+                                      ? "plugin_only"
+                                      : "full";
+        }
         if (options.neighboringCellRadius < 0)
         {
             std::cerr << "Neighboring-cell radius cannot be negative.\n";
@@ -165,10 +201,14 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         return status;
     }
 
+    const auto inputStarted = std::chrono::steady_clock::now();
     // Resolve one coherent input snapshot shared by listing, single-cell, and batch processing.
     std::optional<navmesh::skyrim::offline::ResolvedLoadOrder> resolved;
     std::optional<navmesh::skyrim::offline::Mo2ProfileInput> mo2Input;
     navmesh::skyrim::offline::ModelAssetSources modelAssets;
+    const auto sharedCacheRoot = options.assetCache.empty()
+                                     ? std::filesystem::temp_directory_path() / "NavmeshGenerator" / "assets"
+                                     : options.assetCache;
     if (!options.mo2.empty())
     {
         std::filesystem::create_directories(options.output);
@@ -183,7 +223,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             mo2Input = navmesh::skyrim::offline::ImportMo2Profile(
                 options.mo2, options.profile,
                 options.modsDirectory.empty() ? std::nullopt : std::optional(options.modsDirectory),
-                options.output / ".mo2-cache");
+                sharedCacheRoot / ".mo2");
         }
         catch (const std::exception &error)
         {
@@ -192,13 +232,15 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             mo2Input->diagnostics.push_back({navmesh::skyrim::offline::DiagnosticKind::InvalidPlugin,
                                              options.mo2.string(), std::string("MO2 import failed: ") + error.what()});
         }
-        if (!navmesh::skyrim::offline::WriteInputReport(options.output / "input-report.json", *mo2Input))
+        if (!navmesh::skyrim::offline::WriteInputReport(
+                options.output / "input-report.json", *mo2Input,
+                options.listCells || options.rebuildScope == RebuildScope::Cell || options.batchOutput == "full"))
         {
             std::cerr << "Failed to write input-report.json.\n";
         }
         update(15, mo2Input->looseAssetCacheUsed ? "MO2 loose-asset cache loaded" : "MO2 loose-asset cache created");
         std::cerr << (mo2Input->looseAssetCacheUsed ? "Using" : "Created") << " MO2 loose-asset cache in "
-                  << (options.output / ".mo2-cache").string() << "\n";
+                  << (sharedCacheRoot / ".mo2").string() << "\n";
         std::cerr << "Effective MO2 mods directory: " << mo2Input->modsDirectory.string() << "\n";
         for (const auto &diagnostic : mo2Input->diagnostics)
         {
@@ -333,7 +375,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     }
 
     std::filesystem::create_directories(options.output);
-    if (resolved)
+    if (resolved && (options.rebuildScope == RebuildScope::Cell || options.batchOutput == "full"))
     {
         navmesh::cli::WriteLoadOrderJson(options.output / "load-order.json", *resolved);
     }
@@ -356,7 +398,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                 paths.push_back(path.is_absolute() ? path : options.data / path);
             }
         }
-        return detail::RunBatch(options, *resolved, mo2Input ? &modelAssets : nullptr, paths, progress, cancelled);
+        return detail::RunBatch(options, *resolved, mo2Input ? &modelAssets : nullptr, paths, progress, cancelled,
+                                std::chrono::duration<double>(std::chrono::steady_clock::now() - inputStarted).count());
     }
     auto cell =
         resolved ? std::optional<navmesh::core::Cell>{}
@@ -471,7 +514,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         sceneCells.clear();
         for (const auto *source : options.terrainOnly ? neighbors : index.GeometryNeighbors(*cell, radius))
         {
-            auto geometryCell = index.GeometryCell(*source);
+            auto geometryCell = index.GeometryCell(*source, neighborhoodBounds);
             if (sceneCellIds.contains(source->id))
             {
                 geometryCell.navMeshes = source->navMeshes;
@@ -480,6 +523,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
     }
     navmesh::skyrim::offline::GeometryExtraction geometry;
+    const auto assetCacheDirectory = navmesh::skyrim::offline::ModelAssetCacheDirectory(
+        resolved ? options.data : options.plugin.parent_path(), mo2Input ? &modelAssets : nullptr, options.assetCache);
+    navmesh::skyrim::offline::ModelGeometryCache modelCache(options.workingMemoryMiB * 1024ULL * 1024ULL / 2);
     for (std::size_t cellIndex{}; cellIndex < sceneCells.size(); ++cellIndex)
     {
         auto extracted =
@@ -487,14 +533,19 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                 ? navmesh::skyrim::offline::GeometryExtraction{}
                 : navmesh::skyrim::offline::ExtractGeometry(
                       resolved ? options.data : options.plugin.parent_path(), sceneCells[cellIndex],
-                      options.output / ".bsa-cache",
+                      assetCacheDirectory,
                       [&](std::size_t completed, std::size_t total)
                       {
                           const auto percent = total == 0 ? 65 : 45 + static_cast<int>((20 * completed) / total);
                           update(percent, std::format("Extracting geometry source cell {}/{}: reference {} of {}",
                                                       cellIndex + 1, sceneCells.size(), completed, total));
                       },
-                      wasCancelled, mo2Input ? &modelAssets : nullptr);
+                      wasCancelled, mo2Input ? &modelAssets : nullptr, &modelCache);
+        if (!options.terrainOnly)
+        {
+            navmesh::skyrim::offline::TrimModelAssetCache(assetCacheDirectory,
+                                                          options.cacheBudgetMiB * 1024ULL * 1024ULL);
+        }
         const bool inNeighborhood = sceneCellIds.contains(sceneCells[cellIndex].id);
         if (!inNeighborhood && neighborhoodBounds)
         {
@@ -505,8 +556,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             auto terrain = navmesh::skyrim::offline::ExtractTerrain(*resolved, sceneCells[cellIndex]);
             navmesh::skyrim::offline::GeometryExtraction terrainGeometry;
             terrainGeometry.scene = std::move(terrain.scene);
-            terrainGeometry.mesh = std::move(terrain.mesh);
-            terrainGeometry.scene.mesh = terrainGeometry.mesh;
+
             terrainGeometry.terrainSupported = terrain.landRecordsDecoded != 0;
             terrainGeometry.terrainLandRecords = terrain.landRecordsFound;
             terrainGeometry.terrainLandDecoded = terrain.landRecordsDecoded;
@@ -550,8 +600,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                      .referencesWithModels = geometry.referencesWithModels,
                      .modelsLoaded = geometry.modelsLoaded,
                      .modelsMissing = geometry.modelsMissing,
-                     .geometryVertices = geometry.mesh.vertices.size(),
-                     .geometryTriangles = geometry.mesh.triangles.size(),
+                     .geometryVertices = geometry.scene.mesh.vertices.size(),
+                     .geometryTriangles = geometry.scene.mesh.triangles.size(),
                      .terrainLandRecords = geometry.terrainLandRecords,
                      .terrainLandDecoded = geometry.terrainLandDecoded,
                      .terrainLandMissing = geometry.terrainLandMissing,
@@ -591,7 +641,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
 
     // Analyze existing navigation independently of the optional replacement candidate.
     update(79, "Analyzing existing NAVM support");
-    const auto geometrySummary = navmesh::analysis::AnalyzeGeometry(geometry.mesh);
+    const auto geometrySummary = navmesh::analysis::AnalyzeGeometry(geometry.scene.mesh);
     const auto meshSummary =
         navmesh::analysis::AnalyzeNavMesh(cell->navMeshes.empty() ? navmesh::core::NavMesh{} : cell->navMeshes.front());
     auto analysisConfig = navmesh::analysis::AnalysisConfiguration{.surfaceSearchRadius = options.surfaceSearchRadius,
@@ -607,7 +657,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     const auto triangleSources = detail::BuildTriangleSources(geometry);
     auto analysisReport = cell->navMeshes.empty()
                               ? navmesh::analysis::AnalysisReport{}
-                              : navmesh::analysis::AnalyzeNavMeshPolygons(cell->navMeshes.front(), geometry.mesh,
+                              : navmesh::analysis::AnalyzeNavMeshPolygons(cell->navMeshes.front(), geometry.scene.mesh,
                                                                           triangleSources, analysisConfig);
     update(82, "Existing NAVM analysis complete");
     if (wasCancelled())
@@ -845,7 +895,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     // Export support/topology diagnostics after optional generation; these remain analysis evidence.
     if (!options.exportAnalysis.empty() && !cell->navMeshes.empty())
     {
-        navmesh::cli::WriteAnalysisObj(options.exportAnalysis, cell->navMeshes.front(), geometry.mesh, analysisReport);
+        navmesh::cli::WriteAnalysisObj(options.exportAnalysis, cell->navMeshes.front(), geometry.scene.mesh,
+                                       analysisReport);
         if (!navmesh::reproducibility::WriteSidecar(options.exportAnalysis, metadata))
         {
             std::cerr << "Failed to write analysis metadata sidecar\n";
@@ -884,8 +935,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     if (!cell->navMeshes.empty())
     {
         const auto sceneReportPath = options.output / "scene-report.html";
-        navmesh::cli::WriteDiagnosticHtml(sceneReportPath, *cell, cell->navMeshes.front(), geometry.mesh, geometry,
-                                          analysisReport);
+        navmesh::cli::WriteDiagnosticHtml(sceneReportPath, *cell, cell->navMeshes.front(), geometry.scene.mesh,
+                                          geometry, analysisReport);
         if (!navmesh::reproducibility::WriteSidecar(sceneReportPath, metadata))
         {
             std::cerr << "Failed to write scene report metadata sidecar\n";
@@ -894,7 +945,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     if (options.diagnostics && !cell->navMeshes.empty())
     {
         const auto diagnosticPath = options.output / "navmesh_diagnostics.html";
-        navmesh::cli::WriteDiagnosticHtml(diagnosticPath, *cell, cell->navMeshes.front(), geometry.mesh, geometry,
+        navmesh::cli::WriteDiagnosticHtml(diagnosticPath, *cell, cell->navMeshes.front(), geometry.scene.mesh, geometry,
                                           analysisReport);
         if (!navmesh::reproducibility::WriteSidecar(diagnosticPath, metadata))
         {
@@ -927,8 +978,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     std::cout << std::format("References: {}\nReferences with models: {}\nModels loaded: {}\nModels missing: "
                              "{}\nGeometry vertices: {}\nGeometry triangles: {}\nExported geometry: {}\n",
                              cell->references.size(), geometry.referencesWithModels, geometry.modelsLoaded,
-                             geometry.modelsMissing, geometry.mesh.vertices.size(), geometry.mesh.triangles.size(),
-                             geometryPath.string());
+                             geometry.modelsMissing, geometry.scene.mesh.vertices.size(),
+                             geometry.scene.mesh.triangles.size(), geometryPath.string());
     update(100, std::format("Original navmesh polygons: {}; generated navmesh polygons: {}", existingSelectedPolygons,
                             generatedPolygons));
     return 0;

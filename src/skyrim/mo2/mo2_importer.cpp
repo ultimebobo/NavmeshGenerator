@@ -1,4 +1,5 @@
 #include "skyrim/mo2/mo2_importer.h"
+#include "core/io/content_hash.h"
 
 #include <algorithm>
 #include <cctype>
@@ -272,6 +273,8 @@ namespace
             return false;
         }
         files = std::move(cached);
+        std::error_code error;
+        std::filesystem::last_write_time(path, std::filesystem::file_time_type::clock::now(), error);
         return true;
     }
     void WriteLooseAssetCache(const std::filesystem::path &path, const std::vector<VirtualFile> &files)
@@ -520,8 +523,38 @@ namespace navmesh::skyrim::offline
         digest << std::hex << std::setw(16) << std::setfill('0') << hash;
         result.snapshotHash = digest.str();
         std::map<std::string, VirtualFile> winners;
+        // Profile identity alone cannot detect loose files added to an enabled mod. Directory stamps
+        // cover catalog membership changes; NIF content revisions are checked by geometry cache keys.
+        core::ContentHash catalogHash;
+        catalogHash.Add("navmesh-mo2-catalog-2:" + result.snapshotHash);
+        std::vector<std::filesystem::path> roots{result.gameData};
+        for (const auto &mod : result.enabledMods)
+        {
+            roots.push_back(mod.path);
+        }
+        roots.push_back(overwrite);
+        for (const auto &root : roots)
+        {
+            catalogHash.Add("\n" + PathUtf8(root));
+            std::error_code error;
+            catalogHash.Add(std::to_string(std::filesystem::last_write_time(root, error).time_since_epoch().count()));
+            if (std::filesystem::is_directory(root, error))
+            {
+                for (auto iterator = std::filesystem::recursive_directory_iterator(
+                         root, std::filesystem::directory_options::skip_permission_denied, error);
+                     !error && iterator != std::filesystem::recursive_directory_iterator(); iterator.increment(error))
+                {
+                    if (iterator->is_directory(error))
+                    {
+                        catalogHash.Add("\n" + PathUtf8(iterator->path()));
+                        catalogHash.Add(std::to_string(iterator->last_write_time(error).time_since_epoch().count()));
+                    }
+                }
+            }
+        }
         const auto cachePath =
-            cacheDirectory.empty() ? std::filesystem::path{} : LooseAssetCachePath(cacheDirectory, result.snapshotHash);
+            cacheDirectory.empty() ? std::filesystem::path{} : LooseAssetCachePath(cacheDirectory, catalogHash.Hex());
+        result.looseAssetCachePath = cachePath;
         const auto cacheLoaded = !cachePath.empty() && ReadLooseAssetCache(cachePath, result.looseAssetWinners);
         result.looseAssetCacheUsed = cacheLoaded;
         if (cacheLoaded)
@@ -660,7 +693,7 @@ namespace navmesh::skyrim::offline
 
     namespace
     {
-        void WriteJson(std::ostream &json, const Mo2ProfileInput &input)
+        void WriteJson(std::ostream &json, const Mo2ProfileInput &input, bool includeAssetWinners = true)
         {
             json << "{\n  \"snapshot_hash\": \"" << input.snapshotHash
                  << "\",\n  \"loose_asset_cache_used\": " << (input.looseAssetCacheUsed ? "true" : "false")
@@ -696,13 +729,23 @@ namespace navmesh::skyrim::offline
                                     i + 1 == input.enabledMods.size() ? "" : ",");
             }
             json << "  ],\n  \"loose_asset_winners\": [\n";
-            for (std::size_t i = 0; i < input.looseAssetWinners.size(); ++i)
+            const auto winnerCount = includeAssetWinners ? input.looseAssetWinners.size() : 0;
+            for (std::size_t i = 0; i < winnerCount; ++i)
             {
                 const auto &file = input.looseAssetWinners[i];
                 json << std::format(
                     "    {{\"logical_path\": \"{}\", \"physical_path\": \"{}\", \"source\": \"{}\"}}{}\n",
                     Escape(file.logicalPath), Escape(PathUtf8(file.physicalPath)), Escape(file.source),
                     i + 1 == input.looseAssetWinners.size() ? "" : ",");
+            }
+            json << "  ],\n  \"loose_asset_count\": " << input.looseAssetWinners.size()
+                 << ",\n  \"loose_asset_catalog\": \"" << Escape(PathUtf8(input.looseAssetCachePath))
+                 << "\",\n  \"asset_winners_included\": " << (includeAssetWinners ? "true" : "false")
+                 << ",\n  \"archives\": [\n";
+            for (std::size_t i{}; i < input.archivePaths.size(); ++i)
+            {
+                json << "    \"" << Escape(PathUtf8(input.archivePaths[i])) << "\""
+                     << (i + 1 == input.archivePaths.size() ? "" : ",") << '\n';
             }
             json << "  ],\n  \"diagnostics\": [\n";
             for (std::size_t i = 0; i < input.diagnostics.size(); ++i)
@@ -715,14 +758,15 @@ namespace navmesh::skyrim::offline
         }
     } // namespace
 
-    bool WriteInputReport(const std::filesystem::path &outputPath, const Mo2ProfileInput &input)
+    bool WriteInputReport(const std::filesystem::path &outputPath, const Mo2ProfileInput &input,
+                          bool includeAssetWinners)
     {
         std::ofstream output(outputPath, std::ios::trunc | std::ios::binary);
         if (!output)
         {
             return false;
         }
-        WriteJson(output, input);
+        WriteJson(output, input, includeAssetWinners);
         return static_cast<bool>(output);
     }
 

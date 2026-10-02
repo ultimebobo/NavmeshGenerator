@@ -3,8 +3,11 @@
 The shared application runner supports **Cell**, **Plugin**, and **Load order**
 scopes. The Windows UI persists the scope and affected-plugin filename with the
 other settings. Plugin and load-order rebuilding require a resolved MO2 profile
-or the developer load-order manifest. They generate inspection candidates;
+or the developer load-order manifest. They generate candidates;
 **Write plugin** / `--generate-plugin` additionally writes a combined patch.
+Automatic batch output retains full inspection without writing, and reports plus
+the plugin when writing. **Batch output** / `--batch-output` selects full,
+compressed, or plugin-only artifacts explicitly.
 
 For authoring, **Copy selected plugin** / `--copy-plugin` enables writing and
 uses the selected Plugin-scope file as the output template. The UI persists the
@@ -47,12 +50,15 @@ all subsequent plugins as potential changes. This includes additions from
 master-flagged mods and official add-ons, conservatively. A baseline-only input
 has no plugin edits to rebuild. The MO2 route also includes cells using replaced
 loose model assets. Enabled mod archives can replace models without any record
-edit; without an archive-content impact index, their presence conservatively
-includes all model-bearing reference locations.
+edit; their winning NIF names are indexed to select affected uses. Index failures
+conservatively include all model-bearing reference locations.
 
 ## Impact selection and geometry inputs
 
-The index examines CELL, LAND, NAVM, placed-reference and worldspace edits.
+The index examines navigation-changing CELL, LAND, NAVM, placed-reference and
+worldspace edits. Equivalent navigation inputs, display names, editor IDs,
+worldspace map/height-summary metadata and LAND color/texture edits are excluded.
+Unknown fields and ownership changes remain conservative dependencies.
 Changed base records select their placed uses, including untouched references.
 Moved or deleted references select historical and winning locations. Exterior
 positions, including negative coordinates, determine physical cell ownership;
@@ -81,11 +87,15 @@ geometry. Their source cells do not expand the scene's terrain or NAVM coverage.
 
 `batch-report.json` identifies the selection, completion/failure state, cell
 statuses, polygon totals, extraction count, geometry-cache reuse, and whether
-`copy_plugin` was selected. Each
-processed target has candidate JSON/OBJ beneath `cells/<resolved FormID>/`.
-Candidate source evidence is compacted to the provenance entries used by its
-polygons. JSON exports contain run metadata, and candidate OBJs have metadata
-sidecars. Batch runs omit the large per-cell scene and discrepancy exports.
+`copy_plugin` was selected. It also checkpoints per-cell timing and supplier
+counts, selection diagnostics, archive I/O, worker admission, cache reuse, and
+terminal output bytes. `full` output writes candidate JSON/OBJ beneath
+`cells/<resolved FormID>/`, OBJ metadata, and the complete winning-record table.
+`compact` writes streaming gzip candidate JSON and references shared input
+catalogs. `plugin_only` retains reports and the requested plugin. `auto` selects
+plugin-only output for writing or estimates, and full output for inspection.
+Source-triangle and geometry-source evidence are compacted together. Batch runs
+omit the large per-cell scene and discrepancy exports.
 
 Without `--skip-existing-navmesh`, cells without an existing NAVM are reported
 as skipped. With that option, any winning NAVM record protects its CELL and is
@@ -122,13 +132,24 @@ using it in a disposable game profile.
 
 ## Performance and verification
 
-The load order and MO2 asset winners are resolved once per run. FormID lookups
-use a hash index; the spatial index uses worldspace/coordinate keys and preserves
-compact placement history instead of historical raw record payloads. Exterior
-targets run in spatial order, and the geometry cache uses least-recently-used
-eviction with entry and triangle-volume limits. Candidate geometry and compact
-audit evidence remain available for combined serialization; extracted scene
-meshes do not accumulate for the entire load order.
+[Performance improvements](performance-improvements.md) describes persisted CLI/UI
+settings for output policy, shared disk cache, estimated working memory, workers,
+and cost preflight, with [measured results](performance-improvements-measurements.json).
+The [original cost analysis](performance-analysis.md) retains the baseline.
+
+The load order and MO2 asset winners are resolved once per run. Shared immutable
+payload ranges avoid subrecord duplication, while plugin record ownership moves
+into winners incrementally. LAND uses a direct CELL index. Targets run in spatial
+order; winning placements are bounds-filtered before NIF extraction, and bounded
+model-local/placement caches reuse geometry. Independent generation tasks obey
+worker and estimated-byte admission limits. Compact candidate audit data is spooled
+to gzip and released from memory. Border reconciliation and guarded plugin writing
+remain global ordered stages. Input plugin records are read by range.
+
+`--estimate-only` samples eligible interior/exterior and density strata and stops
+before writing a plugin. Its report distinguishes the full selected/eligible scope
+from sampled/completed work and gives a heuristic remaining-time range. Cached
+sampled candidates can be reused by a later generation run.
 
 Run the core tests and the synthetic CLI integration tests after building:
 

@@ -36,6 +36,8 @@ namespace navmesh::skyrim::offline
         std::vector<Diagnostic> diagnostics;
         std::string snapshotHash;
         bool looseAssetCacheUsed{};
+        /// Shared loose-catalog file referenced by compact run manifests.
+        std::filesystem::path looseAssetCachePath;
     };
 
     // A mods-directory override is a read-only recovery option for an MO2 profile
@@ -45,6 +47,9 @@ namespace navmesh::skyrim::offline
         const std::optional<std::filesystem::path> &modsDirectoryOverride = std::nullopt,
         const std::filesystem::path &cacheDirectory = {});
     [[nodiscard]] bool ProfileSnapshotMatches(const Mo2ProfileInput &input);
-    [[nodiscard]] bool WriteInputReport(const std::filesystem::path &outputPath, const Mo2ProfileInput &input);
+    /// Write input identity and diagnostics; includeAssetWinners adds the full loose-file table for inspection.
+    /// Compact manifests retain counts and the shared catalog path without copying its entries into every run.
+    [[nodiscard]] bool WriteInputReport(const std::filesystem::path &outputPath, const Mo2ProfileInput &input,
+                                        bool includeAssetWinners = true);
     [[nodiscard]] std::string ToJson(const Mo2ProfileInput &input);
 } // namespace navmesh::skyrim::offline

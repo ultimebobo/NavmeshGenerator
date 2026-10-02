@@ -384,6 +384,10 @@ namespace
         {
             throw std::runtime_error("Recast compact heightfield failed");
         }
+        // Compact spans own the walkability data; raw pools have no further consumers.
+        heightfield.reset();
+        areas.clear();
+        areas.shrink_to_fit();
         if (!rcErodeWalkableArea(&context, config.walkableRadius, *compact))
         {
             throw std::runtime_error("Recast radius erosion failed");
@@ -410,6 +414,7 @@ namespace
         {
             throw std::runtime_error("Recast contour construction failed");
         }
+        compact.reset();
         RecastOwner<rcPolyMesh, rcFreePolyMesh> polyMesh(rcAllocPolyMesh(), rcFreePolyMesh);
         if (!polyMesh || !rcBuildPolyMesh(&context, *contours, config.maxVertsPerPoly, *polyMesh))
         {

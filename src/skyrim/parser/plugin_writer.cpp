@@ -31,7 +31,7 @@ namespace
             b.push_back(static_cast<std::uint8_t>(n >> shift));
         }
     }
-    std::uint32_t Get32(const Bytes &b, std::size_t p)
+    std::uint32_t Get32(std::span<const std::uint8_t> b, std::size_t p)
     {
         return static_cast<std::uint32_t>(b[p]) | static_cast<std::uint32_t>(b[p + 1]) << 8 |
                static_cast<std::uint32_t>(b[p + 2]) << 16 | static_cast<std::uint32_t>(b[p + 3]) << 24;
@@ -79,6 +79,7 @@ namespace
         std::string name;
         Bytes bytes;
         std::vector<std::string> masters;
+        std::filesystem::path path;
     };
     /// Decode only the TES4 master names; the resolved load order already supplied the winning NAVMs.
     bool ReadMasterNames(const Bytes &source, std::vector<std::string> &masters)
@@ -170,15 +171,22 @@ namespace
         const auto local = global >> 24 == 0xFEU ? global & 0xFFFU : global & 0xFFFFFFU;
         return static_cast<std::uint32_t>(std::distance(outputMasters.begin(), it)) << 24 | local;
     }
-    Bytes SourceRecord(const Bytes &source, const ResolvedRecord &record)
+    /// Read the verified source range directly; copied-plugin assembly retains its complete input separately.
+    Bytes SourceRecord(const SourceInfo &source, const ResolvedRecord &record)
     {
-        const auto start = static_cast<std::size_t>(record.raw->headerRange.offset);
-        const auto size = 24 + static_cast<std::size_t>(record.raw->filePayloadRange.size);
-        if (start > source.size() || size > source.size() - start)
+        const auto start = record.raw->headerRange.offset;
+        const auto size = 24 + record.raw->filePayloadRange.size;
+        std::ifstream stream(source.path, std::ios::binary | std::ios::ate);
+        const auto length = stream.tellg();
+        if (length < 0 || start > static_cast<std::uint64_t>(length) ||
+            size > static_cast<std::uint64_t>(length) - start)
         {
             return {};
         }
-        return Bytes(source.begin() + start, source.begin() + start + size);
+        Bytes bytes(static_cast<std::size_t>(size));
+        stream.seekg(static_cast<std::streamoff>(start));
+        stream.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        return stream ? std::move(bytes) : Bytes{};
     }
     struct Group
     {
@@ -692,17 +700,31 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
             return fail("Winning NAVM source plugin is absent from the input paths.");
         }
         std::ifstream file(*path, std::ios::binary);
-        Bytes bytes((std::istreambuf_iterator<char>(file)), {});
-        if (bytes.size() < 24 || std::memcmp(bytes.data(), "TES4", 4) != 0)
+        Bytes bytes(24);
+        file.read(reinterpret_cast<char *>(bytes.data()), 24);
+        if (!file || std::memcmp(bytes.data(), "TES4", 4) != 0)
         {
             return fail("Cannot read winning NAVM source plugin.");
+        }
+        const auto payloadSize = Get32(bytes, 4);
+        std::error_code sizeError;
+        const auto fileSize = std::filesystem::file_size(*path, sizeError);
+        if (sizeError || fileSize < 24 || payloadSize > fileSize - 24 || payloadSize > 256ULL * 1024ULL * 1024ULL)
+        {
+            return fail("Source TES4 payload exceeds its file or the safe decoded record size.");
+        }
+        bytes.resize(24 + static_cast<std::size_t>(payloadSize));
+        file.read(reinterpret_cast<char *>(bytes.data() + 24), payloadSize);
+        if (!file)
+        {
+            return fail("Cannot read source TES4 payload.");
         }
         std::vector<std::string> sourceMasters;
         if (!ReadMasterNames(bytes, sourceMasters))
         {
             return fail("Cannot read source master list.");
         }
-        sources.push_back({name, std::move(bytes), std::move(sourceMasters)});
+        sources.push_back({name, std::move(bytes), std::move(sourceMasters), *path});
     }
     std::vector<std::string> masters;
     for (const auto &path : inputPlugins)
@@ -744,6 +766,22 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
     {
         const auto selected = std::find_if(sources.begin(), sources.end(),
                                            [&](const auto &source) { return SameName(source.name, copyPlugin); });
+        if (selected != sources.end())
+        {
+            std::ifstream stream(selected->path, std::ios::binary | std::ios::ate);
+            const auto size = stream.tellg();
+            if (size < 0)
+            {
+                return fail("Cannot read selected plugin copy input.");
+            }
+            selected->bytes.resize(static_cast<std::size_t>(size));
+            stream.seekg(0);
+            stream.read(reinterpret_cast<char *>(selected->bytes.data()), size);
+            if (!stream)
+            {
+                return fail("Cannot read selected plugin copy input.");
+            }
+        }
         detail::PluginCopy prepared;
         if (selected == sources.end() || !detail::PreparePluginCopy(selected->bytes, prepared, error))
         {
@@ -1042,7 +1080,7 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
                     }
                 }
             }
-            Bytes bytes = SourceRecord(source.bytes, *navm);
+            Bytes bytes = SourceRecord(source, *navm);
             if (bytes.size() < 24)
             {
                 return fail("Source NAVM record range is invalid.");
@@ -1271,7 +1309,7 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
                 payload.insert(payload.end(), sub.encodedBytes.begin(), sub.encodedBytes.end());
             }
         }
-        Bytes bytes = SourceRecord(source.bytes, *navm);
+        Bytes bytes = SourceRecord(source, *navm);
         if (bytes.size() < 24)
         {
             return fail("Neighboring NAVM source range is invalid.");

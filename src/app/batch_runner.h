@@ -13,10 +13,12 @@ namespace navmesh::app::detail
      * @param paths Source plugin paths in resolved load-order order.
      * @param progress Optional synchronous progress sink.
      * @param cancelled Optional cancellation query between processing stages.
+     * @param inputPreparationSeconds Elapsed input/report preparation time, in seconds, for checkpoint telemetry.
      * @return Process-style status: success, processing/export failure, or cancellation.
      * @warning Writes batch reports and candidate exports, and a verified ESP when requested.
      */
     int RunBatch(const Options &options, const skyrim::offline::ResolvedLoadOrder &resolved,
                  const skyrim::offline::ModelAssetSources *assets, const std::vector<std::filesystem::path> &paths,
-                 const ProgressCallback &progress, const CancellationCallback &cancelled);
+                 const ProgressCallback &progress, const CancellationCallback &cancelled,
+                 double inputPreparationSeconds = 0);
 } // namespace navmesh::app::detail

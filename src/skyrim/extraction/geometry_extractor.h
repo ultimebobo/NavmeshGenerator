@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <unordered_map>
 #include <string>
 #include <vector>
@@ -40,8 +41,8 @@ namespace navmesh::skyrim::offline
 
     struct GeometryExtraction
     {
+        /// Sole owner of support geometry, display geometry, and their provenance.
         core::Scene scene;
-        core::Mesh mesh;
         std::vector<GeometryReferenceReport> references;
         std::size_t referencesWithModels{};
         std::size_t modelsLoaded{};
@@ -70,6 +71,35 @@ namespace navmesh::skyrim::offline
         std::vector<std::filesystem::path> archives;
     };
 
+    /// Cache counters in bytes and operation counts for one coherent input snapshot.
+    struct ModelCacheStatistics
+    {
+        std::size_t modelsDecoded{}, modelHits{}, placementsBuilt{}, placementHits{}, retainedBytes{};
+    };
+
+    /** Bounded, thread-safe reuse of immutable model-local and placed geometry.
+     * Asset keys include physical path, size, modification time, and extraction policy.
+     * Objects returned to extraction remain alive when their cache entry is evicted.
+     */
+    class ModelGeometryCache
+    {
+      public:
+        /// Create a cache with a combined byte budget; zero disables retention.
+        explicit ModelGeometryCache(std::size_t byteBudget = 256ULL * 1024 * 1024);
+        /// Release retained geometry after all extracting callers have finished.
+        ~ModelGeometryCache();
+        /// Snapshot counters safely while extraction workers may be active.
+        [[nodiscard]] ModelCacheStatistics Statistics() const;
+
+      private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+        friend GeometryExtraction ExtractGeometry(const std::filesystem::path &, const core::Cell &,
+                                                  const std::filesystem::path &, const GeometryProgressCallback &,
+                                                  const GeometryCancellationCallback &, const ModelAssetSources *,
+                                                  ModelGeometryCache *, bool);
+    };
+
     /// Extract placed model geometry using MO2 assets when provided.
     /// @param dataDirectory Game Data directory for direct input and vanilla BSAs.
     /// @param cell Cell whose references are decoded in world coordinates.
@@ -77,12 +107,16 @@ namespace navmesh::skyrim::offline
     /// @param progress Optional per-reference progress callback.
     /// @param cancelled Optional cancellation callback; returns partial geometry if true.
     /// @param assets Optional MO2 loose winners and archive paths.
-    /// @return Extracted support and render geometry with per-reference failures.
+    /// @param modelCache Optional run-scoped model and placement cache, shared safely by workers.
+    /// @param navigationOnly Materialize supported collision and coverage without render display meshes.
+    /// @return Extracted geometry with per-reference failures; navigationOnly excludes render-only support.
     [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path &dataDirectory, const core::Cell &cell,
                                                      const std::filesystem::path &cacheDirectory = {},
                                                      const GeometryProgressCallback &progress = {},
                                                      const GeometryCancellationCallback &cancelled = {},
-                                                     const ModelAssetSources *assets = nullptr);
+                                                     const ModelAssetSources *assets = nullptr,
+                                                     ModelGeometryCache *modelCache = nullptr,
+                                                     bool navigationOnly = false);
     [[nodiscard]] bool WriteGeometryObj(const std::filesystem::path &outputPath, const GeometryExtraction &geometry);
     [[nodiscard]] bool WriteGeometryJson(const std::filesystem::path &outputPath, const core::Cell &cell,
                                          const GeometryExtraction &geometry,

@@ -46,7 +46,8 @@ namespace
         Field{"plugin", "Plugin file", "Direct plugin input. Use with the legacy/direct reader."},
         Field{"data", "Game Data folder", "Data directory used with a direct load-order manifest."},
         Field{"load", "Load-order manifest", "Developer/direct input listing plugins in load order."},
-        Field{"output", "Output folder", "Folder that receives reports, OBJ exports, diagnostics, and cached assets."},
+        Field{"output", "Output folder",
+              "Folder that receives requested reports, inspection exports, and generated plugins."},
         Field{"geometry", "Geometry OBJ path", "Optional custom path for the extracted support geometry OBJ."},
         Field{"analysis", "Analysis OBJ path", "Optional custom path for the navmesh/support comparison OBJ."},
         Field{"world", "Worldspace", "Optional worldspace name for direct plugin cell lookup."},
@@ -67,6 +68,21 @@ namespace
         Field{"affected_plugin", "Affected plugin",
               "Active ESP/ESM/ESL filename for Plugin scope. The full resolved load order supplies winning geometry "
               "and overrides."},
+        Field{"batch_output", "Batch output policy",
+              "auto, full, compact, or plugin_only. Auto writes minimal reports with a plugin; full writes inspection "
+              "JSON/OBJ; compact writes gzip JSON."},
+        Field{"asset_cache", "Shared cache folder",
+              "Optional root for generated shared asset and candidate caches. Empty uses system temporary storage. "
+              "Input assets and requested exports are never pruned."},
+        Field{"cache_budget_mib", "Cache disk budget (MiB)",
+              "Retention budget for generated cache files. Zero retains none after safe consumption. Active inspection "
+              "evidence may temporarily remain until export."},
+        Field{"working_memory_mib", "Work/cache budget (MiB)",
+              "Budget for reusable models and admitted generation work. One oversized target runs alone; resolved "
+              "plugin records are separate."},
+        Field{"workers", "Generation workers",
+              "Maximum independent target tasks admitted under the shared work budget. Final border reconciliation and "
+              "plugin writing stay ordered."},
     };
     constexpr std::array Checks{
         Field{"list", "List cells only", "Discover and export cells without extracting geometry or analysis."},
@@ -87,12 +103,16 @@ namespace
               "Write a copy of the affected plugin with generated navigation. Requires Plugin scope. Preserves "
               "other records, the filename, flags, and master indices. Use the copy in place of the source plugin. "
               "Links requiring dependencies outside its existing master table cannot be exported."},
+        Field{"estimate_only", "Estimate batch cost",
+              "Sample eligible interior/exterior and density strata using actual generation. Cache candidates and "
+              "write a cost report; plugin writing is deferred until this setting is unchecked."},
     };
 
     struct WindowState
     {
         HWND window{}, tooltip{}, progress{}, status{}, percent{}, title{}, subtitle{}, lookupLabel{};
         HWND partitioningAlgorithmLabel{}, rebuildScopeLabel{};
+        int scrollOffset{};
         std::array<HWND, Fields.size()> fieldLabels{}, fieldHelps{};
         std::array<HWND, 4> sectionLabels{};
         std::array<HWND, Checks.size()> checkHelps{};
@@ -197,6 +217,21 @@ namespace
         GetClientRect(state.window, &client);
         constexpr int margin = 30, gap = 18, helpWidth = 25;
         const int width = static_cast<int>(client.right), height = static_cast<int>(client.bottom);
+        const int contentHeight = std::max(1080, height);
+        const int maximumScroll = std::max(0, contentHeight - height);
+        state.scrollOffset = std::clamp(state.scrollOffset, 0, maximumScroll);
+        SCROLLINFO scrolling{.cbSize = sizeof(SCROLLINFO),
+                             .fMask = SIF_RANGE | SIF_PAGE | SIF_POS,
+                             .nMin = 0,
+                             .nMax = contentHeight - 92,
+                             .nPage = static_cast<UINT>(std::max(1, height - 91)),
+                             .nPos = state.scrollOffset};
+        SetScrollInfo(state.window, SB_VERT, &scrolling, TRUE);
+        const auto moveBody = [&](HWND control, int x, int y, int controlWidth, int controlHeight)
+        {
+            Move(control, x, y - state.scrollOffset, controlWidth, controlHeight);
+            ShowWindow(control, y - state.scrollOffset >= 91 ? SW_SHOWNA : SW_HIDE);
+        };
         const int usableWidth = std::max(720, width - margin * 2);
         const int columnWidth = (usableWidth - gap * 2) / 3;
         const int columns[] = {margin, margin + columnWidth + gap, margin + (columnWidth + gap) * 2};
@@ -205,7 +240,7 @@ namespace
         const int sectionY[] = {107, 253, 342, 511};
         for (int index{}; index < 4; ++index)
         {
-            Move(state.sectionLabels[index], margin, sectionY[index], width - margin * 2, 18);
+            moveBody(state.sectionLabels[index], margin, sectionY[index], width - margin * 2, 18);
         }
         for (int index{}; index < static_cast<int>(Fields.size()); ++index)
         {
@@ -222,39 +257,43 @@ namespace
             {
                 y = 365 + ((index - 9) / 3) * 57;
             }
-            else
+            else if (index < 20)
             {
                 y = 534 + ((index - 15) / 3) * 57;
             }
-            const int x = columns[index == 19 ? 2 : index % 3];
-            Move(state.fieldLabels[index], x, y, columnWidth - helpWidth - 8, 18);
-            Move(GetDlgItem(state.window, FieldBase + index), x, y + 19, columnWidth - helpWidth - 8, 29);
-            Move(state.fieldHelps[index], x + columnWidth - helpWidth, y + 21, helpWidth, helpWidth);
+            else
+            {
+                y = 808 + ((index - 20) / 3) * 57;
+            }
+            const int x = columns[index == 19 ? 2 : index >= 20 ? (index - 20) % 3 : index % 3];
+            moveBody(state.fieldLabels[index], x, y, columnWidth - helpWidth - 8, 18);
+            moveBody(GetDlgItem(state.window, FieldBase + index), x, y + 19, columnWidth - helpWidth - 8, 29);
+            moveBody(state.fieldHelps[index], x + columnWidth - helpWidth, y + 21, helpWidth, helpWidth);
         }
-        Move(state.lookupLabel, margin, 654, 120, 20);
-        Move(state.partitioningAlgorithmLabel, columns[1], 591, columnWidth - helpWidth - 8, 18);
-        Move(GetDlgItem(state.window, PartitioningAlgorithmControl), columns[1], 610, columnWidth - helpWidth - 8,
-             PartitioningAlgorithmControlHeight);
-        Move(state.rebuildScopeLabel, columns[2], 650, columnWidth - 8, 18);
-        Move(GetDlgItem(state.window, RebuildScopeControl), columns[2], 669, columnWidth - 8, 120);
+        moveBody(state.lookupLabel, margin, 654, 120, 20);
+        moveBody(state.partitioningAlgorithmLabel, columns[1], 591, columnWidth - helpWidth - 8, 18);
+        moveBody(GetDlgItem(state.window, PartitioningAlgorithmControl), columns[1], 610, columnWidth - helpWidth - 8,
+                 PartitioningAlgorithmControlHeight);
+        moveBody(state.rebuildScopeLabel, columns[2], 650, columnWidth - 8, 18);
+        moveBody(GetDlgItem(state.window, RebuildScopeControl), columns[2], 669, columnWidth - 8, 120);
         const int selectionX = margin + 127;
         for (int index{}; index < 3; ++index)
         {
-            Move(GetDlgItem(state.window, TargetBase + index), selectionX + index * 125, 652, 116, 24);
+            moveBody(GetDlgItem(state.window, TargetBase + index), selectionX + index * 125, 652, 116, 24);
         }
         for (int index{}; index < static_cast<int>(Checks.size()); ++index)
         {
             const int x = columns[index % 3], y = 715 + (index / 3) * 28;
-            Move(GetDlgItem(state.window, CheckBase + index), x, y, columnWidth - 30, 24);
-            Move(state.checkHelps[index], x + columnWidth - 25, y, 22, 22);
+            moveBody(GetDlgItem(state.window, CheckBase + index), x, y, columnWidth - 30, 24);
+            moveBody(state.checkHelps[index], x + columnWidth - 25, y, 22, 22);
         }
-        const int footerTop = std::max(805, height - 145);
-        Move(state.progress, margin, footerTop, std::max(300, width - margin * 2 - 75), 20);
-        Move(state.percent, width - margin - 60, footerTop, 60, 20);
-        Move(state.status, margin, footerTop + 29, width - margin * 2, 22);
-        Move(GetDlgItem(state.window, ListButton), width - margin - 425, footerTop + 68, 130, 38);
-        Move(GetDlgItem(state.window, CancelButton), width - margin - 275, footerTop + 68, 120, 38);
-        Move(GetDlgItem(state.window, RunButton), width - margin - 145, footerTop + 68, 145, 38);
+        const int footerTop = std::max(934, contentHeight - 145);
+        moveBody(state.progress, margin, footerTop, std::max(300, width - margin * 2 - 75), 20);
+        moveBody(state.percent, width - margin - 60, footerTop, 60, 20);
+        moveBody(state.status, margin, footerTop + 29, width - margin * 2, 22);
+        moveBody(GetDlgItem(state.window, ListButton), width - margin - 425, footerTop + 68, 130, 38);
+        moveBody(GetDlgItem(state.window, CancelButton), width - margin - 275, footerTop + 68, 120, 38);
+        moveBody(GetDlgItem(state.window, RunButton), width - margin - 145, footerTop + 68, 145, 38);
     }
     navmesh::app::Options ReadOptions(HWND window, bool listOnly)
     {
@@ -276,6 +315,27 @@ namespace
                               : scope == 2 ? navmesh::app::RebuildScope::LoadOrder
                                            : navmesh::app::RebuildScope::Cell;
         result.affectedPlugin = Trim(Text(window, FieldBase + 19));
+        result.batchOutput = Trim(Text(window, FieldBase + 20));
+        result.assetCache = Trim(Text(window, FieldBase + 21));
+        const auto integer = [&](int field)
+        {
+            const auto text = Trim(Text(window, FieldBase + field));
+            std::size_t end{};
+            const auto value = std::stoull(text, &end);
+            if (text.empty() || text.front() == '-' || end != text.size())
+            {
+                throw std::runtime_error("Cache/work budgets and workers require nonnegative integers.");
+            }
+            return static_cast<std::size_t>(value);
+        };
+        result.cacheBudgetMiB = integer(22);
+        result.workingMemoryMiB = integer(23);
+        result.workers = integer(24);
+        if (result.batchOutput != "auto" && result.batchOutput != "full" && result.batchOutput != "compact" &&
+            result.batchOutput != "plugin_only")
+        {
+            throw std::runtime_error("Batch output policy must be auto, full, compact, or plugin_only.");
+        }
         if (result.rebuildScope != navmesh::app::RebuildScope::Cell)
         {
             result.cell.clear();
@@ -322,6 +382,8 @@ namespace
         }
         result.listCells = listOnly || SendMessageA(GetDlgItem(window, CheckBase), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.diagnostics = SendMessageA(GetDlgItem(window, CheckBase + 1), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        result.estimateOnly =
+            !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 7), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.terrainOnly = SendMessageA(GetDlgItem(window, CheckBase + 2), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.generateCandidate = SendMessageA(GetDlgItem(window, CheckBase + 3), BM_GETCHECK, 0, 0) == BST_CHECKED;
         result.generatePlugin =
@@ -495,6 +557,10 @@ namespace
             }
             AddField(*state, 18, columns[0], 591);
             AddField(*state, 19, columns[2], 591);
+            for (int i = 20; i < static_cast<int>(Fields.size()); ++i)
+            {
+                AddField(*state, i, columns[(i - 20) % 3], 808 + ((i - 20) / 3) * 57);
+            }
             state->rebuildScopeLabel = Label(*state, "Rebuild scope", columns[2], 650, 250);
             auto scope =
                 CreateWindowExA(WS_EX_CLIENTEDGE, "COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
@@ -585,6 +651,10 @@ namespace
                                    : i == 16 ? "32"
                                    : i == 17 ? "45"
                                    : i == 18 ? "1"
+                                   : i == 20 ? navmesh::app::Options{}.batchOutput
+                                   : i == 22 ? std::to_string(navmesh::app::Options{}.cacheBudgetMiB)
+                                   : i == 23 ? std::to_string(navmesh::app::Options{}.workingMemoryMiB)
+                                   : i == 24 ? std::to_string(navmesh::app::Options{}.workers)
                                              : ""));
             }
             for (size_t i{}; i < Checks.size(); ++i)
@@ -604,12 +674,47 @@ namespace
         {
             auto *info = reinterpret_cast<MINMAXINFO *>(lParam);
             info->ptMinTrackSize.x = 960;
-            info->ptMinTrackSize.y = 1000;
+            info->ptMinTrackSize.y = 700;
             return 0;
         }
         case WM_SIZE:
             if (state && state->progress)
             {
+                Layout(*state);
+                InvalidateRect(window, nullptr, TRUE);
+            }
+            return 0;
+        case WM_VSCROLL:
+        case WM_MOUSEWHEEL:
+            if (state && state->progress)
+            {
+                SCROLLINFO scrolling{.cbSize = sizeof(SCROLLINFO), .fMask = SIF_ALL};
+                GetScrollInfo(window, SB_VERT, &scrolling);
+                if (message == WM_MOUSEWHEEL)
+                {
+                    state->scrollOffset -= GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA * 57;
+                }
+                else
+                {
+                    switch (LOWORD(wParam))
+                    {
+                    case SB_LINEUP:
+                        state->scrollOffset -= 57;
+                        break;
+                    case SB_LINEDOWN:
+                        state->scrollOffset += 57;
+                        break;
+                    case SB_PAGEUP:
+                        state->scrollOffset -= scrolling.nPage;
+                        break;
+                    case SB_PAGEDOWN:
+                        state->scrollOffset += scrolling.nPage;
+                        break;
+                    case SB_THUMBTRACK:
+                        state->scrollOffset = scrolling.nTrackPos;
+                        break;
+                    }
+                }
                 Layout(*state);
                 InvalidateRect(window, nullptr, TRUE);
             }
@@ -768,8 +873,8 @@ int navmesh::ui::RunWindowsUi(const navmesh::app::Options &)
                           .hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1),
                           .lpszClassName = "NavmeshGeneratorWindow"};
     RegisterClassA(&klass);
-    auto window = CreateWindowExA(0, klass.lpszClassName, "Navmesh Generator", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
-                                  CW_USEDEFAULT, 1040, 1020, nullptr, nullptr, klass.hInstance, nullptr);
+    auto window = CreateWindowExA(0, klass.lpszClassName, "Navmesh Generator", WS_OVERLAPPEDWINDOW | WS_VSCROLL,
+                                  CW_USEDEFAULT, CW_USEDEFAULT, 1040, 1020, nullptr, nullptr, klass.hInstance, nullptr);
     ShowWindow(window, SW_SHOW);
     UpdateWindow(window);
     MSG message;

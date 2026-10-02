@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/world/types.h"
+#include "core/io/shared_bytes.h"
 
 #include <array>
 #include <cstdint>
@@ -45,8 +46,8 @@ namespace navmesh::skyrim::offline
         std::string type;
         ByteRange encodedRange;
         ByteRange dataRange;
-        std::vector<std::uint8_t> encodedBytes;
-        std::vector<std::uint8_t> data;
+        core::SharedBytes encodedBytes;
+        core::SharedBytes data;
         bool extendedSize{};
     };
     /// Indexed record with original file payload and decoded subrecord payload.
@@ -57,8 +58,8 @@ namespace navmesh::skyrim::offline
         ByteRange headerRange;
         ByteRange filePayloadRange;
         bool compressed{};
-        std::vector<std::uint8_t> filePayload;
-        std::vector<std::uint8_t> decodedPayload;
+        core::SharedBytes filePayload;
+        core::SharedBytes decodedPayload;
         std::vector<Subrecord> subrecords;
     };
     /// Provenance and compact placement evidence for each version of a record.
@@ -77,6 +78,9 @@ namespace navmesh::skyrim::offline
         bool hasModel{};
         /// Placed-reference scale for this version; multiplies model-local distances.
         float scale{1.0F};
+        /// Whether this version changes navigation inputs relative to its predecessor.
+        /// New records and manually supplied origins conservatively default to true.
+        bool navigationChanged{true};
     };
     struct NavmLayout
     {
@@ -122,6 +126,10 @@ namespace navmesh::skyrim::offline
         std::vector<Diagnostic> diagnostics;
         /// FormID-to-record offsets built by ResolveLoadOrder; records must retain their order.
         std::unordered_map<std::uint32_t, std::size_t> recordIndex;
+        /// Ordered winning LAND record offsets by resolved CELL identity; records must retain their order.
+        std::unordered_map<std::uint32_t, std::vector<std::size_t>> landIndex;
+        /// Winning LAND records in source order, with a scan fallback for manually assembled fixtures.
+        [[nodiscard]] std::vector<const ResolvedRecord *> LandRecords(std::uint32_t cellId) const;
         /// Look up a resolved FormID without copying payloads; returns nullptr when
         /// absent. Uses the resolver index or scans manually constructed fixtures.
         [[nodiscard]] const ResolvedRecord *FindWinning(std::uint32_t formId) const;
@@ -141,6 +149,13 @@ namespace navmesh::skyrim::offline
     {
       public:
         virtual ~IPluginReader() = default;
+        /** Read only master order and light-plugin identity before record resolution.
+         * The default implementation delegates to Read without reference indexing and discards records.
+         * @return False on header failure; appends input diagnostics without changing game files.
+         */
+        virtual bool ReadMetadata(const std::filesystem::path &path, std::vector<std::string> &masters, bool &isLight,
+                                  std::vector<Diagnostic> &diagnostics) const;
+        /// Read owned indexed records and master names; false on unusable input, with diagnostics.
         virtual bool Read(const std::filesystem::path &path, std::vector<ResolvedRecord> &records,
                           std::vector<std::string> &masters, bool &isLight, std::vector<Diagnostic> &diagnostics,
                           bool includeReferencesAndNavmeshes = true) const = 0;
@@ -148,6 +163,10 @@ namespace navmesh::skyrim::offline
     class DirectPluginReader final : public IPluginReader
     {
       public:
+        /// Read just the TES4 range; validates declared length and master subrecords before returning metadata.
+        bool ReadMetadata(const std::filesystem::path &path, std::vector<std::string> &masters, bool &isLight,
+                          std::vector<Diagnostic> &diagnostics) const override;
+        /// Read loss-aware records with immutable shared payload ranges and explicit failures.
         bool Read(const std::filesystem::path &path, std::vector<ResolvedRecord> &records,
                   std::vector<std::string> &masters, bool &isLight, std::vector<Diagnostic> &diagnostics,
                   bool includeReferencesAndNavmeshes = true) const override;

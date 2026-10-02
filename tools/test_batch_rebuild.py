@@ -23,8 +23,8 @@ def group(label, kind, data):
     return b"GRUP" + struct.pack("<IIIII", len(data) + 24, label, kind, 0, 0) + data
 
 
-def land():
-    return sub("VHGT", struct.pack("<f", 0) + bytes(33 * 33 + 3))
+def land(offset=0):
+    return sub("VHGT", struct.pack("<f", offset) + bytes(33 * 33 + 3))
 
 
 def navm(x, y=0):
@@ -83,7 +83,7 @@ class BatchRebuild(unittest.TestCase):
         self.write_baseline()
         header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
         # Only LAND changes; the winning CELL still belongs to the baseline.
-        patch = group(0x400, 1, group(0x100, 6, group(0x100, 9, record("LAND", 0x300, land()))))
+        patch = group(0x400, 1, group(0x100, 6, group(0x100, 9, record("LAND", 0x300, land(0.001)))))
         patch_header = header + sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
         (self.root / "Patch.esp").write_bytes(record("TES4", 0, patch_header) + group(int.from_bytes(b"WRLD", "little"), 0, patch))
         (self.root / "plugins.txt").write_text("Baseline.esm\nPatch.esp\n")
@@ -105,7 +105,8 @@ class BatchRebuild(unittest.TestCase):
 
     def run_cli(self, *args, output="output", code=0, terrain_only=True):
         completed = subprocess.run([str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
-                                    "--output", str(self.root / output),
+                                    "--output", str(self.root / output), "--batch-output", "full",
+                                    "--asset-cache", str(self.root / "cache"),
                                     *(["--terrain-only"] if terrain_only else []), *args],
                                    capture_output=True, text=True, timeout=90)
         self.assertEqual(completed.returncode, code, completed.stdout + completed.stderr)
@@ -470,6 +471,95 @@ class BatchRebuild(unittest.TestCase):
                 names = [node["name"] for node in scene["nodes"]]
                 navmesh_ids = {name.split()[2].rstrip(":") for name in names if name.startswith("Existing NAVM ")}
                 self.assertEqual(navmesh_ids, {f"{0x200 + index:08X}" for index in expected})
+
+
+    def test_semantic_metadata_overrides_do_not_select_worldspace(self):
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800)) + sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
+        world = record("WRLD", 0x400, sub("EDID", b"DisplayName\0") + sub("FULL", b"New label\0") + sub("MHDT", bytes(64)))
+        cell = record("CELL", 0x100, sub("EDID", b"ChangedLabel\0") + sub("XCLC", struct.pack("<ii", 0, 0)))
+        texture = group(0x100, 6, group(0x100, 9, record("LAND", 0x300, sub("VCLR", bytes(33 * 33 * 3)))))
+        patch = world + group(0x400, 1, cell + texture)
+        (self.root / "Patch.esp").write_bytes(record("TES4", 0, header) + group(int.from_bytes(b"WRLD", "little"), 0, patch))
+        output = self.run_cli("--rebuild-plugin", "Patch.esp")
+        self.assertEqual(json.loads((output / "batch-report.json").read_text())["selected_cells"], 0)
+        # Unknown fields stay conservative, even where display fields are ignored.
+        patch = record("WRLD", 0x400, sub("EDID", b"DisplayName\0") + sub("ZZZZ", b"unknown dependency"))
+        (self.root / "Patch.esp").write_bytes(record("TES4", 0, header) + group(int.from_bytes(b"WRLD", "little"), 0, patch))
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", output="unknown")
+        self.assertEqual(json.loads((output / "batch-report.json").read_text())["selected_cells"], 3)
+
+    def test_compact_and_minimal_output_preserve_plugin_bytes(self):
+        import gzip
+        full = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", output="full")
+        compact = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--batch-output", "compact", output="compact")
+        minimal = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--batch-output", "auto", output="minimal")
+        self.assertEqual((full / "generated-navmesh.esp").read_bytes(), (compact / "generated-navmesh.esp").read_bytes())
+        self.assertEqual((full / "generated-navmesh.esp").read_bytes(), (minimal / "generated-navmesh.esp").read_bytes())
+        self.assertFalse((minimal / "load-order.json").exists())
+        self.assertFalse((minimal / "cells").exists())
+        for directory in (full / "cells").iterdir():
+            self.assertEqual(json.loads((directory / "candidate-navm.json").read_text()),
+                             json.loads(gzip.decompress((compact / "cells" / directory.name / "candidate-navm.json.gz").read_bytes())))
+            self.assertFalse((compact / "cells" / directory.name / "candidate-navm.obj").exists())
+        size = lambda directory: sum(path.stat().st_size for path in directory.rglob("*") if path.is_file())
+        self.assertLess(size(minimal), size(full) // 2)
+        self.assertTrue(all(not list(directory.glob(".candidate-staging-*")) for directory in (full, compact, minimal)))
+
+    def test_candidate_reuse_invalidates_on_authored_neighbor_change(self):
+        self.run_cli("--rebuild-plugin", "Patch.esp", output="first")
+        repeated = self.run_cli("--rebuild-plugin", "Patch.esp", output="repeated")
+        self.assertEqual(json.loads((repeated / "batch-report.json").read_text())["candidate_cache_hits"], 2)
+        changed = bytearray(navm(2))
+        # Edit every authored vertex's height in the neighboring NAVM while leaving LAND unchanged.
+        for index in range(4):
+            struct.pack_into("<f", changed, 6 + 20 + index * 12 + 8, 1.0)
+        self.write_baseline({0: navm(0), 1: navm(1), 2: bytes(changed)})
+        revised = self.run_cli("--rebuild-plugin", "Patch.esp", output="revised")
+        report = json.loads((revised / "batch-report.json").read_text())
+        self.assertEqual(report["candidate_cache_hits"], 1)
+        self.assertEqual([cell["candidate_reused"] for cell in report["cells"]], [True, False])
+
+    def test_bounded_workers_preserve_order_and_plugin(self):
+        single = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", output="single")
+        # Separate cold cache ensures both cells exercise Recast tasks rather than reuse.
+        parallel = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--workers", "2",
+                                "--working-memory-mib", "1024", "--asset-cache", str(self.root / "parallel-cache"), output="parallel")
+        report = json.loads((parallel / "batch-report.json").read_text())
+        self.assertEqual(report["workers_peak"], 2)
+        self.assertEqual((single / "generated-navmesh.esp").read_bytes(), (parallel / "generated-navmesh.esp").read_bytes())
+        limited = self.run_cli("--rebuild-plugin", "Patch.esp", "--workers", "2", "--working-memory-mib", "64",
+                               "--asset-cache", str(self.root / "limited-cache"), output="limited")
+        self.assertEqual(json.loads((limited / "batch-report.json").read_text())["workers_peak"], 1)
+
+    def test_zero_cache_budget_prunes_only_generated_files(self):
+        cache = self.root / "cache"
+        (cache / "operator-files").mkdir(parents=True)
+        (cache / "operator-files" / "keep.nif").write_bytes(b"operator owned")
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--cache-budget-mib", "0")
+        self.assertTrue((output / "generated-navmesh.esp").exists())
+        self.assertEqual((cache / "operator-files" / "keep.nif").read_bytes(), b"operator owned")
+        self.assertFalse(list(cache.glob("*/candidates/*.gz")))
+
+    def test_preflight_samples_without_writing_plugin_and_reuses_work(self):
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--estimate-only",
+                              "--batch-output", "auto", output="estimate")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["status"], "estimated")
+        self.assertEqual(report["selected_cells"], 2)
+        self.assertEqual(report["eligible_cells"], 2)
+        self.assertEqual(report["sampled_cells"], 2)
+        self.assertEqual(report["completed_cells"], 2)
+        self.assertFalse((output / "generated-navmesh.esp").exists())
+        self.assertFalse((output / "cells").exists())
+        full = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", output="after-estimate")
+        self.assertEqual(json.loads((full / "batch-report.json").read_text())["candidate_cache_hits"], 2)
+        self.assertTrue((full / "generated-navmesh.esp").exists())
+        self.run_cli("--cell-formid", "100", "--estimate-only", code=1)
+
+    def test_performance_options_validate(self):
+        for args in [("--workers", "0"), ("--workers", "-1"), ("--working-memory-mib", "0"),
+                     ("--cache-budget-mib", "-1"), ("--batch-output", "unknown"), ("--batch-output", "plugin_only")]:
+            self.run_cli("--rebuild-plugin", "Patch.esp", *args, code=1)
 
 
 if __name__ == "__main__":

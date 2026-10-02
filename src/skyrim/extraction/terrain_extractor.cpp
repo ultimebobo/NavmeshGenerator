@@ -66,12 +66,9 @@ namespace navmesh::skyrim::offline
         }
         const auto [cellX, cellY] = *cell.exteriorCoordinates;
         bool sawLand = false;
-        for (const auto &record : loadOrder.records)
+        for (const auto *sourceRecord : loadOrder.LandRecords(cell.id))
         {
-            if (record.type != "LAND" || record.cellFormId != cell.id)
-            {
-                continue;
-            }
+            const auto &record = *sourceRecord;
             sawLand = true;
             ++result.landRecordsFound;
             std::string error;
@@ -90,13 +87,13 @@ namespace navmesh::skyrim::offline
                                                     .confidence = 1.0F,
                                                     .reference = {record.winning.plugin, record.formId, "LAND"},
                                                     .baseObject = {}});
-            const auto vertexBase = static_cast<std::uint32_t>(result.mesh.vertices.size());
-            result.mesh.vertices.reserve(result.mesh.vertices.size() + 33 * 33);
+            const auto vertexBase = static_cast<std::uint32_t>(result.scene.mesh.vertices.size());
+            result.scene.mesh.vertices.reserve(result.scene.mesh.vertices.size() + 33 * 33);
             for (std::size_t y = 0; y < 33; ++y)
             {
                 for (std::size_t x = 0; x < 33; ++x)
                 {
-                    result.mesh.vertices.push_back(
+                    result.scene.mesh.vertices.push_back(
                         {static_cast<float>(cellX) * kLandCellSize + static_cast<float>(x) * kLandSampleSpacing,
                          static_cast<float>(cellY) * kLandCellSize + static_cast<float>(y) * kLandSampleSpacing,
                          (*heights)[y * 33 + x]});
@@ -113,9 +110,9 @@ namespace navmesh::skyrim::offline
                     const auto terrain = core::TerrainTriangleProvenance{
                         cellX, cellY, record.formId, static_cast<std::uint8_t>(x), static_cast<std::uint8_t>(y)};
                     const auto sourceTriangle = (y * 32 + x) * 2;
-                    result.mesh.triangles.push_back({{a, b, c}});
+                    result.scene.mesh.triangles.push_back({{a, b, c}});
                     result.scene.triangleProvenance.push_back({sourceIndex, sourceTriangle, terrain});
-                    result.mesh.triangles.push_back({{b, d, c}});
+                    result.scene.mesh.triangles.push_back({{b, d, c}});
                     result.scene.triangleProvenance.push_back({sourceIndex, sourceTriangle + 1, terrain});
                 }
             }
@@ -127,7 +124,6 @@ namespace navmesh::skyrim::offline
             result.warnings.push_back(std::format(
                 "Exterior CELL ({}, {}) has no winning LAND record; no terrain was substituted.", cellX, cellY));
         }
-        result.scene.mesh = result.mesh;
         return result;
     }
 } // namespace navmesh::skyrim::offline

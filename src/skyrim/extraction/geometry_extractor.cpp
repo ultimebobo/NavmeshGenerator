@@ -1,4 +1,5 @@
 #include "skyrim/extraction/geometry_extractor.h"
+#include "skyrim/extraction/asset_cache.h"
 
 #include <NifFile.hpp>
 #include <bhk.hpp>
@@ -9,6 +10,12 @@
 #include <functional>
 #include <iostream>
 #include <unordered_set>
+#include <map>
+#include <set>
+#include <mutex>
+#include <memory>
+#include <cstring>
+#include <chrono>
 
 namespace
 {
@@ -386,7 +393,7 @@ namespace
         }
     }
 
-    [[nodiscard]] NifGeometry LoadNif(const std::filesystem::path &path)
+    [[nodiscard]] NifGeometry LoadNif(const std::filesystem::path &path, bool includeRender = true)
     {
         NifGeometry result;
         nifly::NifFile nif;
@@ -396,6 +403,10 @@ namespace
         }
         result.version = nif.GetHeader().GetVersion().String();
         LoadPackedCollision(nif, result.collision, result.collisionShapeTypes, result.nonSolidCollision);
+        if (!includeRender)
+        {
+            return result;
+        }
         for (auto *shape : nif.GetShapes())
         {
             std::vector<nifly::Vector3> vertices;
@@ -436,16 +447,12 @@ namespace
         return result;
     }
 
-    [[nodiscard]] std::string QuoteShell(const std::filesystem::path &path)
-    {
-        return "\"" + path.string() + "\"";
-    }
-
     [[nodiscard]] std::filesystem::path ModelRelativePath(const std::string &modelPath)
     {
         auto normalized = modelPath;
         for (auto &character : normalized)
         {
+            character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
             if (character == '\\')
             {
                 character = '/';
@@ -489,31 +496,6 @@ namespace
                path.find("\\fx\\") != std::string::npos;
     }
 
-    void AppendGeometry(const TriangleGeometry &geometry, const navmesh::core::Transform &transform,
-                        const std::size_t sourceIndex, navmesh::core::Mesh &mesh,
-                        std::vector<navmesh::core::TriangleProvenance> &provenance, std::size_t &invalidVertices)
-    {
-        const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
-        for (const auto &vertex : geometry.vertices)
-        {
-            const auto transformed = transform.ApplyPoint(vertex);
-            if (!std::isfinite(transformed.x) || !std::isfinite(transformed.y) || !std::isfinite(transformed.z) ||
-                std::abs(transformed.x) > 1.0e7F || std::abs(transformed.y) > 1.0e7F ||
-                std::abs(transformed.z) > 1.0e7F)
-            {
-                ++invalidVertices;
-            }
-            mesh.vertices.push_back(transformed);
-        }
-        for (std::size_t triangleIndex{}; triangleIndex < geometry.triangles.size(); ++triangleIndex)
-        {
-            const auto &triangle = geometry.triangles[triangleIndex];
-            mesh.triangles.push_back(
-                {{base + triangle.vertices[0], base + triangle.vertices[1], base + triangle.vertices[2]}});
-            provenance.push_back({sourceIndex, triangleIndex});
-        }
-    }
-
     [[nodiscard]] std::string AssetKey(const std::filesystem::path &path)
     {
         auto key = path.generic_string();
@@ -523,23 +505,37 @@ namespace
     }
 
     void ExtractBsaModels(const std::filesystem::path &dataDirectory, const std::filesystem::path &cacheDirectory,
-                          const navmesh::core::Cell &cell, const navmesh::skyrim::offline::ModelAssetSources *assets)
+                          const navmesh::core::Cell &cell, const navmesh::skyrim::offline::ModelAssetSources *assets,
+                          const std::function<bool(const std::filesystem::path &)> &alreadyDecoded)
     {
         if (cacheDirectory.empty())
         {
             return;
         }
         std::filesystem::create_directories(cacheDirectory);
-        const auto manifest = cacheDirectory / "requested_models.txt";
-        std::ofstream manifestStream(manifest, std::ios::trunc);
-        if (!manifestStream)
+        const auto manifest =
+            cacheDirectory /
+            ("requested-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt");
+        struct RequestCleanup
         {
-            return;
+            std::filesystem::path path;
+            ~RequestCleanup()
+            {
+                std::error_code error;
+                std::filesystem::remove(path, error);
+            }
+        } cleanup{manifest};
+        std::set<std::string> requested;
+        std::set<std::string> missing;
+        std::ifstream missingStream(cacheDirectory / ".missing-models.txt");
+        for (std::string value; std::getline(missingStream, value);)
+        {
+            missing.insert(value);
         }
-        std::size_t modelCount = 0;
         for (const auto &reference : cell.references)
         {
-            if (reference.modelPath.empty() || reference.initiallyDisabled || reference.deleted)
+            if (reference.modelPath.empty() || reference.initiallyDisabled || reference.deleted ||
+                IsFilteredReference(reference) || IsVisualEffectModel(reference.modelPath))
             {
                 continue;
             }
@@ -552,15 +548,30 @@ namespace
             {
                 continue;
             }
-            if (std::filesystem::exists(cacheDirectory / relative))
+            if (alreadyDecoded(relative) || std::filesystem::exists(cacheDirectory / relative))
             {
                 continue;
             }
-            manifestStream << relative.string() << "\n";
-            ++modelCount;
+            auto logical = relative.string();
+            std::replace(logical.begin(), logical.end(), '/', '\\');
+            std::transform(logical.begin(), logical.end(), logical.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (missing.contains(logical) || !requested.insert(logical).second)
+            {
+                continue;
+            }
+        }
+        if (requested.empty())
+        {
+            return;
+        }
+        std::ofstream manifestStream(manifest, std::ios::trunc);
+        for (const auto &logical : requested)
+        {
+            manifestStream << logical << '\n';
         }
         manifestStream.close();
-        if (modelCount == 0)
+        if (!manifestStream)
         {
             return;
         }
@@ -569,52 +580,212 @@ namespace
         {
             return;
         }
-        std::string python = "python";
-#ifdef _WIN32
-        char *configuredPython{};
-        std::size_t configuredSize{};
-        if (_dupenv_s(&configuredPython, &configuredSize, "NAVMESH_PYTHON") == 0 && configuredPython &&
-            *configuredPython)
+        using namespace navmesh::skyrim::offline;
+        const auto archiveManifest = cacheDirectory / "archives.txt";
+        if (!std::filesystem::exists(archiveManifest))
         {
-            python = QuoteShell(configuredPython);
-        }
-        std::free(configuredPython);
-#else
-        if (const auto *configuredPython = std::getenv("NAVMESH_PYTHON"); configuredPython && *configuredPython)
-        {
-            python = QuoteShell(configuredPython);
-        }
-#endif
-        std::string command = python + " " + QuoteShell(script) + " --data " + QuoteShell(dataDirectory) +
-                              " --output " + QuoteShell(cacheDirectory) + " --manifest " + QuoteShell(manifest);
-        if (assets)
-        {
-            const auto archiveManifest = cacheDirectory / "archives.txt";
-            std::ofstream archives(archiveManifest, std::ios::trunc);
-            for (const auto &path : assets->archives)
+            std::ofstream archives(archiveManifest);
+            if (assets)
             {
-                archives << path.string() << "\n";
+                for (const auto &path : assets->archives)
+                {
+                    archives << path.string() << '\n';
+                }
             }
-            archives.close();
-            command += " --archives " + QuoteShell(archiveManifest);
+            else
+            {
+                std::vector<std::filesystem::path> paths;
+                for (const auto &entry : std::filesystem::directory_iterator(dataDirectory))
+                {
+                    if (entry.path().extension() == ".bsa")
+                    {
+                        paths.push_back(entry.path());
+                    }
+                }
+                std::sort(paths.begin(), paths.end());
+                for (const auto &path : paths)
+                {
+                    archives << path.string() << '\n';
+                }
+            }
         }
-        if (std::system(command.c_str()) != 0)
+        if (!RunAssetHelper("--data " + QuoteAssetPath(dataDirectory) + " --output " + QuoteAssetPath(cacheDirectory) +
+                            " --manifest " + QuoteAssetPath(manifest) + " --archives " +
+                            QuoteAssetPath(archiveManifest)))
         {
-            std::cerr << "BSA model extraction failed; install the Python dependencies in tools/requirements.txt or "
-                         "set NAVMESH_PYTHON.\n";
+            std::cerr << "BSA model extraction incomplete; see archive diagnostics and tools/requirements.txt.\n";
         }
     }
 } // namespace
 
 namespace navmesh::skyrim::offline
 {
+    namespace
+    {
+        /// Cache identities distinguish asset revisions and render/collision extraction policies.
+        std::string ModelKey(const std::filesystem::path &path, bool includeRender)
+        {
+            std::error_code error;
+            const auto size = std::filesystem::file_size(path, error);
+            const auto stamp = std::filesystem::last_write_time(path, error).time_since_epoch().count();
+            return path.lexically_normal().generic_string() + ":" + std::to_string(size) + ":" + std::to_string(stamp) +
+                   (includeRender ? ":display" : ":navigation");
+        }
+        std::size_t GeometryBytes(const TriangleGeometry &geometry)
+        {
+            std::size_t strings = geometry.shapes.capacity() * sizeof(std::string);
+            for (const auto &shape : geometry.shapes)
+            {
+                strings += shape.capacity();
+            }
+            return strings + sizeof(geometry) + geometry.vertices.capacity() * sizeof(core::Vec3) +
+                   geometry.triangles.capacity() * sizeof(core::Triangle);
+        }
+        struct PlacedGeometry
+        {
+            core::Mesh mesh;
+            std::size_t invalidVertices{};
+        };
+    } // namespace
+
+    struct ModelGeometryCache::Impl
+    {
+        template <class T> struct Entry
+        {
+            std::shared_ptr<const T> value;
+            std::size_t bytes{}, used{};
+        };
+        mutable std::mutex mutex;
+        std::size_t budget{}, clock{};
+        ModelCacheStatistics statistics;
+        std::map<std::string, Entry<NifGeometry>> models;
+        std::map<std::string, Entry<PlacedGeometry>> placements;
+
+        /// A combined LRU bounds derived geometry and negative entries; pinned values survive eviction.
+        void Evict()
+        {
+            while (statistics.retainedBytes > budget)
+            {
+                auto oldestModel = std::min_element(models.begin(), models.end(), [](const auto &a, const auto &b)
+                                                    { return a.second.used < b.second.used; });
+                auto oldestPlacement =
+                    std::min_element(placements.begin(), placements.end(),
+                                     [](const auto &a, const auto &b) { return a.second.used < b.second.used; });
+                if (oldestModel != models.end() &&
+                    (oldestPlacement == placements.end() || oldestModel->second.used < oldestPlacement->second.used))
+                {
+                    statistics.retainedBytes -= oldestModel->second.bytes;
+                    models.erase(oldestModel);
+                }
+                else if (oldestPlacement != placements.end())
+                {
+                    statistics.retainedBytes -= oldestPlacement->second.bytes;
+                    placements.erase(oldestPlacement);
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+        bool ContainsReadableModel(const std::string &key)
+        {
+            std::lock_guard lock(mutex);
+            const auto found = models.find(key);
+            return found != models.end() && !found->second.value->version.empty();
+        }
+        std::shared_ptr<const NifGeometry> Model(const std::filesystem::path &path, bool includeRender,
+                                                 const std::string &key)
+        {
+            std::lock_guard lock(mutex);
+            if (auto found = models.find(key); found != models.end())
+            {
+                found->second.used = ++clock;
+                ++statistics.modelHits;
+                return found->second.value;
+            }
+            auto value = std::make_shared<const NifGeometry>(LoadNif(path, includeRender));
+            ++statistics.modelsDecoded;
+            std::size_t shapeBytes = value->collisionShapeTypes.capacity() * sizeof(std::string);
+            for (const auto &shape : value->collisionShapeTypes)
+            {
+                shapeBytes += shape.capacity();
+            }
+            const auto bytes = GeometryBytes(value->render) + GeometryBytes(value->collision) + key.capacity() +
+                               sizeof(NifGeometry) - 2 * sizeof(TriangleGeometry) + shapeBytes +
+                               value->version.capacity() + sizeof(Entry<NifGeometry>) + 64;
+            if (bytes <= budget)
+            {
+                models.emplace(key, Entry<NifGeometry>{value, bytes, ++clock});
+                statistics.retainedBytes += bytes;
+                Evict();
+            }
+            return value;
+        }
+        std::shared_ptr<const PlacedGeometry> Placement(const TriangleGeometry &geometry,
+                                                        const core::Transform &transform, std::string key)
+        {
+            key.append(reinterpret_cast<const char *>(transform.matrix.data()), sizeof(transform.matrix));
+            std::lock_guard lock(mutex);
+            if (auto found = placements.find(key); found != placements.end())
+            {
+                found->second.used = ++clock;
+                ++statistics.placementHits;
+                return found->second.value;
+            }
+            auto value = std::make_shared<PlacedGeometry>();
+            value->mesh.triangles = geometry.triangles;
+            value->mesh.vertices.reserve(geometry.vertices.size());
+            for (const auto vertex : geometry.vertices)
+            {
+                const auto placed = transform.ApplyPoint(vertex);
+                if (!IsFiniteVec3(placed))
+                {
+                    ++value->invalidVertices;
+                }
+                value->mesh.vertices.push_back(placed);
+            }
+            ++statistics.placementsBuilt;
+            const auto bytes = sizeof(PlacedGeometry) + key.size() +
+                               value->mesh.vertices.capacity() * sizeof(core::Vec3) +
+                               value->mesh.triangles.capacity() * sizeof(core::Triangle);
+            if (bytes <= budget)
+            {
+                placements.emplace(key, Entry<PlacedGeometry>{value, bytes, ++clock});
+                statistics.retainedBytes += bytes;
+                Evict();
+            }
+            return value;
+        }
+    };
+    ModelGeometryCache::ModelGeometryCache(std::size_t byteBudget) : impl_(std::make_unique<Impl>())
+    {
+        impl_->budget = byteBudget;
+    }
+    ModelGeometryCache::~ModelGeometryCache() = default;
+    ModelCacheStatistics ModelGeometryCache::Statistics() const
+    {
+        std::lock_guard lock(impl_->mutex);
+        return impl_->statistics;
+    }
+
     GeometryExtraction ExtractGeometry(const std::filesystem::path &dataDirectory, const core::Cell &cell,
                                        const std::filesystem::path &cacheDirectory,
                                        const GeometryProgressCallback &progress,
-                                       const GeometryCancellationCallback &cancelled, const ModelAssetSources *assets)
+                                       const GeometryCancellationCallback &cancelled, const ModelAssetSources *assets,
+                                       ModelGeometryCache *modelCache, bool navigationOnly)
     {
         GeometryExtraction output;
-        ExtractBsaModels(dataDirectory, cacheDirectory, cell, assets);
+        ModelGeometryCache localCache;
+        auto &cache = modelCache ? *modelCache : localCache;
+        const bool snapshotOwned = std::filesystem::exists(cacheDirectory / ".navmesh-assets.json");
+        const auto cachedKey = [&](const std::filesystem::path &relative)
+        {
+            return (cacheDirectory / relative).lexically_normal().generic_string() +
+                   (navigationOnly ? ":navigation-snapshot" : ":display-snapshot");
+        };
+        ExtractBsaModels(dataDirectory, cacheDirectory, cell, assets, [&](const auto &relative)
+                         { return snapshotOwned && cache.impl_->ContainsReadableModel(cachedKey(relative)); });
         const auto totalReferences = cell.references.size();
         for (std::size_t referenceIndex{}; referenceIndex < totalReferences; ++referenceIndex)
         {
@@ -671,7 +842,10 @@ namespace navmesh::skyrim::offline
             const auto modelPath = assets && looseWinner != assets->looseModels.end() ? looseWinner->second
                                    : std::filesystem::exists(loosePath)               ? loosePath
                                                                                       : cachedPath;
-            const auto nifGeometry = LoadNif(modelPath);
+            const auto modelIdentity = snapshotOwned && modelPath == cachedPath ? cachedKey(relativePath)
+                                                                                : ModelKey(modelPath, !navigationOnly);
+            const auto model = cache.impl_->Model(modelPath, !navigationOnly, modelIdentity);
+            const auto &nifGeometry = *model;
             const auto &mesh = !nifGeometry.collision.triangles.empty() ? nifGeometry.collision : nifGeometry.render;
             const bool hasCollision = !nifGeometry.collision.triangles.empty();
             if (!hasCollision && nifGeometry.nonSolidCollision)
@@ -732,8 +906,26 @@ namespace navmesh::skyrim::offline
                     {.name = reference.editorId.empty() ? reference.modelPath : reference.editorId,
                      .localTransform = transform,
                      .geometrySource = sourceIndex});
-                AppendGeometry(sourceMesh, transform, sourceIndex, destination, destinationProvenance,
-                               output.invalidVertices);
+                const auto placed =
+                    cache.impl_->Placement(sourceMesh, transform,
+                                           modelIdentity + (output.scene.geometrySources[sourceIndex].sourceType ==
+                                                                    core::GeometrySourceType::Collision
+                                                                ? ":collision"
+                                                                : ":render"));
+                const auto vertexBase = static_cast<std::uint32_t>(destination.vertices.size());
+                destination.vertices.insert(destination.vertices.end(), placed->mesh.vertices.begin(),
+                                            placed->mesh.vertices.end());
+                for (std::size_t index{}; index < placed->mesh.triangles.size(); ++index)
+                {
+                    auto triangle = placed->mesh.triangles[index];
+                    for (auto &vertex : triangle.vertices)
+                    {
+                        vertex += vertexBase;
+                    }
+                    destination.triangles.push_back(triangle);
+                    destinationProvenance.push_back({sourceIndex, index});
+                }
+                output.invalidVertices += placed->invalidVertices;
                 return sourceIndex;
             };
             source.sourceType =
@@ -764,9 +956,9 @@ namespace navmesh::skyrim::offline
             source.confidence = hasCollision ? 1.0F : 0.35F;
             const auto &supportMesh = hasCollision ? nifGeometry.collision : nifGeometry.render;
             const auto supportSourceIndex =
-                appendSource(supportMesh, source, output.mesh, output.scene.triangleProvenance);
-            report.meshVertexOffset = output.mesh.vertices.size() - supportMesh.vertices.size();
-            report.meshTriangleOffset = output.mesh.triangles.size() - supportMesh.triangles.size();
+                appendSource(supportMesh, source, output.scene.mesh, output.scene.triangleProvenance);
+            report.meshVertexOffset = output.scene.mesh.vertices.size() - supportMesh.vertices.size();
+            report.meshTriangleOffset = output.scene.mesh.triangles.size() - supportMesh.triangles.size();
             output.invalidIndices += supportMesh.invalidIndices;
             report.vertices = supportMesh.vertices.size();
             report.triangles = supportMesh.triangles.size();
@@ -813,7 +1005,7 @@ namespace navmesh::skyrim::offline
         {
             progress(totalReferences, totalReferences);
         }
-        output.scene.mesh = output.mesh;
+
         return output;
     }
     bool WriteGeometryObj(const std::filesystem::path &outputPath, const GeometryExtraction &geometry)
@@ -823,7 +1015,7 @@ namespace navmesh::skyrim::offline
         {
             return false;
         }
-        for (const auto &vertex : geometry.mesh.vertices)
+        for (const auto &vertex : geometry.scene.mesh.vertices)
         {
             output << std::format("v {} {} {}\n", vertex.x, vertex.y, vertex.z);
         }
@@ -837,7 +1029,7 @@ namespace navmesh::skyrim::offline
             for (std::size_t index = reference.meshTriangleOffset;
                  index < reference.meshTriangleOffset + reference.triangles; ++index)
             {
-                const auto &triangle = geometry.mesh.triangles[index];
+                const auto &triangle = geometry.scene.mesh.triangles[index];
                 output << std::format("f {} {} {}\n", triangle.vertices[0] + 1, triangle.vertices[1] + 1,
                                       triangle.vertices[2] + 1);
             }
@@ -864,7 +1056,7 @@ namespace navmesh::skyrim::offline
             cell.id, cell.references.size(), geometry.referencesWithModels, geometry.modelsLoaded,
             geometry.modelsMissing, geometry.modelsExcluded, geometry.modelsUnreadable, geometry.modelsUnsupported,
             geometry.collisionModelsLoaded, geometry.collisionTriangles, geometry.renderFallbackModels,
-            geometry.renderFallbackTriangles, geometry.mesh.vertices.size(), geometry.mesh.triangles.size(),
+            geometry.renderFallbackTriangles, geometry.scene.mesh.vertices.size(), geometry.scene.mesh.triangles.size(),
             geometry.terrainSupported ? "true" : "false", geometry.collisionGeometrySupported ? "true" : "false",
             geometry.invalidVertices, geometry.invalidIndices);
         for (std::size_t index = 0; index < geometry.references.size(); ++index)

@@ -5,7 +5,7 @@
 
 namespace navmesh::app::detail
 {
-    /// Add model paths and source provenance to found support hits; all triangle indices refer to geometry.mesh.
+    /// Add model paths and source provenance to found support hits; all triangle indices refer to geometry.scene.mesh.
     void AnnotateSupportSources(navmesh::analysis::AnalysisReport &report,
                                 const navmesh::skyrim::offline::GeometryExtraction &geometry);
 
@@ -13,9 +13,9 @@ namespace navmesh::app::detail
     [[nodiscard]] std::vector<navmesh::analysis::TriangleSource> BuildTriangleSources(
         const navmesh::skyrim::offline::GeometryExtraction &geometry);
 
-    /// Append world-space geometry and coverage, rebasing vertex and provenance indices; consumes source without transforming it.
+    /// Append world-space geometry and coverage, rebasing vertex and provenance indices; reads source without transforming or modifying it.
     void AppendGeometry(navmesh::skyrim::offline::GeometryExtraction &destination,
-                        navmesh::skyrim::offline::GeometryExtraction &&source);
+                        const navmesh::skyrim::offline::GeometryExtraction &source);
 
     /** Retain valid support and display triangles intersecting a Skyrim world-space AABB.
      * Rebuild support reference ranges and both triangle-provenance arrays in place,

@@ -8,6 +8,17 @@ this reference.
 
 - `navmesh::core`: neutral geometry, world and navmesh data, scene provenance,
   candidate generation, and exports.
+- `navmesh::core::SharedBytes`: immutable shared byte ownership and bounded slices
+  for parser payload/subrecord data without repeated copies.
+- `navmesh::core::ContentHash`: incremental SHA-256 identities for cache dependencies.
+- `navmesh::skyrim::offline::ModelGeometryCache`: byte-budgeted model-local and
+  transformed-placement reuse with extraction-policy/provider revision keys.
+- `navmesh::skyrim::offline` asset-cache helpers: shared archive snapshot identity,
+  winning changed-model lookup, and eviction confined to generated files.
+- `navmesh::app::detail::BuildBatchCandidate`: isolated generation/reuse,
+  validation, evidence compaction, and audit spooling.
+- `navmesh::app::detail` candidate-cache/artifact helpers: input fingerprints,
+  bounded private gzip reads/writes and streaming public gzip JSON.
 - `navmesh::core::CandidateGenerator`: interchangeable scene-to-candidate
   interface. `RecastCandidateGenerator` is the application implementation and
   links against the Recast Navigation submodule under `lib/recastnavigation`.

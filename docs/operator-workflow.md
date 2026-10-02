@@ -28,7 +28,7 @@ navmesh-offline.exe --mo2 "D:\Modding\MO2\Skyrim SE" --profile "My Actual Profil
 - `profiles\<profile>\plugins.txt` and `loadorder.txt` to determine enabled plugins and plugin order;
 - base-game `Data`, enabled mod directories, and `Overwrite` to reproduce MO2's loose-file winners.
 
-The first output for every operation is `input-report.json`. It identifies the profile, profile files read, active plugins, enabled mods, physical paths chosen for every input file, and a snapshot hash. It must warn about missing files, duplicate plugins, unsupported archive sources, or profile changes observed during the run.
+The first output for every MO2 operation is `input-report.json`. Compact/plugin-only batches retain winner counts and a shared loose-asset catalog path; full inspection includes every virtual winner. It identifies the profile, profile files read, active plugins, enabled mods, physical paths chosen for every input file, and a snapshot hash. It must warn about missing files, duplicate plugins, unsupported archive sources, or profile changes observed during the run.
 
 MO2's profile files are the source of truth. `--data`, `--load-order`, `--mods-dir`, and `--profiles-dir` may exist only as explicitly marked developer/test escape hatches; they are not examples for normal use.
 
@@ -82,3 +82,13 @@ Before milestone 2, complete milestone 1 with the following instruction:
 For every milestone, the operator runs that milestone's command against their actual MO2 profile and checks the named output. The test harness may use synthetic MO2 directories for repeatability, but the product itself must always show exactly which profile and virtual-file inputs it consumed.
 
 The high-risk gates remain: real exterior terrain before generation; real collision before trusting support classification; visual scene alignment before repair planning; independent-tool and disposable-profile checks before using a written patch.
+
+## Batch cost and storage settings
+
+Use **Estimate batch cost** / `--estimate-only` with a Plugin or Load order scope
+to sample real generation before starting the complete job. Sampled candidates
+are cached for reuse. **Batch output**, **Shared asset cache**, cache disk/working
+budgets, and generation workers are persisted by the Windows UI and passed to
+the common runner. Automatic plugin writing omits large inspection exports; full
+or compact output can be selected explicitly. See [performance improvements](performance-improvements.md)
+for cache lifetime, admission limits, report fields, and measurement scope.

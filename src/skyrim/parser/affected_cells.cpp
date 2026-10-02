@@ -46,18 +46,20 @@ namespace navmesh::skyrim::offline
                     !reference.deleted && !reference.initiallyDisabled)
                 {
                     const auto *base = resolved.FindWinning(reference.baseObjectId);
-                    const bool bounded = base &&
-                                         std::any_of(base->origins.begin(), base->origins.end(), [](const auto &origin)
-                                                     { return origin.modelRadius.has_value(); }) &&
-                                         std::none_of(base->origins.begin(), base->origins.end(), [](const auto &origin)
-                                                      { return origin.hasModel && !origin.modelRadius; });
+                    const bool bounded = base && base->winning.modelRadius &&
+                                         std::isfinite(*base->winning.modelRadius) && *base->winning.modelRadius >= 0 &&
+                                         std::isfinite(reference.scale) && base->modelPath &&
+                                         Lower(*base->modelPath) == Lower(reference.modelPath);
                     if (!bounded && worlds_.contains(physical->id))
                     {
                         unboundedSources_[worlds_.at(physical->id)].insert(physical->id);
                     }
-                    else
+                    else if (bounded)
                     {
-                        for (const auto *target : Footprint(record->winning, 0))
+                        const auto radius = static_cast<int>(std::min<double>(
+                            std::numeric_limits<int>::max(),
+                            std::ceil(*base->winning.modelRadius * std::abs(reference.scale) / 4096.0)));
+                        for (const auto *target : Neighbors(*physical, radius))
                         {
                             geometrySources_[target->id].insert(physical->id);
                         }
@@ -132,15 +134,32 @@ namespace navmesh::skyrim::offline
         }
         return result;
     }
-    core::Cell CellImpactIndex::GeometryCell(const core::Cell &cell) const
+    core::Cell CellImpactIndex::GeometryCell(const core::Cell &cell, std::optional<core::AABB> bounds) const
     {
-        auto result = cell;
-        result.references.clear();
-        result.navMeshes.clear();
+        core::Cell result{.id = cell.id,
+                          .editorId = cell.editorId,
+                          .name = cell.name,
+                          .isInterior = cell.isInterior,
+                          .exteriorCoordinates = cell.exteriorCoordinates};
         if (const auto it = references_.find(cell.id); it != references_.end())
         {
             for (const auto *reference : it->second)
             {
+                const auto *base = resolved_.FindWinning(reference->baseObjectId);
+                if (bounds && base && base->winning.modelRadius && std::isfinite(*base->winning.modelRadius) &&
+                    *base->winning.modelRadius >= 0 && std::isfinite(reference->scale) &&
+                    std::isfinite(reference->position.x) && std::isfinite(reference->position.y) &&
+                    std::isfinite(reference->position.z) && base->modelPath &&
+                    Lower(*base->modelPath) == Lower(reference->modelPath))
+                {
+                    const float radius = *base->winning.modelRadius * std::abs(reference->scale);
+                    const core::Vec3 extent{radius, radius, radius};
+                    const core::AABB placed{.min = reference->position - extent, .max = reference->position + extent};
+                    if (!placed.Intersects(*bounds))
+                    {
+                        continue;
+                    }
+                }
                 result.references.push_back(*reference);
             }
         }
@@ -182,7 +201,7 @@ namespace navmesh::skyrim::offline
         {
             modelRadius.reset();
         }
-        if (modelRadius && std::isfinite(origin.scale))
+        if (modelRadius && std::isfinite(*modelRadius) && *modelRadius >= 0 && std::isfinite(origin.scale))
         {
             const auto extra = std::ceil(static_cast<double>(*modelRadius) * std::abs(origin.scale) / 4096.0);
             const auto total = std::min<double>(std::numeric_limits<int>::max(), static_cast<double>(radius) + extra);
@@ -232,8 +251,10 @@ namespace navmesh::skyrim::offline
     }
     std::vector<const core::Cell *> CellImpactIndex::AffectedCells(const std::string &plugin, int radius,
                                                                    const std::set<std::string> &changedModels,
-                                                                   bool archiveModelsChanged) const
+                                                                   bool archiveModelsChanged,
+                                                                   ImpactSelectionStatistics *statistics) const
     {
+        ImpactSelectionStatistics counts;
         if (radius < 0)
         {
             throw std::invalid_argument("Impact radius cannot be negative");
@@ -275,11 +296,17 @@ namespace navmesh::skyrim::offline
         };
         for (const auto &record : resolved_.records)
         {
-            if (std::none_of(record.origins.begin(), record.origins.end(),
-                             [&](const auto &origin) { return selected.contains(Lower(origin.plugin)); }))
+            if (std::none_of(record.origins.begin(), record.origins.end(), [&](const auto &origin)
+                             { return origin.navigationChanged && selected.contains(Lower(origin.plugin)); }))
             {
+                counts.equivalentRecords +=
+                    std::any_of(record.origins.begin(), record.origins.end(),
+                                [&](const auto &origin) { return selected.contains(Lower(origin.plugin)); })
+                        ? 1
+                        : 0;
                 continue;
             }
+            ++counts.changedRecords[record.type];
             if (record.type == "CELL")
             {
                 if (const auto it = cells_.find(record.formId); it != cells_.end())
@@ -321,6 +348,7 @@ namespace navmesh::skyrim::offline
                 if (std::any_of(record.origins.begin(), record.origins.end(), [&](const auto &origin)
                                 { return origin.baseFormId && changedBases.contains(*origin.baseFormId); }))
                 {
+                    ++counts.baseObjectUses;
                     for (const auto &origin : record.origins)
                     {
                         for (const auto *target : Footprint(origin, std::max(1, radius)))
@@ -343,6 +371,7 @@ namespace navmesh::skyrim::offline
                 }
                 if (!reference.modelPath.empty() && (archiveModelsChanged || changedModels.contains(model)))
                 {
+                    ++counts.assetUses;
                     if (const auto *record = resolved_.FindWinning(reference.id))
                     {
                         for (const auto &origin : record->origins)
@@ -367,6 +396,10 @@ namespace navmesh::skyrim::offline
         for (const auto id : affected)
         {
             result.push_back(cells_.at(id));
+        }
+        if (statistics)
+        {
+            *statistics = std::move(counts);
         }
         return result;
     }

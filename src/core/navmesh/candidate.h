@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -139,6 +140,9 @@ namespace navmesh::core
     /// Write the candidate and its source evidence as JSON; returns false on output failure.
     [[nodiscard]] bool WriteCandidateJson(const std::filesystem::path &path, const CandidateNavMesh &candidate,
                                           const Scene &scene, const std::string &metadataJson);
+    /// Stream the same JSON schema to an existing output stream; returns false on write failure.
+    [[nodiscard]] bool WriteCandidateJson(std::ostream &output, const CandidateNavMesh &candidate, const Scene &scene,
+                                          const std::string &metadataJson);
     /// Write candidate triangles as an OBJ inspection mesh; returns false on output failure.
     [[nodiscard]] bool WriteCandidateObj(const std::filesystem::path &path, const CandidateNavMesh &candidate);
 } // namespace navmesh::core

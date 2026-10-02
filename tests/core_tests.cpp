@@ -28,6 +28,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <filesystem>
@@ -567,26 +568,26 @@ namespace
         navmesh::skyrim::offline::GeometryExtraction geometry;
         // Include an outside triangle, a triangle crossing the boundary from a
         // distant placement, an inside triangle, and an invalid index.
-        geometry.mesh = {.vertices = {{20, 20, 0},
-                                      {21, 20, 0},
-                                      {20, 21, 0},
-                                      {-20, 0, 0},
-                                      {1, 0, 0},
-                                      {1, 1, 0},
-                                      {0, 0, 0},
-                                      {1, 0, 0},
-                                      {0, 1, 0}},
-                         .triangles = {{{0, 1, 2}}, {{3, 4, 5}}, {{6, 7, 8}}, {{6, 7, 100}}}};
+        geometry.scene.mesh = {.vertices = {{20, 20, 0},
+                                            {21, 20, 0},
+                                            {20, 21, 0},
+                                            {-20, 0, 0},
+                                            {1, 0, 0},
+                                            {1, 1, 0},
+                                            {0, 0, 0},
+                                            {1, 0, 0},
+                                            {0, 1, 0}},
+                               .triangles = {{{0, 1, 2}}, {{3, 4, 5}}, {{6, 7, 8}}, {{6, 7, 100}}}};
         geometry.references = {
             {.formId = 1, .vertices = 3, .triangles = 1},
             {.formId = 2, .vertices = 6, .triangles = 3, .meshVertexOffset = 3, .meshTriangleOffset = 1}};
-        geometry.scene.mesh = geometry.mesh;
+
         geometry.scene.triangleProvenance = {{0, 10}, {1, 20}, {1, 21}, {1, 22}};
-        geometry.scene.renderFallbackMesh = geometry.mesh;
+        geometry.scene.renderFallbackMesh = geometry.scene.mesh;
         geometry.scene.renderFallbackTriangleProvenance = {{2, 30}, {3, 40}, {3, 41}, {3, 42}};
         const AABB bounds{.min = {-2, -2, -10}, .max = {2, 2, 10}};
         navmesh::app::detail::CullGeometryToBounds(geometry, bounds);
-        Require(geometry.mesh.triangles.size() == 2 && geometry.mesh.vertices.size() == 6);
+        Require(geometry.scene.mesh.triangles.size() == 2 && geometry.scene.mesh.vertices.size() == 6);
         Require(geometry.scene.mesh.triangles.size() == 2 && geometry.scene.HasCompleteTriangleProvenance());
         Require(geometry.scene.triangleProvenance[0].geometrySource == 1 &&
                 geometry.scene.triangleProvenance[0].sourceTriangle == 20 &&
@@ -602,7 +603,7 @@ namespace
                 geometry.scene.renderFallbackTriangleProvenance[1].sourceTriangle == 41);
         // Repeated bounds selection keeps the source identities stable.
         navmesh::app::detail::CullGeometryToBounds(geometry, bounds);
-        Require(geometry.mesh.triangles.size() == 2 &&
+        Require(geometry.scene.mesh.triangles.size() == 2 &&
                 geometry.scene.renderFallbackTriangleProvenance[1].sourceTriangle == 41);
     }
 
@@ -759,15 +760,24 @@ namespace
         std::ofstream output(root / "Terrain.esm", std::ios::binary); output.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size())); output.close();
         const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Terrain.esm" } }); Require(resolved.diagnostics.empty());
         const auto terrain = navmesh::skyrim::offline::ExtractTerrain(resolved, resolved.cells.front());
-        Require(terrain.landRecordsDecoded == 1 && terrain.mesh.vertices.size() == 1089 && terrain.mesh.triangles.size() == 2048);
+        Require(terrain.landRecordsDecoded == 1 && terrain.scene.mesh.vertices.size() == 1089 &&
+                terrain.scene.mesh.triangles.size() == 2048);
         // The stored row-major LAND grid matches the world-space X/Y basis.
         // Distinct corner heights catch a transpose or a skipped first delta.
-        Require(terrain.mesh.vertices[0].x == 12 * 4096.0F && terrain.mesh.vertices[0].y == -4 * 4096.0F && terrain.mesh.vertices[0].z == 816.0F);
-        Require(terrain.mesh.vertices[32].x == 12 * 4096.0F + 32 * 128.0F && terrain.mesh.vertices[32].z == 840.0F);
-        Require(terrain.mesh.vertices[1056].x == 12 * 4096.0F && terrain.mesh.vertices[1056].y == -4 * 4096.0F + 32 * 128.0F && terrain.mesh.vertices[1056].z == 856.0F);
-        Require(terrain.mesh.vertices[1088].x == 12 * 4096.0F + 32 * 128.0F && terrain.mesh.vertices[1088].z == 856.0F);
+        Require(terrain.scene.mesh.vertices[0].x == 12 * 4096.0F && terrain.scene.mesh.vertices[0].y == -4 * 4096.0F &&
+                terrain.scene.mesh.vertices[0].z == 816.0F);
+        Require(terrain.scene.mesh.vertices[32].x == 12 * 4096.0F + 32 * 128.0F &&
+                terrain.scene.mesh.vertices[32].z == 840.0F);
+        Require(terrain.scene.mesh.vertices[1056].x == 12 * 4096.0F &&
+                terrain.scene.mesh.vertices[1056].y == -4 * 4096.0F + 32 * 128.0F &&
+                terrain.scene.mesh.vertices[1056].z == 856.0F);
+        Require(terrain.scene.mesh.vertices[1088].x == 12 * 4096.0F + 32 * 128.0F &&
+                terrain.scene.mesh.vertices[1088].z == 856.0F);
         Require(terrain.scene.HasCompleteTriangleProvenance()); const auto& provenance = terrain.scene.triangleProvenance.front(); Require(provenance.terrain && provenance.terrain->landFormId == 0x701 && provenance.terrain->sampleX == 0 && provenance.terrain->sampleY == 0);
-        navmesh::core::Cell missing = resolved.cells.front(); missing.id = 0x799; const auto none = navmesh::skyrim::offline::ExtractTerrain(resolved, missing); Require(none.mesh.triangles.empty() && none.landRecordsMissing == 1);
+        navmesh::core::Cell missing = resolved.cells.front();
+        missing.id = 0x799;
+        const auto none = navmesh::skyrim::offline::ExtractTerrain(resolved, missing);
+        Require(none.scene.mesh.triangles.empty() && none.landRecordsMissing == 1);
     }
     void WriteTextFile(const std::filesystem::path& path, const std::string& text) { std::ofstream output(path, std::ios::binary); output << text; }
     void TestMo2ProfileImport()
@@ -858,9 +868,10 @@ namespace
 
         const auto geometry = navmesh::skyrim::offline::ExtractGeometry(tempRoot, cell, tempRoot);
         assert(geometry.modelsLoaded == 1u);
-        assert(geometry.mesh.vertices.size() == 3u);
-        assert(geometry.mesh.triangles.size() == 1u);
-        assert(geometry.mesh.vertices[0].x == 10.0F && geometry.mesh.vertices[0].y == 20.0F && geometry.mesh.vertices[0].z == 30.0F);
+        assert(geometry.scene.mesh.vertices.size() == 3u);
+        assert(geometry.scene.mesh.triangles.size() == 1u);
+        assert(geometry.scene.mesh.vertices[0].x == 10.0F && geometry.scene.mesh.vertices[0].y == 20.0F &&
+               geometry.scene.mesh.vertices[0].z == 30.0F);
         assert(geometry.scene.HasCompleteTriangleProvenance());
         const auto& provenance = geometry.scene.triangleProvenance.front();
         assert(provenance.sourceTriangle == 0u && geometry.scene.geometrySources[provenance.geometrySource].reference.plugin == "Patch.esp");
@@ -872,14 +883,14 @@ namespace
         navmesh::skyrim::offline::ModelAssetSources assets;
         assets.looseModels.emplace("meshes/markerx.nif", modelPath);
         const auto fromMo2 = navmesh::skyrim::offline::ExtractGeometry(emptyData, cell, {}, {}, {}, &assets);
-        Require(fromMo2.modelsLoaded == 1 && fromMo2.mesh.triangles.size() == 1 && fromMo2.modelsMissing == 0);
+        Require(fromMo2.modelsLoaded == 1 && fromMo2.scene.mesh.triangles.size() == 1 && fromMo2.modelsMissing == 0);
 
         // Placed DATA angles use the game's matrix convention. A positive Z
         // angle moves local +X toward world -Y, including render fallbacks.
         cell.references.front().rotation.z = 1.57079632679F;
         const auto rotatedGeometry = navmesh::skyrim::offline::ExtractGeometry(tempRoot, cell, tempRoot);
-        Require(std::abs(rotatedGeometry.mesh.vertices[1].x - 10.0F) < 1.0e-4F);
-        Require(std::abs(rotatedGeometry.mesh.vertices[1].y - 19.0F) < 1.0e-4F);
+        Require(std::abs(rotatedGeometry.scene.mesh.vertices[1].x - 10.0F) < 1.0e-4F);
+        Require(std::abs(rotatedGeometry.scene.mesh.vertices[1].y - 19.0F) < 1.0e-4F);
     }
 
     // Legal synthetic fixture: Havok coordinates and rigid-body translation
@@ -908,10 +919,11 @@ namespace
 
         navmesh::core::Cell cell; cell.references.push_back({ .id = 3, .baseObjectId = 4, .recordType = "REFR", .modelPath = "CollisionWins.nif", .sourcePlugin = "Fixture.esp", .basePlugin = "Fixture.esm", .baseRecordType = "STAT" });
         const auto geometry = navmesh::skyrim::offline::ExtractGeometry(root, cell, root);
-        Require(geometry.collisionModelsLoaded == 1 && geometry.renderFallbackModels == 1 && geometry.mesh.triangles.size() == 1 && geometry.scene.renderFallbackMesh.triangles.size() == 1);
+        Require(geometry.collisionModelsLoaded == 1 && geometry.renderFallbackModels == 1 &&
+                geometry.scene.mesh.triangles.size() == 1 && geometry.scene.renderFallbackMesh.triangles.size() == 1);
         constexpr float skyrimUnitsPerHavokUnit = 69.99125F;
-        Require(std::abs(geometry.mesh.vertices.front().z - 9.0F * skyrimUnitsPerHavokUnit) < 0.01F);
-        Require(std::abs(geometry.mesh.vertices[1].x - skyrimUnitsPerHavokUnit) < 0.01F);
+        Require(std::abs(geometry.scene.mesh.vertices.front().z - 9.0F * skyrimUnitsPerHavokUnit) < 0.01F);
+        Require(std::abs(geometry.scene.mesh.vertices[1].x - skyrimUnitsPerHavokUnit) < 0.01F);
         const auto& source = geometry.scene.geometrySources.at(geometry.scene.triangleProvenance.front().geometrySource);
         Require(source.sourceType == navmesh::core::GeometrySourceType::Collision && source.confidence == 1.0F && source.collisionType == "hkPackedNiTriStripsData");
         const auto& renderSource = geometry.scene.geometrySources.at(geometry.scene.renderFallbackTriangleProvenance.front().geometrySource);
@@ -923,10 +935,27 @@ namespace
         std::ifstream glb(output, std::ios::binary); glb.seekg(12); std::uint32_t jsonLength{}; glb.read(reinterpret_cast<char*>(&jsonLength), sizeof(jsonLength)); glb.seekg(4, std::ios::cur); std::string gltf(jsonLength, '\0'); glb.read(gltf.data(), jsonLength);
         Require(gltf.contains("Collision:") && gltf.contains("Render fallback:"));
 
+        navmesh::skyrim::offline::ModelGeometryCache cache(1024 * 1024);
+        const auto cached = navmesh::skyrim::offline::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache);
+        const auto repeated = navmesh::skyrim::offline::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache);
+        Require(cache.Statistics().modelsDecoded == 1 && cache.Statistics().modelHits == 1);
+        Require(cache.Statistics().placementsBuilt == 2 && cache.Statistics().placementHits == 2);
+        Require(cache.Statistics().retainedBytes <= 1024 * 1024);
+        Require(cached.scene.mesh.vertices.size() == repeated.scene.mesh.vertices.size());
+        Require(std::memcmp(cached.scene.mesh.vertices.data(), repeated.scene.mesh.vertices.data(),
+                            cached.scene.mesh.vertices.size() * sizeof(navmesh::core::Vec3)) == 0);
+        const auto navigation =
+            navmesh::skyrim::offline::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
+        Require(navigation.scene.renderFallbackMesh.triangles.empty() && navigation.scene.mesh.triangles.size() == 1);
+        Require(cache.Statistics().modelsDecoded == 2);
+        std::filesystem::last_write_time(modelPath,
+                                         std::filesystem::last_write_time(modelPath) + std::chrono::seconds(1));
+        (void)navmesh::skyrim::offline::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
+        Require(cache.Statistics().modelsDecoded == 3);
         cell.references.front().rotation.z = 1.57079632679F;
         const auto rotated = navmesh::skyrim::offline::ExtractGeometry(root, cell, root);
-        Require(std::abs(rotated.mesh.vertices[1].x) < 0.01F);
-        Require(std::abs(rotated.mesh.vertices[1].y + skyrimUnitsPerHavokUnit) < 0.01F);
+        Require(std::abs(rotated.scene.mesh.vertices[1].x) < 0.01F);
+        Require(std::abs(rotated.scene.mesh.vertices[1].y + skyrimUnitsPerHavokUnit) < 0.01F);
         Require(std::abs(rotated.scene.renderFallbackMesh.vertices[1].x) < 1.0e-4F);
         Require(std::abs(rotated.scene.renderFallbackMesh.vertices[1].y + 1.0F) < 1.0e-4F);
     }
@@ -1396,8 +1425,17 @@ namespace
     }
 }
 
+void TestPerformanceCaches();
+
 int main(int argc, char** argv)
 {
+    if (argc > 1 && std::string_view(argv[1]) == "--performance-only")
+    {
+        TestPerformanceCaches();
+        TestPackedCollisionPreferredOverRenderFixture();
+        return 0;
+    }
+    TestPerformanceCaches();
     if (argc > 1 && std::string_view(argv[1]) == "--border-only")
     {
         TestAuthoredBorderTolerance();

@@ -1,0 +1,276 @@
+{
+  "schema": "navmesh-generator/performance-improvements",
+  "measurement_date": "2026-10-02",
+  "archive_runs": [
+    {
+      "mode": "cold",
+      "archives": 95,
+      "archive_bytes": 20702702306,
+      "metadata_bytes_read": 8710133,
+      "model_entries": 25461,
+      "compressed_nif_samples": 3,
+      "sample_payload_bytes_read": 299893,
+      "seconds": 0.6026930000007269,
+      "errors": []
+    },
+    {
+      "mode": "warm",
+      "archives": 95,
+      "archive_bytes": 20702702306,
+      "metadata_bytes_read": 0,
+      "model_entries": 25461,
+      "compressed_nif_samples": 3,
+      "sample_payload_bytes_read": 299893,
+      "seconds": 0.04416719999971974,
+      "errors": []
+    }
+  ],
+  "synthetic_outputs": [
+    {
+      "policy": "full",
+      "output_bytes": 14057,
+      "cold_seconds": 0.42160320000039064,
+      "warm_seconds": 0.03692840000076103,
+      "cold_recast_seconds": 0.3700576,
+      "warm_recast_seconds": 0,
+      "warm_cache_hits": 2,
+      "generated_polygons": 10,
+      "artifact_bytes": {
+        ".esp": 1057,
+        ".json": 9815,
+        ".obj": 421
+      }
+    },
+    {
+      "policy": "compact",
+      "output_bytes": 6412,
+      "cold_seconds": 0.4097811999999976,
+      "warm_seconds": 0.038734300000214716,
+      "cold_recast_seconds": 0.3697136,
+      "warm_recast_seconds": 0,
+      "warm_cache_hits": 2,
+      "generated_polygons": 10,
+      "artifact_bytes": {
+        ".esp": 1057,
+        ".gz": 2601
+      }
+    },
+    {
+      "policy": "auto",
+      "output_bytes": 3805,
+      "cold_seconds": 0.4025906999995641,
+      "warm_seconds": 0.030205399998521898,
+      "cold_recast_seconds": 0.3691846,
+      "warm_recast_seconds": 0,
+      "warm_cache_hits": 2,
+      "generated_polygons": 10,
+      "artifact_bytes": {
+        ".esp": 1057
+      }
+    }
+  ],
+  "synthetic_plugins_identical": true,
+  "recast": [
+    {
+      "partition": "watershed",
+      "median_seconds": 0.184475,
+      "peak_recast_bytes": 38896012,
+      "rows": [
+        {
+          "mode": "recast",
+          "extent": 4096,
+          "partition": "watershed",
+          "layers": 1,
+          "seconds": 0.184595,
+          "recast_peak_allocated_bytes": 38896012,
+          "recast_remaining_bytes": 0,
+          "polygons": 2,
+          "topology_valid": true,
+          "private_bytes": 3211264,
+          "working_set_bytes": 4878336,
+          "peak_working_set_bytes": 43589632
+        },
+        {
+          "mode": "recast",
+          "extent": 4096,
+          "partition": "watershed",
+          "layers": 1,
+          "seconds": 0.184475,
+          "recast_peak_allocated_bytes": 38896012,
+          "recast_remaining_bytes": 0,
+          "polygons": 2,
+          "topology_valid": true,
+          "private_bytes": 3211264,
+          "working_set_bytes": 4878336,
+          "peak_working_set_bytes": 43589632
+        },
+        {
+          "mode": "recast",
+          "extent": 4096,
+          "partition": "watershed",
+          "layers": 1,
+          "seconds": 0.18208,
+          "recast_peak_allocated_bytes": 38896012,
+          "recast_remaining_bytes": 0,
+          "polygons": 2,
+          "topology_valid": true,
+          "private_bytes": 3215360,
+          "working_set_bytes": 4878336,
+          "peak_working_set_bytes": 43589632
+        }
+      ]
+    },
+    {
+      "partition": "monotone",
+      "median_seconds": 0.0788204,
+      "peak_recast_bytes": 38896012,
+      "rows": [
+        {
+          "mode": "recast",
+          "extent": 4096,
+          "partition": "monotone",
+          "layers": 1,
+          "seconds": 0.0800671,
+          "recast_peak_allocated_bytes": 38896012,
+          "recast_remaining_bytes": 0,
+          "polygons": 2,
+          "topology_valid": true,
+          "private_bytes": 3219456,
+          "working_set_bytes": 4870144,
+          "peak_working_set_bytes": 43589632
+        },
+        {
+          "mode": "recast",
+          "extent": 4096,
+          "partition": "monotone",
+          "layers": 1,
+          "seconds": 0.0784618,
+          "recast_peak_allocated_bytes": 38896012,
+          "recast_remaining_bytes": 0,
+          "polygons": 2,
+          "topology_valid": true,
+          "private_bytes": 3211264,
+          "working_set_bytes": 4870144,
+          "peak_working_set_bytes": 43589632
+        },
+        {
+          "mode": "recast",
+          "extent": 4096,
+          "partition": "monotone",
+          "layers": 1,
+          "seconds": 0.0788204,
+          "recast_peak_allocated_bytes": 38896012,
+          "recast_remaining_bytes": 0,
+          "polygons": 2,
+          "topology_valid": true,
+          "private_bytes": 3211264,
+          "working_set_bytes": 4870144,
+          "peak_working_set_bytes": 43589632
+        }
+      ]
+    },
+    {
+      "partition": "layers",
+      "median_seconds": 0.0848866,
+      "peak_recast_bytes": 38896012,
+      "rows": [
+        {
+          "mode": "recast",
+          "extent": 4096,
+          "partition": "layers",
+          "layers": 1,
+          "seconds": 0.0829267,
+          "recast_peak_allocated_bytes": 38896012,
+          "recast_remaining_bytes": 0,
+          "polygons": 2,
+          "topology_valid": true,
+          "private_bytes": 3211264,
+          "working_set_bytes": 4866048,
+          "peak_working_set_bytes": 43589632
+        },
+        {
+          "mode": "recast",
+          "extent": 4096,
+          "partition": "layers",
+          "layers": 1,
+          "seconds": 0.0848866,
+          "recast_peak_allocated_bytes": 38896012,
+          "recast_remaining_bytes": 0,
+          "polygons": 2,
+          "topology_valid": true,
+          "private_bytes": 3219456,
+          "working_set_bytes": 4866048,
+          "peak_working_set_bytes": 43589632
+        },
+        {
+          "mode": "recast",
+          "extent": 4096,
+          "partition": "layers",
+          "layers": 1,
+          "seconds": 0.0860777,
+          "recast_peak_allocated_bytes": 38896012,
+          "recast_remaining_bytes": 0,
+          "polygons": 2,
+          "topology_valid": true,
+          "private_bytes": 3215360,
+          "working_set_bytes": 4861952,
+          "peak_working_set_bytes": 43585536
+        }
+      ]
+    }
+  ],
+  "resolution": {
+    "mode": "resolve",
+    "seconds": 4.97159,
+    "plugins": 7,
+    "records": 1042516,
+    "cells": 73732,
+    "diagnostics": 0,
+    "file_payload_bytes": 266151786,
+    "decoded_payload_bytes": 514948627,
+    "encoded_subrecord_bytes": 514948367,
+    "subrecord_data_bytes": 495518243,
+    "private_bytes": 2848407552,
+    "working_set_bytes": 2775248896,
+    "peak_working_set_bytes": 2777239552,
+    "selected_record_types": {
+      "ACHR": 72,
+      "ACTI": 1,
+      "CELL": 57,
+      "CONT": 3,
+      "DOOR": 1,
+      "LAND": 30,
+      "NAVM": 78,
+      "REFR": 9829,
+      "STAT": 114,
+      "WRLD": 1
+    },
+    "index_seconds": 1.87337,
+    "selection_seconds": 0.556985,
+    "targets_without_asset_impacts": 985,
+    "targets_with_decoded_navm": 917,
+    "first_target_supplier_cells": 64,
+    "first_target_supplier_references": 5169,
+    "sample_changed_cell_id": 36574,
+    "sample_supplier_cells": 99,
+    "sample_supplier_references": 8812,
+    "sample_unique_models": 711,
+    "sample_unbounded_model_references": 0,
+    "terrain_sample_cells": 16,
+    "terrain_index_build_seconds": 0.0212004,
+    "terrain_indexed_seconds": 0.0008616,
+    "terrain_geometry_identical": true,
+    "terrain_production_indexed_seconds": 0.0012518
+  },
+  "limits": [
+    "No complete Winterhold rebuild was timed.",
+    "Resolution and selection exclude MO2 import and asset impacts.",
+    "Synthetic output fixture has two eligible exterior cells; runtime and compression depend on inputs.",
+    "Archive sample reads validate three compressed NIFs, not every model payload.",
+    "Artifact sizes are logical bytes; shared cache and staging are accounted separately from exports.",
+    "Do not multiply stage ratios into an end-to-end speedup.",
+    "Cold archive runs use fresh metadata indexes; operating-system file caching was not controlled."
+  ],
+  "baseline_snapshot": "performance-analysis-measurements.json",
+  "build": "Windows x64, MSVC, xmake releasedbg; uncommitted implementation changes"
+}

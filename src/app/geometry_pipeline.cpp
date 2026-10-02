@@ -57,7 +57,7 @@ namespace navmesh::app::detail
     [[nodiscard]] std::vector<navmesh::analysis::TriangleSource> BuildTriangleSources(
         const navmesh::skyrim::offline::GeometryExtraction &geometry)
     {
-        std::vector<navmesh::analysis::TriangleSource> result(geometry.mesh.triangles.size());
+        std::vector<navmesh::analysis::TriangleSource> result(geometry.scene.mesh.triangles.size());
         for (std::size_t index{}; index < result.size() && index < geometry.scene.triangleProvenance.size(); ++index)
         {
             const auto &provenance = geometry.scene.triangleProvenance[index];
@@ -78,21 +78,20 @@ namespace navmesh::app::detail
     }
 
     void AppendGeometry(navmesh::skyrim::offline::GeometryExtraction &destination,
-                        navmesh::skyrim::offline::GeometryExtraction &&source)
+                        const navmesh::skyrim::offline::GeometryExtraction &source)
     {
         const auto sourceOffset = destination.scene.geometrySources.size();
-        const auto vertexOffset = static_cast<std::uint32_t>(destination.mesh.vertices.size());
+        const auto vertexOffset = static_cast<std::uint32_t>(destination.scene.mesh.vertices.size());
         const auto renderVertexOffset =
             static_cast<std::uint32_t>(destination.scene.renderFallbackMesh.vertices.size());
-        const auto triangleOffset = destination.mesh.triangles.size();
+        const auto triangleOffset = destination.scene.mesh.triangles.size();
         const auto nodeStart = destination.scene.nodes.size();
         // Rebase source identifiers before copying provenance that points into the combined source table.
         destination.scene.geometrySources.insert(destination.scene.geometrySources.end(),
-                                                 std::make_move_iterator(source.scene.geometrySources.begin()),
-                                                 std::make_move_iterator(source.scene.geometrySources.end()));
-        destination.scene.nodes.insert(destination.scene.nodes.end(),
-                                       std::make_move_iterator(source.scene.nodes.begin()),
-                                       std::make_move_iterator(source.scene.nodes.end()));
+                                                 source.scene.geometrySources.begin(),
+                                                 source.scene.geometrySources.end());
+        destination.scene.nodes.insert(destination.scene.nodes.end(), source.scene.nodes.begin(),
+                                       source.scene.nodes.end());
         for (std::size_t index = nodeStart; index < destination.scene.nodes.size(); ++index)
         {
             if (destination.scene.nodes[index].geometrySource)
@@ -101,15 +100,15 @@ namespace navmesh::app::detail
             }
         }
         // Append support and visual geometry with independent vertex offsets and matching provenance order.
-        destination.mesh.vertices.insert(destination.mesh.vertices.end(), source.mesh.vertices.begin(),
-                                         source.mesh.vertices.end());
-        for (auto triangle : source.mesh.triangles)
+        destination.scene.mesh.vertices.insert(destination.scene.mesh.vertices.end(),
+                                               source.scene.mesh.vertices.begin(), source.scene.mesh.vertices.end());
+        for (auto triangle : source.scene.mesh.triangles)
         {
             for (auto &vertex : triangle.vertices)
             {
                 vertex += vertexOffset;
             }
-            destination.mesh.triangles.push_back(triangle);
+            destination.scene.mesh.triangles.push_back(triangle);
         }
         for (auto provenance : source.scene.triangleProvenance)
         {
@@ -133,9 +132,8 @@ namespace navmesh::app::detail
             destination.scene.renderFallbackTriangleProvenance.push_back(provenance);
         }
         // Retain coverage and per-reference ranges alongside geometry so reports can trace every extracted model.
-        destination.scene.coverage.insert(destination.scene.coverage.end(),
-                                          std::make_move_iterator(source.scene.coverage.begin()),
-                                          std::make_move_iterator(source.scene.coverage.end()));
+        destination.scene.coverage.insert(destination.scene.coverage.end(), source.scene.coverage.begin(),
+                                          source.scene.coverage.end());
         for (auto reference : source.references)
         {
             reference.meshVertexOffset += vertexOffset;
@@ -161,7 +159,6 @@ namespace navmesh::app::detail
         destination.terrainSupported = destination.terrainSupported || source.terrainSupported;
         destination.collisionGeometrySupported =
             destination.collisionGeometrySupported || source.collisionGeometrySupported;
-        destination.scene.mesh = destination.mesh;
     }
 
     void CullGeometryToBounds(navmesh::skyrim::offline::GeometryExtraction &geometry, const navmesh::core::AABB &bounds)
@@ -184,19 +181,19 @@ namespace navmesh::app::detail
         }
         std::size_t referenceIndex{};
         // Keep intersecting triangles in source order; duplicate their vertices and retain the corresponding audit join.
-        for (std::size_t triangleIndex{}; triangleIndex < geometry.mesh.triangles.size(); ++triangleIndex)
+        for (std::size_t triangleIndex{}; triangleIndex < geometry.scene.mesh.triangles.size(); ++triangleIndex)
         {
-            const auto &triangle = geometry.mesh.triangles[triangleIndex];
+            const auto &triangle = geometry.scene.mesh.triangles[triangleIndex];
             navmesh::core::AABB triangleBounds;
             bool valid = true;
             for (const auto vertex : triangle.vertices)
             {
-                if (vertex >= geometry.mesh.vertices.size())
+                if (vertex >= geometry.scene.mesh.vertices.size())
                 {
                     valid = false;
                     break;
                 }
-                triangleBounds.Expand(geometry.mesh.vertices[vertex]);
+                triangleBounds.Expand(geometry.scene.mesh.vertices[vertex]);
             }
             if (!valid || !triangleBounds.Intersects(bounds))
             {
@@ -210,7 +207,7 @@ namespace navmesh::app::detail
             const auto base = static_cast<std::uint32_t>(selected.vertices.size());
             for (const auto vertex : triangle.vertices)
             {
-                selected.vertices.push_back(geometry.mesh.vertices[vertex]);
+                selected.vertices.push_back(geometry.scene.mesh.vertices[vertex]);
             }
             selected.triangles.push_back({{base, base + 1, base + 2}});
             if (triangleIndex < geometry.scene.triangleProvenance.size())
@@ -229,8 +226,8 @@ namespace navmesh::app::detail
                 ++reference.triangles;
             }
         }
-        geometry.mesh = std::move(selected);
-        geometry.scene.mesh = geometry.mesh;
+        geometry.scene.mesh = std::move(selected);
+
         geometry.scene.triangleProvenance = std::move(provenance);
 
         // Display-only render meshes share the spatial selection with support

@@ -13,24 +13,24 @@ namespace
 {
     using namespace navmesh::skyrim::offline;
     constexpr std::size_t kMaxDecodedRecordSize = 256ULL * 1024ULL * 1024ULL;
-    bool Has(const std::vector<std::uint8_t> &b, std::size_t p, std::size_t n)
+    bool Has(std::span<const std::uint8_t> b, std::size_t p, std::size_t n)
     {
         return p <= b.size() && n <= b.size() - p;
     }
-    std::uint16_t U16(const std::vector<std::uint8_t> &b, std::size_t p)
+    std::uint16_t U16(std::span<const std::uint8_t> b, std::size_t p)
     {
         return static_cast<std::uint16_t>(b[p] | b[p + 1] << 8);
     }
-    std::uint32_t U32(const std::vector<std::uint8_t> &b, std::size_t p)
+    std::uint32_t U32(std::span<const std::uint8_t> b, std::size_t p)
     {
         return static_cast<std::uint32_t>(b[p]) | static_cast<std::uint32_t>(b[p + 1]) << 8 |
                static_cast<std::uint32_t>(b[p + 2]) << 16 | static_cast<std::uint32_t>(b[p + 3]) << 24;
     }
-    std::int32_t I32(const std::vector<std::uint8_t> &b, std::size_t p)
+    std::int32_t I32(std::span<const std::uint8_t> b, std::size_t p)
     {
         return static_cast<std::int32_t>(U32(b, p));
     }
-    std::string Text(const std::vector<std::uint8_t> &b, std::size_t p, std::size_t n)
+    std::string Text(std::span<const std::uint8_t> b, std::size_t p, std::size_t n)
     {
         return p + n <= b.size() ? std::string(reinterpret_cast<const char *>(b.data() + p), n) : "";
     }
@@ -130,9 +130,8 @@ namespace
             Subrecord sub{.type = kind,
                           .encodedRange = {encodedStart, p + size - encodedStart},
                           .dataRange = {data, size},
-                          .encodedBytes =
-                              std::vector<std::uint8_t>(payload.begin() + encodedStart, payload.begin() + data + size),
-                          .data = std::vector<std::uint8_t>(payload.begin() + data, payload.begin() + data + size),
+                          .encodedBytes = payload.Slice(encodedStart, data + size - encodedStart),
+                          .data = payload.Slice(data, size),
                           .extendedSize = extendedSize.has_value()};
             record.raw->subrecords.push_back(std::move(sub));
             if (kind == "MAST" && masters)
@@ -230,6 +229,59 @@ namespace
         }
         return true;
     }
+    /// Ignore only classified display/streaming fields; unknown subrecords remain exact dependencies.
+    bool NavigationEquivalent(const ResolvedRecord &left, const ResolvedRecord &right)
+    {
+        if (!left.raw || !right.raw || left.type != right.type ||
+            (left.raw->flags & ~0x40000U) != (right.raw->flags & ~0x40000U) || left.cellFormId != right.cellFormId ||
+            left.worldspaceFormId != right.worldspaceFormId || left.referencedFormIds != right.referencedFormIds ||
+            left.transform != right.transform ||
+            left.referenceScale.value_or(1.0F) != right.referenceScale.value_or(1.0F))
+        {
+            return false;
+        }
+        const auto relevant = [&](const Subrecord &sub)
+        {
+            if (sub.type == "EDID" || sub.type == "FULL")
+            {
+                return false;
+            }
+            if ((left.type == "REFR" || left.type == "ACHR") && sub.type == "NAME")
+            {
+                return false;
+            }
+            if (left.type == "WRLD")
+            {
+                // Cached height/streaming tables and display textures do not supply LAND or collision.
+                return sub.type != "MHDT" && sub.type != "OFST" && sub.type != "RNAM" && sub.type != "TNAM" &&
+                       sub.type != "UNAM" && sub.type != "MNAM";
+            }
+            if (left.type == "LAND")
+            {
+                return sub.type != "VNML" && sub.type != "VCLR" && sub.type != "BTXT" && sub.type != "ATXT" &&
+                       sub.type != "VTXT" && sub.type != "VTEX" && sub.type != "MPCD";
+            }
+            return true;
+        };
+        auto a = left.raw->subrecords.begin();
+        auto b = right.raw->subrecords.begin();
+        for (;;)
+        {
+            a = std::find_if(a, left.raw->subrecords.end(), relevant);
+            b = std::find_if(b, right.raw->subrecords.end(), relevant);
+            if (a == left.raw->subrecords.end() || b == right.raw->subrecords.end())
+            {
+                return a == left.raw->subrecords.end() && b == right.raw->subrecords.end();
+            }
+            if (a->type != b->type || !(a->data == b->data))
+            {
+                return false;
+            }
+            ++a;
+            ++b;
+        }
+    }
+
     std::optional<navmesh::core::NavMesh> DecodeNavMesh(const ResolvedRecord &record)
     {
         if (!record.raw || !record.navm || !record.navm->supported)
@@ -285,6 +337,56 @@ namespace navmesh::skyrim::offline
         return cells;
     }
 
+    bool IPluginReader::ReadMetadata(const std::filesystem::path &path, std::vector<std::string> &masters,
+                                     bool &isLight, std::vector<Diagnostic> &diagnostics) const
+    {
+        std::vector<ResolvedRecord> ignored;
+        return Read(path, ignored, masters, isLight, diagnostics, false);
+    }
+
+    bool DirectPluginReader::ReadMetadata(const std::filesystem::path &path, std::vector<std::string> &masters,
+                                          bool &isLight, std::vector<Diagnostic> &diagnostics) const
+    {
+        std::ifstream stream(path, std::ios::binary | std::ios::ate);
+        const auto length = stream.tellg();
+        std::vector<std::uint8_t> bytes(24);
+        stream.seekg(0);
+        stream.read(reinterpret_cast<char *>(bytes.data()), 24);
+        if (!stream || Text(bytes, 0, 4) != "TES4")
+        {
+            diagnostics.push_back(
+                {DiagnosticKind::InvalidPlugin, path.filename().string(), "Expected a TES4 plugin header."});
+            return false;
+        }
+        const auto payloadSize = U32(bytes, 4);
+        if (length < 24 || payloadSize > static_cast<std::uint64_t>(length) - 24 || payloadSize > kMaxDecodedRecordSize)
+        {
+            diagnostics.push_back({DiagnosticKind::InvalidPlugin, path.filename().string(),
+                                   "TES4 header extends beyond the file or exceeds the safe decoded record size."});
+            return false;
+        }
+        isLight = (U32(bytes, 8) & 0x200U) != 0;
+        std::vector<std::uint8_t> payload(payloadSize);
+        stream.read(reinterpret_cast<char *>(payload.data()), payloadSize);
+        if (!stream)
+        {
+            diagnostics.push_back(
+                {DiagnosticKind::InvalidPlugin, path.filename().string(), "Cannot read TES4 payload."});
+            return false;
+        }
+        ResolvedRecord header{.type = "TES4"};
+        header.raw = PluginRecord{.type = "TES4"};
+        header.raw->filePayload = std::move(payload);
+        header.raw->decodedPayload = header.raw->filePayload;
+        std::string error;
+        if (!ParseSubrecords(*header.raw, header, &masters, error))
+        {
+            diagnostics.push_back({DiagnosticKind::MalformedInput, path.filename().string(), "TES4 " + error});
+            return false;
+        }
+        return true;
+    }
+
     bool DirectPluginReader::Read(const std::filesystem::path &path, std::vector<ResolvedRecord> &records,
                                   std::vector<std::string> &masters, bool &isLight,
                                   std::vector<Diagnostic> &diagnostics, bool includeReferencesAndNavmeshes) const
@@ -297,8 +399,19 @@ namespace navmesh::skyrim::offline
                                    "risking an out-of-memory failure."});
             return false;
         }
-        std::ifstream file(path, std::ios::binary);
-        std::vector<std::uint8_t> b((std::istreambuf_iterator<char>(file)), {});
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        const auto length = file.tellg();
+        std::vector<std::uint8_t> b;
+        if (length >= 0)
+        {
+            b.resize(static_cast<std::size_t>(length));
+            file.seekg(0);
+            file.read(reinterpret_cast<char *>(b.data()), length);
+            if (!file)
+            {
+                b.clear();
+            }
+        }
         if (b.size() < 24 || Text(b, 0, 4) != "TES4")
         {
             diagnostics.push_back(
@@ -315,7 +428,7 @@ namespace navmesh::skyrim::offline
         isLight = (U32(b, 8) & 0x200U) != 0;
         ResolvedRecord header{.type = "TES4"};
         header.raw = PluginRecord{.type = "TES4", .headerRange = {0, 24}, .filePayloadRange = {24, headerEnd - 24}};
-        header.raw->filePayload.assign(b.begin() + 24, b.begin() + headerEnd);
+        header.raw->filePayload = std::vector<std::uint8_t>(b.begin() + 24, b.begin() + headerEnd);
         header.raw->decodedPayload = header.raw->filePayload;
         std::string headerError;
         if (!ParseSubrecords(*header.raw, header, &masters, headerError))
@@ -376,9 +489,14 @@ namespace navmesh::skyrim::offline
                                              .headerRange = {p, 24},
                                              .filePayloadRange = {payload, size},
                                              .compressed = (flags & 0x40000U) != 0};
-                        r.raw->filePayload.assign(b.begin() + payload, b.begin() + next);
+                        r.raw->filePayload = std::vector<std::uint8_t>(b.begin() + payload, b.begin() + next);
+                        std::vector<std::uint8_t> decoded;
                         std::string error;
-                        if (!DecodePayload(b, payload, next, r.raw->compressed, r.raw->decodedPayload, error))
+                        const bool decodedOk =
+                            !r.raw->compressed || DecodePayload(b, payload, next, true, decoded, error);
+                        r.raw->decodedPayload =
+                            r.raw->compressed ? core::SharedBytes(std::move(decoded)) : r.raw->filePayload;
+                        if (!decodedOk)
                         {
                             diagnostics.push_back({r.raw->compressed ? DiagnosticKind::DecompressionFailure
                                                                      : DiagnosticKind::MalformedInput,
@@ -436,42 +554,36 @@ namespace navmesh::skyrim::offline
         {
             std::filesystem::path path;
             std::vector<std::string> masters;
-            std::vector<ResolvedRecord> records;
-            bool light{};
+            bool light{}, metadataValid{};
+            std::vector<Diagnostic> diagnostics;
+        };
+        struct ReadEvent
+        {
+            std::size_t source{};
+            std::optional<Diagnostic> duplicate;
         };
         ResolvedLoadOrder result;
         std::vector<Source> sources;
+        std::vector<ReadEvent> readEvents;
         std::unordered_map<std::string, std::size_t> byName;
         for (std::size_t requestedIndex = 0; requestedIndex < input.plugins.size(); ++requestedIndex)
         {
             const auto &requested = input.plugins[requestedIndex];
             auto path = requested.is_absolute() ? requested : input.dataDirectory / requested;
-            if (input.progress)
-            {
-                input.progress(requestedIndex, input.plugins.size(), path);
-            }
             const auto name = Lower(path.filename().string());
             if (byName.contains(name))
             {
-                result.diagnostics.push_back({DiagnosticKind::DuplicatePlugin, path.filename().string(),
-                                              "The load-order manifest names this plugin more than once."});
+                readEvents.push_back(
+                    {.duplicate = Diagnostic{DiagnosticKind::DuplicatePlugin, path.filename().string(),
+                                             "The load-order manifest names this plugin more than once."}});
                 continue;
             }
             Source source{.path = path};
-            reader.Read(path, source.records, source.masters, source.light, result.diagnostics,
-                        input.indexReferencesAndNavmeshes);
-            if (!input.indexReferencesAndNavmeshes)
-            {
-                std::erase_if(source.records,
-                              [](const auto &record) { return record.type != "WRLD" && record.type != "CELL"; });
-            }
+            source.metadataValid = reader.ReadMetadata(path, source.masters, source.light, source.diagnostics);
             byName.emplace(name, sources.size());
             result.plugins.push_back(path.filename().string());
+            readEvents.push_back({.source = sources.size()});
             sources.push_back(std::move(source));
-        }
-        if (input.progress)
-        {
-            input.progress(input.plugins.size(), input.plugins.size(), {});
         }
         for (const auto &source : sources)
         {
@@ -537,8 +649,33 @@ namespace navmesh::skyrim::offline
         std::unordered_map<std::uint32_t, std::size_t> winners;
         for (std::size_t i = 0; i < sources.size(); ++i)
         {
-            for (auto record : sources[i].records)
+            auto &source = sources[i];
+            if (!source.metadataValid)
             {
+                continue;
+            }
+            if (input.progress)
+            {
+                input.progress(i, sources.size(), source.path);
+            }
+            // Metadata fixes master indices first; transfer records from just one plugin into winners at a time.
+            std::vector<std::string> masters;
+            std::vector<Diagnostic> diagnostics;
+            bool isLight{};
+            std::vector<ResolvedRecord> records;
+            const auto read =
+                reader.Read(source.path, records, masters, isLight, diagnostics, input.indexReferencesAndNavmeshes);
+            source.diagnostics = std::move(diagnostics);
+            if (read && (masters != source.masters || isLight != source.light))
+            {
+                result.diagnostics.push_back(
+                    {DiagnosticKind::InvalidPlugin, source.path.filename().string(),
+                     "Plugin master metadata changed while resolving its records; rerun with coherent inputs."});
+                continue;
+            }
+            for (auto &sourceRecord : records)
+            {
+                auto record = std::move(sourceRecord);
                 const auto global = resolve(i, record.formId);
                 if (!global)
                 {
@@ -626,6 +763,7 @@ namespace navmesh::skyrim::offline
                             }
                         }
                     }
+                    record.winning.navigationChanged = !NavigationEquivalent(record, result.records[found->second]);
                     auto origins = std::move(result.records[found->second].origins);
                     origins.push_back(record.winning);
                     record.origins = std::move(origins);
@@ -638,6 +776,10 @@ namespace navmesh::skyrim::offline
                     result.records.push_back(std::move(record));
                 }
             }
+        }
+        if (input.progress)
+        {
+            input.progress(sources.size(), sources.size(), {});
         }
         std::unordered_map<std::uint32_t, std::size_t> cellsById;
         for (const auto &record : result.records)
@@ -719,7 +861,54 @@ namespace navmesh::skyrim::offline
             }
             result.cells[cell->second].references.push_back(std::move(reference));
         }
+        for (std::size_t index{}; index < result.records.size(); ++index)
+        {
+            const auto &record = result.records[index];
+            if (record.type == "LAND" && record.cellFormId)
+            {
+                result.landIndex[*record.cellFormId].push_back(index);
+            }
+        }
         result.recordIndex = std::move(winners);
+        std::vector<Diagnostic> inputDiagnostics;
+        for (const auto &event : readEvents)
+        {
+            if (event.duplicate)
+            {
+                inputDiagnostics.push_back(*event.duplicate);
+            }
+            else
+            {
+                auto &diagnostics = sources[event.source].diagnostics;
+                inputDiagnostics.insert(inputDiagnostics.end(), std::make_move_iterator(diagnostics.begin()),
+                                        std::make_move_iterator(diagnostics.end()));
+            }
+        }
+        result.diagnostics.insert(result.diagnostics.begin(), std::make_move_iterator(inputDiagnostics.begin()),
+                                  std::make_move_iterator(inputDiagnostics.end()));
+        return result;
+    }
+
+    std::vector<const ResolvedRecord *> ResolvedLoadOrder::LandRecords(std::uint32_t cellId) const
+    {
+        std::vector<const ResolvedRecord *> result;
+        if (const auto found = landIndex.find(cellId); found != landIndex.end())
+        {
+            for (const auto offset : found->second)
+            {
+                result.push_back(&records.at(offset));
+            }
+        }
+        else if (recordIndex.empty())
+        {
+            for (const auto &record : records)
+            {
+                if (record.type == "LAND" && record.cellFormId == cellId)
+                {
+                    result.push_back(&record);
+                }
+            }
+        }
         return result;
     }
 

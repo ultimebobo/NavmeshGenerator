@@ -2294,6 +2294,12 @@ namespace navmesh::core
         {
             return false;
         }
+        return WriteCandidateJson(out, candidate, scene, metadataJson);
+    }
+
+    bool WriteCandidateJson(std::ostream &out, const CandidateNavMesh &candidate, const Scene &scene,
+                            const std::string &metadataJson)
+    {
         const auto &p = candidate.profile;
         out << "{\n  \"schema\": \"navmesh-generator/candidate-navm\",\n  \"schema_version\": \"1.1.0\",\n  "
                "\"metadata\": "

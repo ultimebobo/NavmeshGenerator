@@ -1,0 +1,389 @@
+{
+  "schema": "navmesh-generator/performance-analysis",
+  "schema_version": "1.0.0",
+  "measurement_date": "2026-10-02",
+  "source_commit": "89c272dced6b4e45f44afe9b5738161bdd23250e",
+  "build": "Windows x64, MSVC, xmake releasedbg; optimized native probe",
+  "reproduction": {
+    "plugin": "The Great City of Winterhold v4.esp",
+    "profile": "Default",
+    "input": "active paths from saved output/default/input-report.json",
+    "asset_impacts_in_probe": false
+  },
+  "units": {
+    "bytes": "logical file size or explicitly named allocation/process metric",
+    "seconds": "steady-clock wall time",
+    "memory": "Windows process working-set/private metrics"
+  },
+  "limits": [
+    "No complete plugin rebuild was timed.",
+    "No output plugin or source asset was modified.",
+    "WRLD suppression is a diagnostic counterfactual, not a validated selection policy.",
+    "Existing disk inventory combines historical runs; logical bytes exclude filesystem allocation slack.",
+    "Native resolution timing excludes MO2 import, reports, extraction, and writing.",
+    "Terrain equality checks cover vertices and triangle indices, not every diagnostic/provenance field.",
+    "Recast partition timings use a synthetic flat surface and allocation counting, not a complex game scene.",
+    "Stage speed ratios and target-count ratios must not be multiplied into an end-to-end speedup."
+  ],
+  "resolution_and_selection": {
+    "mode": "resolve",
+    "seconds": 7.22476,
+    "plugins": 7,
+    "records": 1042516,
+    "cells": 73732,
+    "diagnostics": 0,
+    "file_payload_bytes": 266151786,
+    "decoded_payload_bytes": 514948627,
+    "encoded_subrecord_bytes": 514948367,
+    "subrecord_data_bytes": 495518243,
+    "private_bytes": 4023050240,
+    "working_set_bytes": 3905945600,
+    "peak_working_set_bytes": 7124922368,
+    "selected_record_types": {
+      "ACHR": 72,
+      "ACTI": 1,
+      "CELL": 57,
+      "CONT": 3,
+      "DOOR": 1,
+      "LAND": 30,
+      "NAVM": 78,
+      "REFR": 9829,
+      "STAT": 114,
+      "WRLD": 1
+    },
+    "index_seconds": 0.876911,
+    "selection_seconds": 0.218903,
+    "targets_without_asset_impacts": 11202,
+    "targets_with_decoded_navm": 5662,
+    "first_target_supplier_cells": 4,
+    "first_target_supplier_references": 0,
+    "counterfactual_without_wrld_targets": 985,
+    "counterfactual_without_wrld_eligible": 917,
+    "sample_changed_cell_id": 36574,
+    "sample_supplier_cells": 99,
+    "sample_supplier_references": 8812,
+    "sample_unique_models": 711,
+    "sample_unbounded_model_references": 0,
+    "terrain_sample_cells": 16,
+    "terrain_full_scan_seconds": 0.133248,
+    "terrain_index_build_seconds": 0.013979,
+    "terrain_indexed_seconds": 0.0009695,
+    "terrain_geometry_identical": true
+  },
+  "observed_ratios": {
+    "selected_target_count_ratio": 11.37258883248731,
+    "decoded_navm_target_count_ratio": 6.174482006543076,
+    "terrain_lookup_and_extraction_ratio_excluding_index_build": 137.4399174832388,
+    "terrain_ratio_including_index_build": 8.913804060608088,
+    "sample_references_per_unique_model": 12.39381153305204,
+    "flat_recast_watershed_to_monotone_median_ratio": 2.356721266988791
+  },
+  "recast_synthetic_partitions": {
+    "layers": {
+      "samples": 3,
+      "median_seconds": 0.0824484,
+      "peak_recast_allocation_bytes": 40994676,
+      "all_topology_valid": true,
+      "polygon_counts": [
+        2
+      ]
+    },
+    "monotone": {
+      "samples": 3,
+      "median_seconds": 0.0795966,
+      "peak_recast_allocation_bytes": 40994680,
+      "all_topology_valid": true,
+      "polygon_counts": [
+        2
+      ]
+    },
+    "watershed": {
+      "samples": 3,
+      "median_seconds": 0.187587,
+      "peak_recast_allocation_bytes": 45608356,
+      "all_topology_valid": true,
+      "polygon_counts": [
+        2
+      ]
+    }
+  },
+  "local_inventory": {
+    "scope": "read-only reproduction inventory; existing output folder contains mixed historical runs",
+    "plugins": [
+      {
+        "name": "Skyrim.esm",
+        "bytes": 249752131
+      },
+      {
+        "name": "Update.esm",
+        "bytes": 19121864
+      },
+      {
+        "name": "Dawnguard.esm",
+        "bytes": 25884488
+      },
+      {
+        "name": "HearthFires.esm",
+        "bytes": 3979105
+      },
+      {
+        "name": "Dragonborn.esm",
+        "bytes": 64664159
+      },
+      {
+        "name": "Resources - The Great Cities.esp",
+        "bytes": 110973
+      },
+      {
+        "name": "The Great City of Winterhold v4.esp",
+        "bytes": 1478587
+      }
+    ],
+    "worldspace_override_diffs": [
+      {
+        "plugin": "Skyrim.esm",
+        "subrecord_types": [
+          "CNAM",
+          "DATA",
+          "DNAM",
+          "EDID",
+          "FULL",
+          "MNAM",
+          "NAM0",
+          "NAM2",
+          "NAM3",
+          "NAM4",
+          "NAM9",
+          "NAMA",
+          "OFST",
+          "ONAM",
+          "RNAM",
+          "TNAM",
+          "UNAM",
+          "ZNAM"
+        ],
+        "changed_subrecord_types_from_previous": [
+          "CNAM",
+          "DATA",
+          "DNAM",
+          "EDID",
+          "FULL",
+          "MNAM",
+          "NAM0",
+          "NAM2",
+          "NAM3",
+          "NAM4",
+          "NAM9",
+          "NAMA",
+          "OFST",
+          "ONAM",
+          "RNAM",
+          "TNAM",
+          "UNAM",
+          "ZNAM"
+        ]
+      },
+      {
+        "plugin": "Update.esm",
+        "subrecord_types": [
+          "CNAM",
+          "DATA",
+          "DNAM",
+          "EDID",
+          "FULL",
+          "MHDT",
+          "MNAM",
+          "NAM0",
+          "NAM2",
+          "NAM3",
+          "NAM4",
+          "NAM9",
+          "NAMA",
+          "OFST",
+          "ONAM",
+          "RNAM",
+          "TNAM",
+          "UNAM",
+          "ZNAM"
+        ],
+        "changed_subrecord_types_from_previous": [
+          "MHDT",
+          "OFST",
+          "RNAM"
+        ]
+      },
+      {
+        "plugin": "Dawnguard.esm",
+        "subrecord_types": [
+          "CNAM",
+          "DATA",
+          "DNAM",
+          "EDID",
+          "FULL",
+          "MHDT",
+          "MNAM",
+          "NAM0",
+          "NAM2",
+          "NAM3",
+          "NAM4",
+          "NAM9",
+          "NAMA",
+          "OFST",
+          "ONAM",
+          "RNAM",
+          "TNAM",
+          "UNAM",
+          "ZNAM"
+        ],
+        "changed_subrecord_types_from_previous": [
+          "MHDT",
+          "OFST",
+          "RNAM"
+        ]
+      },
+      {
+        "plugin": "HearthFires.esm",
+        "subrecord_types": [
+          "CNAM",
+          "DATA",
+          "DNAM",
+          "EDID",
+          "FULL",
+          "MHDT",
+          "MNAM",
+          "NAM0",
+          "NAM2",
+          "NAM3",
+          "NAM4",
+          "NAM9",
+          "NAMA",
+          "OFST",
+          "ONAM",
+          "RNAM",
+          "TNAM",
+          "UNAM",
+          "ZNAM"
+        ],
+        "changed_subrecord_types_from_previous": [
+          "OFST",
+          "RNAM"
+        ]
+      },
+      {
+        "plugin": "Dragonborn.esm",
+        "subrecord_types": [
+          "CNAM",
+          "DATA",
+          "DNAM",
+          "EDID",
+          "FULL",
+          "MHDT",
+          "MNAM",
+          "NAM0",
+          "NAM2",
+          "NAM3",
+          "NAM4",
+          "NAM9",
+          "NAMA",
+          "OFST",
+          "ONAM",
+          "RNAM",
+          "TNAM",
+          "UNAM",
+          "ZNAM"
+        ],
+        "changed_subrecord_types_from_previous": [
+          "MHDT",
+          "OFST",
+          "RNAM"
+        ]
+      },
+      {
+        "plugin": "The Great City of Winterhold v4.esp",
+        "subrecord_types": [
+          "CNAM",
+          "DATA",
+          "DNAM",
+          "EDID",
+          "FULL",
+          "MHDT",
+          "MNAM",
+          "NAM0",
+          "NAM2",
+          "NAM3",
+          "NAM4",
+          "NAM9",
+          "NAMA",
+          "ONAM",
+          "TNAM",
+          "UNAM",
+          "ZNAM"
+        ],
+        "changed_subrecord_types_from_previous": [
+          "FULL",
+          "MHDT",
+          "OFST",
+          "RNAM",
+          "TNAM",
+          "UNAM"
+        ]
+      }
+    ],
+    "existing_output_bytes_by_directory": {
+      "root_exports": 189574255,
+      ".bsa-cache": 74139945,
+      ".mo2-cache": 32964644
+    },
+    "existing_output_total_bytes": 296678844,
+    "largest_existing_exports": [
+      {
+        "name": "load-order.json",
+        "bytes": 117260120
+      },
+      {
+        "name": "scene_backup.glb",
+        "bytes": 45799340
+      },
+      {
+        "name": "cells.json",
+        "bytes": 7664974
+      },
+      {
+        "name": "geometry.json",
+        "bytes": 7374986
+      },
+      {
+        "name": "input-report.json",
+        "bytes": 6455874
+      },
+      {
+        "name": "loose-assets-1a98a47ce6417298.tsv",
+        "bytes": 4657998
+      },
+      {
+        "name": "loose-assets-2cab6f3478d0d96b.tsv",
+        "bytes": 4657998
+      },
+      {
+        "name": "loose-assets-39948d96e764cef0.tsv",
+        "bytes": 4657998
+      }
+    ],
+    "archive_count_in_saved_manifest": 95,
+    "archive_total_bytes_in_saved_manifest": 20702702306
+  },
+  "local_raw_artifacts": [
+    "output/performance-analysis/probe.cpp",
+    "output/performance-analysis/probe.exe",
+    "output/performance-analysis/plugins.txt",
+    "output/performance-analysis/resolve.json",
+    "output/performance-analysis/recast.jsonl",
+    "output/performance-analysis/audit.py",
+    "output/performance-analysis/inventory.json"
+  ],
+  "validation": {
+    "desktop_build": "xmake build navmesh-offline: passed",
+    "probe_load_order_diagnostics": 0,
+    "documentation": "doxygen Doxyfile: passed without warnings"
+  }
+}

@@ -61,11 +61,17 @@ while each generated NAVM stays clipped to its own target CELL. Oversized model
 bounds extend the geometry suppliers and impact footprint; unknown bounds use
 conservative worldspace coverage.
 
-The load order is parsed once, targets run in spatial order, and a bounded geometry
-cache reuses neighboring extraction. Candidates go under `cells/<FormID>/`, with
-selection, skips and cache statistics in `batch-report.json`. Add
-`--generate-plugin` to write one verified `generated-navmesh.esp`; omit it for
-candidate inspection. Cells without existing NAVM or a nonempty candidate are
+The load order is resolved once, navigation-equivalent overrides are excluded,
+and bounded caches reuse terrain, models, placements, and generated candidates.
+`batch-report.json` checkpoints selection, timings, skips, and cache statistics.
+Add `--generate-plugin` to write one verified `generated-navmesh.esp`; its automatic
+batch output retains reports and the plugin. Choose `--batch-output compact` for
+gzip candidate JSON or `--batch-output full` for candidate JSON/OBJ beneath
+`cells/<FormID>/` and the complete winning-record report. Omit plugin writing for
+candidate inspection. `--estimate-only` samples the selected scope before a full
+rebuild and caches the sampled work. Shared cache location and disk retention,
+working-memory admission, and worker settings are exposed and persisted in the
+desktop UI; see [performance improvements](docs/performance-improvements.md). Cells without existing NAVM or a nonempty candidate are
 reported as skipped. Incompatible generated border partitions stop patch writing.
 See [batch rebuilding](docs/batch-rebuilding.md) for the baseline contract,
 outputs, caching and writer limitations.
@@ -144,9 +150,9 @@ The CLI writes files into the target output directory:
 - `scene-report.html` — standalone classification report grouped by support-source and geometry-coverage status. Its support-triangle indices join `analysis.json` to `geometry.json`; this report does not change classifications.
 - `analysis.json` — stable, report-only discrepancy evidence: seven-point polygon coverage, selected source type and confidence, explicit `ambiguous`/`out_of_coverage` states, topology findings, and manual-review repair candidates. It never contains replacement NAVM geometry or a plugin write instruction.
 - With `--generate-candidate`, Recast creates a neutral candidate NAVM from supported terrain and collision. `candidate-navm.json` contains profile parameters, approximate source-triangle provenance, regions, matched door triangles, reciprocal border-link matches, adjacency, statistics, and topology validation. `candidate-navm.obj` is a mesh view, and `scene.glb` gains a blue-green Candidate NAVM layer beside the existing scene layers. These files do not contain plugin records.
-- `input-report.json` — MO2 profile snapshot and virtual-file winners, emitted first for every MO2 run.
-- `load-order.json` — when using `--load-order`, every winning record with its plugin and ordered origin chain.
-- With `--generate-plugin`, `generated-navmesh.esp` overrides existing NAVM records or allocates new records for uncovered cells. The ESP receives the ESL flag when its master table and new identities fit a light plugin. This option also generates candidate exports. The writer refuses to replace an existing output file and verifies every NAVM by reading it back.
+- `input-report.json` — MO2 profile snapshot, emitted first for every MO2 run. Compact/plugin-only batches reference a shared loose-asset catalog; full inspection includes every winner.
+- `load-order.json` — full inspection of resolved inputs: every winning record with its plugin and ordered origin chain. Compact/plugin-only batches omit this table.
+- With `--generate-plugin`, `generated-navmesh.esp` overrides existing NAVM records or allocates new records for uncovered cells. The ESP receives the ESL flag when its master table and new identities fit a light plugin. Single-cell writing also generates candidate exports; batch writing follows `--batch-output`. The writer refuses to replace an existing output file and verifies every NAVM by reading it back.
 - With `--copy-plugin` in Plugin scope, the selected plugin's original filename is used for a complete copy with generated NAVMs. Source flags and master indices are preserved. `batch-report.json` records `copy_plugin`; when no eligible navigation is generated, no plugin is written.
 
 Every JSON export contains a versioned `metadata` block. OBJ and HTML exports have an adjacent `<export>.metadata.json` sidecar. The metadata identifies the tool version, input plugin, selected cell, coordinate convention, source coverage, and known limitations. Its schema is [docs/schemas/export-metadata.schema.json](docs/schemas/export-metadata.schema.json); coordinate details are in [docs/coordinate-system.md](docs/coordinate-system.md).
@@ -159,6 +165,11 @@ To write a plugin, use a resolved MO2 profile or the developer load-order route,
 
 Record the command inputs using [docs/run-manifest.example.json](docs/run-manifest.example.json) before a benchmark. The current CLI does not consume this file; map its fields to the existing command-line flags so milestone 0 does not alter parser input behavior.
 
+For measured plugin-rebuild costs and prioritized ways to reduce runtime and disk
+usage, see [implemented improvements](docs/performance-improvements.md) and the
+[before/after snapshot](docs/performance-improvements-measurements.json). The
+[original analysis](docs/performance-analysis.md) preserves the baseline investigation.
+
 ## Reproducible fixtures and optional game checks
 
 The repository contains only synthetic, redistributable fixture builders; it does not include Skyrim assets. See [fixtures/README.md](fixtures/README.md) for the policy and [docs/benchmarks.json](docs/benchmarks.json) for the local benchmark reference manifest. To opt into the read-only local-game parser smoke test, configure `SKYRIM_DATA_DIR` as described in [tests/integration/README.md](tests/integration/README.md). Without it, the complete test suite still runs and skips that check.
@@ -170,7 +181,7 @@ The repository contains only synthetic, redistributable fixture builders; it doe
 - Compressed indexed records are zlib-decoded with declared-size and boundary checks while their original bytes remain retained. Malformed records and unknown NAVM versions are explicit diagnostics, never best-effort geometry.
 - Geometry extraction resolves MO2's winning loose NIFs from enabled mods and Overwrite, then caches requested meshes from enabled mod and game BSAs on demand. This includes meshes supplied by a separate resources mod. The supported collision subset is reachable `bhkMoppBvTreeShape`/`bhkListShape` wrappers containing packed strips, `bhkNiTriStripsShape`, or Skyrim SE `bhkCompressedMeshShape` chunks; their triangle vertices receive the Havok rigid-body transform, then reference scale, Skyrim's placed-reference rotation matrix from the `DATA` angles (radians), and translation. A positive reference Z angle rotates model-local +X toward world -Y. Other Havok primitives are reported as unsupported rather than guessed. Render meshes are retained only as 0.35-confidence fallback when no supported collision exists. Winning placed records flagged initially disabled or deleted are excluded from both geometry layers and reported in coverage. Effects, furniture, actors, and path-marked animated/FX references are excluded by policy.
 - Install the BSA bridge dependencies with `python -m pip install -r tools/requirements.txt` before extracting archived assets. If Python is not on PATH, set `NAVMESH_PYTHON` to the Python executable.
-- Archived assets are cached under `<output>/.bsa-cache`; delete that directory to rebuild the cache.
+- Archived assets and private candidate evidence use a shared cache, configurable with `--asset-cache` and bounded by `--cache-budget-mib`. Existing legacy output caches remain untouched. See [cache lifetime and output modes](docs/performance-improvements.md).
 - Exterior `LAND` decoding supports the collision-relevant VHGT height grid only: 33×33 samples per cell, 128-unit spacing, and world origin `(cellX * 4096, cellY * 4096)`. It intentionally excludes visual LOD and texture layers. Use `--terrain-only` with a resolved load order to export only that terrain diagnostic surface. Missing or malformed `LAND` records are reported and produce no replacement plane.
 - Some Skyrim record variants and non-standard modded data layouts may still be rejected or reported as unsupported. NAVM-only patches leave localized parent records in the load order; plugin copies preserve source records and require the original localization resources.
 - Discrepancy detection is deliberately conservative. Collision support has priority over terrain, terrain has priority over render fallback, and only sufficiently consistent samples can classify a polygon. Ambiguous or out-of-coverage polygons are displayed as limitations rather than defects. Repair candidates remain report-only/manual-review evidence.

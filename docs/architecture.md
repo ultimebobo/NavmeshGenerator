@@ -137,6 +137,31 @@ ownership, coordinate, and failure invariants where keeping the sequence
 together makes it easier to review. The repository formatting configuration and
 [agent guidelines](../AGENTS.md) define the shared readability and SOLID rules.
 
+## Shared ownership, asset reuse, and candidate storage
+
+`core/io/SharedBytes` owns immutable payload ranges shared by raw/decoded records
+and subrecords; incremental resolver ownership avoids retaining all source payload
+tables. `core/io/ContentHash` supplies SHA-256 cache dependency identities.
+`ResolvedLoadOrder` owns lookup indexes for FormID and CELL-to-LAND records.
+Navigation-equivalence comparison belongs to resolution; affected-cell indexing
+consumes its compact change evidence while preserving historical placements.
+
+`skyrim/extraction/asset_cache` resolves versioned archive-provider snapshots and
+evicts only owned generated files. The project-owned `tools/bsa_index.py` boundary
+indexes archive metadata and reads requested entry ranges. MO2 catalogs share the
+cache root and preserve virtual winner priority. `ModelGeometryCache` retains
+immutable decoded and placed geometry under one byte budget. `GeometryExtraction`
+and `TerrainExtraction` keep support geometry solely in their scene meshes.
+
+`app/batch_generation` owns one isolated Recast task, candidate validation,
+authored stitching, evidence compaction, and spooling. `app/candidate_cache` owns
+the versioned private gzip layout and dependency fingerprint, bounded reads,
+and cache compatibility checks. `app/candidate_artifacts` streams public JSON into
+gzip while preserving its schema. `app/batch_runner` owns sampling, admission,
+ordered collection/checkpoints, global border reconciliation, export policy, and
+combined writing. Active audit pins survive cache eviction until export completes.
+See [performance settings and limits](performance-improvements.md).
+
 ## Affected-cell batch rebuilding
 
 The resolver retains compact placement evidence for every record origin and
@@ -144,9 +169,10 @@ builds a FormID lookup index. `CellImpactIndex` indexes exterior cells by
 worldspace and coordinates, buckets persistent references by physical position,
 and follows changed base records to their placed uses. Plugin/load-order scopes
 select conservative affected targets and model-bound influence halos. The shared
-runner resolves inputs once, generates one CELL at a time and reuses a bounded
-LRU cache of source-cell geometry. Candidate evidence is compacted after each
-scene is released. The batch writer serializes all replacements together and
+runner resolves inputs once, extracts in target order, and admits independent
+generation tasks within worker and estimated-byte limits. Bounded terrain,
+model-local and transformed-placement caches reuse geometry. Candidate audit
+evidence is compacted, spooled to private gzip data, and released from RAM. The batch writer serializes all replacements together and
 verifies reciprocal generated triangle targets before finalizing one ESP.
 Selection and output contracts are in [batch rebuilding](batch-rebuilding.md).
 

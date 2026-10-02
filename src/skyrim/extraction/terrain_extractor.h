@@ -11,8 +11,8 @@ namespace navmesh::skyrim::offline
     inline constexpr float kLandCellSize = 4096.0F;
     struct TerrainExtraction
     {
+        /// Sole owner of decoded world-space terrain and its provenance.
         core::Scene scene;
-        core::Mesh mesh;
         std::size_t landRecordsFound{};
         std::size_t landRecordsDecoded{};
         std::size_t landRecordsMissing{};

@@ -83,6 +83,38 @@ namespace navmesh::app
             {
                 options.outputDetail = argv[++index];
             }
+            else if (argument == "--batch-output" && index + 1 < argc)
+            {
+                options.batchOutput = argv[++index];
+            }
+            else if (argument == "--asset-cache" && index + 1 < argc)
+            {
+                options.assetCache = argv[++index];
+            }
+            else if ((argument == "--cache-budget-mib" || argument == "--working-memory-mib" ||
+                      argument == "--workers") &&
+                     index + 1 < argc)
+            {
+                const std::string value = argv[++index];
+                std::size_t end{};
+                const auto number = std::stoull(value, &end);
+                if (value.empty() || value.front() == '-' || end != value.size())
+                {
+                    throw std::invalid_argument(argument + " requires a nonnegative integer");
+                }
+                if (argument == "--cache-budget-mib")
+                {
+                    options.cacheBudgetMiB = number;
+                }
+                else if (argument == "--working-memory-mib")
+                {
+                    options.workingMemoryMiB = number;
+                }
+                else
+                {
+                    options.workers = number;
+                }
+            }
             else if (argument == "--neighboring-cell-radius" && index + 1 < argc)
             {
                 options.neighboringCellRadius = std::stoi(argv[++index]);
@@ -95,6 +127,10 @@ namespace navmesh::app
             else if (argument == "--diagnostics")
             {
                 options.diagnostics = true;
+            }
+            else if (argument == "--estimate-only")
+            {
+                options.estimateOnly = true;
             }
             else if (argument == "--terrain-only")
             {
@@ -179,6 +215,11 @@ namespace navmesh::app
                 }
                 options.rebuildScope = RebuildScope::LoadOrder;
                 options.generateCandidate = true;
+            }
+            else if (argument == "--batch-output" || argument == "--asset-cache" || argument == "--cache-budget-mib" ||
+                     argument == "--working-memory-mib" || argument == "--workers")
+            {
+                throw std::invalid_argument(argument + " requires a value");
             }
             else if (argument == "--rebuild-plugin")
             {

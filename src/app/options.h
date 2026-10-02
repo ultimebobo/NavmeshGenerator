@@ -19,7 +19,6 @@ namespace navmesh::app
     };
 
     /// Shared CLI/desktop inputs for cell analysis and affected-cell rebuild runs.
-    /// Shared CLI/desktop inputs for cell analysis and affected-cell rebuild runs.
     struct Options
     {
         std::filesystem::path plugin, data, loadOrder, mo2, modsDirectory, output{"."}, exportGeometry, exportAnalysis,
@@ -45,9 +44,20 @@ namespace navmesh::app
         core::RegionPartitioningAlgorithm partitioningAlgorithm{core::RegionPartitioningAlgorithm::Watershed};
         /// Exterior geometry/impact halo in CELL units; generation always includes
         /// adjacent geometry and remains clipped to each selected CELL.
-        /// Exterior geometry/impact halo in CELL units; generation always includes
-        /// adjacent geometry and remains clipped to each selected CELL.
         int neighboringCellRadius{};
+        /// Batch artifacts: auto uses plugin_only for plugin writing/estimates and full for inspection.
+        /// full emits JSON/OBJ; compact emits gzip JSON; plugin_only emits the plugin and run reports.
+        std::string batchOutput{"auto"};
+        /// Shared generated asset/candidate cache root; empty uses system temporary storage.
+        std::filesystem::path assetCache;
+        /// Disk retention budget for generated cache files, in MiB; excludes requested exports.
+        std::size_t cacheBudgetMiB{2048};
+        /// Combined model/placement cache and admitted generation work budget, in MiB.
+        std::size_t workingMemoryMiB{512};
+        /// Maximum independent Recast tasks; extraction and final serialization remain ordered.
+        std::size_t workers{1};
+        /// Sample eligible batch targets for a cost estimate, checkpoint/cache results, and finish before plugin writing.
+        bool estimateOnly{};
         std::optional<std::array<float, 4>> sceneBounds;
         float surfaceSearchRadius{64.0F}, maxSupportDistance{32.0F}, maxSlope{45.0F};
     };
