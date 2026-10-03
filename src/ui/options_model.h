@@ -4,6 +4,14 @@
 
 namespace navmesh::ui
 {
+    /** Restore the advanced numerical inputs from the shared application defaults.
+     * @param draft Desktop choices updated in place, including hidden numerical controls.
+     * Resets movement, voxel, contour, analysis, neighboring-cell and resource-budget
+     * values. Paths, target selection, output choices, toggles and partitioning remain
+     * selected. The desktop saves the resulting draft through its normal persistence path.
+     */
+    void ResetAdvancedNumericalOptions(app::Options &draft);
+
     /// Supported MO2 CELL identifiers in the desktop workflow.
     enum class CellIdentification
     {

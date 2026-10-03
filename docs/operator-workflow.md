@@ -64,6 +64,11 @@ uses degrees. Values must be finite and conversions must fit Recast's voxel
 counts and packed vertical spans. Horizontal voxel size is a requested minimum;
 the generator increases it for large scenes to bound the grid.
 
+**Reset** restores all advanced numerical inputs from the shared application
+defaults and saves them, including currently hidden fields. It covers generation,
+analysis, neighboring-cell radius, resource budgets and worker count. Paths,
+target and output selections, switches and region partitioning stay selected.
+
 | CLI input | Advanced setting | Meaning |
 | --- | --- | --- |
 | `--agent-radius` | Agent radius | Horizontal agent footprint. |
@@ -83,6 +88,26 @@ the generator increases it for large scenes to bound the grid.
 Layer partitioning does not use the merge-area multiplier, so that input is
 hidden for Layers. Requested settings appear in candidate JSON. Cached candidates
 include these settings in their fingerprint; changing them invalidates reuse.
+
+For incomplete stairs, use **Reset** to restore the current numerical defaults,
+then verify the climb limit against the actual risers. A climb limit below the
+risers disconnects the flight; reachability filtering can then remove its
+unanchored portion. Coarse horizontal voxels can combine
+several treads, and coarse vertical voxels round floor heights and the climb
+limit. Recast rounds the climb limit down to a whole number of vertical voxels;
+candidate warnings report the effective limit when it differs from the requested
+value. Warnings also identify adaptive horizontal resolution. Use a climb limit
+that fits the actual risers, rather than allowing larger obstacles to become
+traversable. Agent radius still trims exposed edges, so complete coverage does
+not mean navigation reaches the outer edge of every tread.
+The default movement profile accommodates taller and slightly uneven stair
+risers while retaining normal standing clearance and agent-radius erosion.
+
+The generator samples height detail after building contours so landings and
+stairs follow the surviving walkable floor. This cannot recover geometry that
+was lost during voxelization, lacks supported collision, or fails clearance.
+The redistributable [obstacle fixture](../fixtures/README.md#stairs-and-overpasses)
+provides repeatable coverage and connectivity checks plus a visual scene.
 
 ## MO2 command input
 

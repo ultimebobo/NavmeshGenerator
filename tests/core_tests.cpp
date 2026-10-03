@@ -1705,7 +1705,7 @@ namespace
         scene.mesh.triangles = {{{0, 1, 2}}, {{0, 2, 3}}};
         scene.triangleProvenance = {{0, 0, {}}, {0, 1, {}}};
         const NavigationProfile profile{};
-        Require(profile.name == "human" && profile.stepHeight == 28.0F);
+        Require(profile.name == "human" && profile.stepHeight == 36.0F);
         const CandidateGenerator &generator = RecastCandidateGenerator{};
         const AABB cellBounds{.min = {0, 0, -100}, .max = {1024, 1024, 100}};
         const auto generated = generator.Generate(scene, profile, cellBounds, {});
@@ -1839,7 +1839,7 @@ namespace
         const auto stepped =
             generator.Generate(stairs, profile, std::nullopt, {{.referenceId = 0x201, .position = {12, 48, 0}}});
         Require(stepped.topology.valid && stepped.regions.size() == 1);
-        Require(stepped.mesh.polygons.size() == 2);
+        Require(!stepped.mesh.polygons.empty());
         const auto [low, high] = std::minmax_element(stepped.mesh.vertices.begin(), stepped.mesh.vertices.end(),
                                                      [](Vec3 a, Vec3 b) { return a.z < b.z; });
         Require(high->z - low->z > 200.0F);
@@ -1946,9 +1946,21 @@ namespace
 void TestPerformanceCaches();
 
 void TestDesktopOptionsAndRecastSettings();
+void TestNavigationObstacleFixture();
+void ExportNavigationObstacleFixture(const std::filesystem::path &directory);
 
 int main(int argc, char **argv)
 {
+    if (argc > 2 && std::string_view(argv[1]) == "--export-navigation-fixture")
+    {
+        ExportNavigationObstacleFixture(argv[2]);
+        return 0;
+    }
+    if (argc > 1 && std::string_view(argv[1]) == "--obstacles-only")
+    {
+        TestNavigationObstacleFixture();
+        return 0;
+    }
     if (argc > 1 && std::string_view(argv[1]) == "--performance-only")
     {
         TestPerformanceCaches();
@@ -2010,6 +2022,7 @@ int main(int argc, char **argv)
     TestCombinedColorLayeredGlb();
     TestCandidateGeneration();
     TestRecastSceneGeneration();
+    TestNavigationObstacleFixture();
     if (std::filesystem::exists("output/riverwood03-recast-repro/geometry.obj"))
         TestLocalStairs("output/riverwood03-recast-repro/geometry.obj");
     navmesh::core::Mesh mesh{ .vertices = { { -1.0F, 2.0F, 3.0F }, { 4.0F, -5.0F, 6.0F } } };

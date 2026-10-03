@@ -27,7 +27,8 @@ namespace navmesh::core
         /// Finite walking slope limit in degrees, nonnegative and below a right angle.
         float maxSlopeDegrees{45.0F};
         /// Finite, nonnegative maximum traversable step height in Skyrim world units.
-        float stepHeight{28.0F};
+        /// Recast rounds down to whole vertical voxels; finer voxels preserve small climbs.
+        float stepHeight{36.0F};
         /// Finite, positive headroom in Skyrim world units; Recast uses the larger of this and agentHeight.
         float clearance{128.0F};
         /// Finite, positive distance tolerance for geometry and authored-border matching in Skyrim units.
@@ -42,8 +43,9 @@ namespace navmesh::core
     struct RecastSettings
     {
         /// Finite, positive requested horizontal voxel size in Skyrim units; adaptive sizing may increase it.
+        /// Coarse voxels can combine several stair treads and break walkable connectivity.
         float cellSize{4.0F};
-        /// Vertical voxel size in Skyrim units; must be finite and positive.
+        /// Vertical voxel size in Skyrim units; must be finite and positive. Quantizes floor heights and climb.
         float cellHeight{2.0F};
         /// Maximum contour deviation in horizontal voxels; finite and nonnegative.
         float maxSimplificationError{2.0F};

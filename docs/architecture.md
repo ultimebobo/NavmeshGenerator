@@ -53,8 +53,11 @@ geometry and a neutral candidate navmesh. The shared CLI/Windows run path uses
 terrain and supported collision triangles, converts Skyrim Z-up world positions
 to Recast Y-up coordinates, rasterizes a supported exterior halo around the target CELL,
 filters walkable spans, erodes them by
-agent radius, then builds regions, contours, and a polygon mesh. Recast polygons
-are triangulated and clipped to the target CELL in the project's neutral model for JSON, OBJ, and the
+agent radius, then builds regions, contours, a polygon mesh and floor-height
+detail triangles. Authoritative vertical collision faces remain rasterization
+input as obstructions. Height detail samples the surviving compact heightfield;
+shared detail-patch vertices are joined before neutral adjacency is built.
+Detail triangles are clipped to the target CELL in the project's neutral model for JSON, OBJ, and the
 `Candidate NAVM` GLB layer. Eligible generated geometry can enter the guarded
 plugin writer. The application then matches selected exterior boundary edges to
 adjacent NAVM edges in the resolved load order and records reciprocal targets.

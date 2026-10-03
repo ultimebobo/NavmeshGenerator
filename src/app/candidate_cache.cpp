@@ -23,7 +23,7 @@ namespace navmesh::app::detail
     namespace
     {
         // Private cache layout is deliberately versioned, distinct from supported inspection/export formats.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-3/recast-pipeline-6";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-3/recast-pipeline-7";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)

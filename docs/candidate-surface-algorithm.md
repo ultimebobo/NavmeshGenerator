@@ -8,9 +8,11 @@ remain useful as comparison evidence; they do not describe the active run path.
 The Recast adapter consumes supported terrain and collision, clips input to a supported halo around the
 selected exterior CELL, converts Skyrim world Z-up to Recast Y-up, and runs Recast's voxel rasterization, walkability
 filters, radius erosion, configurable region partitioning, contour construction,
-and polygon mesh construction. Region partitioning defaults to watershed; the
+polygon mesh construction, and floor-height detail sampling. Vertical collision
+faces remain rasterization input as obstructions, even though their horizontal
+projection has no area. Region partitioning defaults to watershed; the
 CLI and Windows UI also expose monotone and layer partitioning. The selected
-strategy is recorded in `candidate-navm.json`. It triangulates Recast polygons for the neutral
+strategy is recorded in `candidate-navm.json`. It exports Recast height-detail triangles for the neutral
 candidate JSON/OBJ and combined GLB. Horizontal voxel size grows with the
 extracted area to limit grid dimensions. Finer voxels resolve narrow stair treads,
 while larger extracted areas can lose them. The navigation profile supplies
@@ -22,27 +24,34 @@ regions below the profile's minimum area are removed. Watershed and monotone
 partitioning can merge small adjacent regions; layer partitioning does not use
 the merge threshold. Recast converts the area thresholds to horizontal voxel
 cells. This filters small orphan surfaces before polygon construction.
-Long contour edges can still produce thin triangles on irregular boundaries,
-so scene exports need inspection. On a synthetic jagged corridor, these settings
-produced 39 triangles instead of 50 with the 1.3-voxel, six-vertex-polygon
-configuration; the worst normalized triangle quality rose from 0.16 to 0.42.
-This comparison is a geometry fixture, not a claim about every game scene.
+The compact heightfield stays alive through detail construction. Sampling
+spacing scales with horizontal voxel size and height error with vertical voxel
+size. Detail vertices use world coordinates and patch-local triangle indices;
+conversion restores Skyrim axes, removes Recast's additional height offset, and joins shared
+patch vertices before adjacency and reachability filtering. Landings and stair
+interiors therefore retain floor evidence beyond the contour corners. Long
+contour edges and detail sampling limits still require scene inspection.
 
-A synthetic 16-step straight staircase with 12-unit
-treads and 24-unit rises produces one connected region and two output triangles
-from 32 source triangles. With a 12-voxel maximum contour edge, it produced ten
-output triangles. A flat square of two source triangles produces two output
-triangles instead of 62. Both fixtures pass candidate topology validation.
+The [synthetic obstacle fixture](../fixtures/README.md#stairs-and-overpasses)
+checks central tread heights and landing connectivity for narrow, rotated and
+switchback stairs, open and obstructed underpasses, separated road/deck levels,
+stair access to a bridge, and nontraversable oversized steps. It runs with every
+supported partitioning strategy and exports the same scene for visual review.
+A corner descent with taller uneven risers checks the upper street, every tread,
+lower landing and under-bridge road as one shared-edge component. Its exterior
+variant has no doors and must be anchored by true street boundary edges after
+CELL clipping. An insufficient climb must disconnect that lower route.
+Coarse voxels can erase valid treads before detail sampling; climb is rounded
+down to whole vertical voxels. Candidate warnings report quantization and
+adaptive horizontal resolution instead of silently presenting requested values
+as the effective constraints.
 
-With the old climb, Recast split the isolated stair collision into five
-regions. The 28-unit setting joined it into one region, including when the test
-uses the wider extracted scene bounds. The slope and radius settings were
-unchanged: the walkable tread faces are flat and the normal radius fits. A
-full CLI rerun of Riverwood03 with one neighboring-cell ring found three
-placements of that stair model. With the historical 18-unit climb, each placement's candidate polygons
-appeared in two connected regions. With the tested 28-unit climb, polygons
-from all three placements joined one connected region. These are local game-data
-measurements; the source assets are not committed.
+Local stair collision checks exercise isolated placements and wider extracted
+scene bounds with the current movement defaults. The tread faces are flat and
+the normal agent radius fits; a climb below their risers separates the landings.
+These optional checks consume locally supplied game-data exports. The source
+assets are not committed; the synthetic fixtures provide portable regression
+coverage.
 
 After polygon construction and CELL clipping, the active generator retains only
 shared-edge components reaching a matched door or a boundary edge on the selected

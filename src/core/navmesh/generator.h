@@ -51,7 +51,8 @@ namespace navmesh::core
     class RecastCandidateGenerator final : public CandidateGenerator
     {
       public:
-        /** Rasterize authoritative Skyrim-world terrain and collision and retain only
+        /** Rasterize authoritative Skyrim-world terrain and collision, including vertical
+         * obstruction faces, and sample floor heights into detail triangles. Retain only
          * walkable components with a shared-edge path to a matched door or exterior
          * boundary edge. Border anchors do not require an authored neighboring portal.
          * @param scene Geometry with complete triangle provenance in Skyrim world coordinates.
@@ -60,7 +61,8 @@ namespace navmesh::core
          * @param exits Enabled placed DOOR references in Skyrim world coordinates.
          * @param partitioningAlgorithm Recast region strategy; defaults to watershed.
          * @param settings Voxel and contour controls; invalid settings throw before voxel allocation.
-         * @return Candidate mesh and evidence, empty when no component is anchored;
+         * @return Candidate mesh and evidence, with warnings for adaptive horizontal
+         * resolution and downward climb quantization; empty when no component is anchored;
          * throws on invalid input or a Recast build failure.
          */
         [[nodiscard]] CandidateNavMesh Generate(

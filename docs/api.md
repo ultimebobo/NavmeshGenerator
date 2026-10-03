@@ -31,7 +31,10 @@ this reference.
   interface. `RecastCandidateGenerator` is the application implementation and
   links against the Recast Navigation submodule under `lib/recastnavigation`.
   It clips output after exterior-halo rasterization and retains only shared-edge
-  components reaching a matched door or an exterior boundary edge.
+  components reaching a matched door or an exterior boundary edge. Vertical
+  collision faces contribute obstruction evidence; height-detail triangles
+  follow the compact heightfield instead of interpolating only contour corners.
+  Candidate warnings identify adaptive voxel width and climb quantization.
 - `navmesh::core::StitchCandidateBorders`: preserves unlinked regions and matches
   authored border edges, coalescing compatible generated boundary subdivisions
   and splitting containing edges with consistent region, source, contour, door,
@@ -47,6 +50,9 @@ this reference.
   controls, background shared-run execution, progress and safe cancellation.
 - `navmesh::ui::PrepareDesktopOptions`: rendering-independent contextual option
   preparation for cell, plugin, load-order and catalog-export actions.
+- `navmesh::ui::ResetAdvancedNumericalOptions`: restores shared numerical
+  defaults throughout the desktop draft, including hidden controls; the desktop
+  persists the result through its ordinary settings writer.
 - `navmesh::core::RecastSettings`, `NavigationProfile` and `ValidateRecastSettings`:
   shared movement, voxel, contour and region controls with finite/range validation.
 - `navmesh::app::detail::RunBatch`: affected-cell orchestration with bounded

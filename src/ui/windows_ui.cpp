@@ -126,7 +126,8 @@ namespace
                          &profile.agentHeight},
             NumericField{"agent_clearance", "Agent clearance",
                          "Required headroom in Skyrim units; combined with height.", &profile.clearance},
-            NumericField{"agent_step_height", "Step height", "Maximum traversable climb in Skyrim units.",
+            NumericField{"agent_step_height", "Step height",
+                         "Maximum traversable climb in Skyrim units, rounded down to whole vertical voxels.",
                          &profile.stepHeight},
             NumericField{"agent_max_slope", "Walkable slope", "Maximum walking slope in degrees, below a right angle.",
                          &profile.maxSlopeDegrees},
@@ -136,9 +137,12 @@ namespace
                          "Positive distance tolerance for output geometry and border matching, in Skyrim units.",
                          &profile.weldTolerance},
             NumericField{"recast_cell_size", "Horizontal voxel size",
-                         "Requested voxel width in Skyrim units. Large scenes increase it to bound grid dimensions.",
+                         "Requested voxel width in Skyrim units. Coarse voxels can lose narrow stair treads. "
+                         "Large scenes increase it to bound grid dimensions.",
                          &recast.cellSize},
-            NumericField{"recast_cell_height", "Vertical voxel size", "Positive voxel height in Skyrim units.",
+            NumericField{"recast_cell_height", "Vertical voxel size",
+                         "Positive voxel height in Skyrim units. Finer voxels preserve small steps and headroom; "
+                         "step height is rounded down to whole voxels.",
                          &recast.cellHeight},
             NumericField{"recast_simplification_error", "Contour simplification error",
                          "Maximum contour deviation in horizontal voxels.", &recast.maxSimplificationError},
@@ -523,6 +527,12 @@ namespace
             return;
         }
         BeginCard("advanced", "PERFORMANCE & GEOMETRY", "Distances use Skyrim units; areas use square Skyrim units.");
+        if (ImGui::Button("Reset"))
+        {
+            navmesh::ui::ResetAdvancedNumericalOptions(options);
+            SaveSettings(workspace);
+        }
+        Help("Restore all advanced numerical values to the application defaults, including hidden controls.");
         TextField(workspace, window, "mods", "Moved mods folder (optional)",
                   "Recovery location for moved MO2 mod folders", true);
         TextField(workspace, window, "asset_cache", "Shared cache folder (optional)",

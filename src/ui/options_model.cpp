@@ -5,6 +5,28 @@
 
 namespace navmesh::ui
 {
+    void ResetAdvancedNumericalOptions(app::Options &draft)
+    {
+        const app::Options defaults;
+        draft.navigationProfile.agentRadius = defaults.navigationProfile.agentRadius;
+        draft.navigationProfile.agentHeight = defaults.navigationProfile.agentHeight;
+        draft.navigationProfile.clearance = defaults.navigationProfile.clearance;
+        draft.navigationProfile.maxSlopeDegrees = defaults.navigationProfile.maxSlopeDegrees;
+        draft.navigationProfile.stepHeight = defaults.navigationProfile.stepHeight;
+        draft.navigationProfile.minimumRegionArea = defaults.navigationProfile.minimumRegionArea;
+        draft.navigationProfile.weldTolerance = defaults.navigationProfile.weldTolerance;
+        draft.navigationProfile.contourSimplificationTolerance =
+            defaults.navigationProfile.contourSimplificationTolerance;
+        draft.recastSettings = defaults.recastSettings;
+        draft.surfaceSearchRadius = defaults.surfaceSearchRadius;
+        draft.maxSupportDistance = defaults.maxSupportDistance;
+        draft.maxSlope = defaults.maxSlope;
+        draft.neighboringCellRadius = defaults.neighboringCellRadius;
+        draft.cacheBudgetMiB = defaults.cacheBudgetMiB;
+        draft.workingMemoryMiB = defaults.workingMemoryMiB;
+        draft.workers = defaults.workers;
+    }
+
     app::Options PrepareDesktopOptions(const app::Options &draft, CellIdentification identification, bool listOnly)
     {
         auto result = draft;

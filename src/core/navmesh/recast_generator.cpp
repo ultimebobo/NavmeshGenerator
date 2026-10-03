@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <map>
 #include <memory>
@@ -22,6 +23,15 @@ namespace
     [[nodiscard]] float Cross(Vec3 a, Vec3 b, Vec3 c)
     {
         return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    }
+
+    /// Degeneracy is three-dimensional: upright collision faces still obstruct movement.
+    [[nodiscard]] bool HasTriangleArea(Vec3 a, Vec3 b, Vec3 c)
+    {
+        const auto ab = b - a;
+        const auto ac = c - a;
+        const Vec3 normal{ab.y * ac.z - ab.z * ac.y, ab.z * ac.x - ab.x * ac.z, ab.x * ac.y - ab.y * ac.x};
+        return normal.x * normal.x + normal.y * normal.y + normal.z * normal.z > 0.00000001F;
     }
 
     [[nodiscard]] bool HeightAt(Vec3 point, Vec3 a, Vec3 b, Vec3 c, float &height)
@@ -215,7 +225,7 @@ namespace
             std::array<Vec3, 3> points{scene.mesh.vertices[tri.vertices[0]], scene.mesh.vertices[tri.vertices[1]],
                                        scene.mesh.vertices[tri.vertices[2]]};
             const float area = Cross(points[0], points[1], points[2]);
-            if (std::abs(area) < 0.0001F)
+            if (!HasTriangleArea(points[0], points[1], points[2]))
             {
                 ++statistics.rejectedDegenerate;
                 continue;
@@ -229,7 +239,7 @@ namespace
             for (std::size_t corner = 1; corner + 1 < clipped.size(); ++corner)
             {
                 const std::array face{clipped[0], clipped[corner], clipped[corner + 1]};
-                if (Cross(face[0], face[1], face[2]) <= 0.0001F)
+                if (!HasTriangleArea(face[0], face[1], face[2]))
                 {
                     continue;
                 }
@@ -304,6 +314,8 @@ namespace
         config.mergeRegionArea =
             static_cast<int>(std::ceil(settings.mergeRegionAreaMultiplier * (profile.minimumRegionArea / voxelArea)));
         config.maxVertsPerPoly = 3;
+        config.detailSampleDist = cs * 6;
+        config.detailSampleMaxError = ch;
         config.bmin[0] = bounds.min.x - cs * 2;
         config.bmin[1] = bounds.min.z - ch * 2;
         config.bmin[2] = bounds.min.y - cs * 2;
@@ -314,8 +326,8 @@ namespace
         return config;
     }
 
-    /// Own all Recast intermediates; return the polygon mesh or throw a stage-specific error.
-    [[nodiscard]] RecastOwner<rcPolyMesh, rcFreePolyMesh> BuildRecastPolyMesh(
+    /// Own all Recast intermediates; retain height samples in a detail mesh or throw a stage-specific error.
+    [[nodiscard]] RecastOwner<rcPolyMeshDetail, rcFreePolyMeshDetail> BuildRecastDetailMesh(
         const RecastInput &input, const rcConfig &config, RegionPartitioningAlgorithm partitioningAlgorithm,
         CandidateStatistics &statistics)
     {
@@ -386,14 +398,29 @@ namespace
         {
             throw std::runtime_error("Recast contour construction failed");
         }
-        compact.reset();
         RecastOwner<rcPolyMesh, rcFreePolyMesh> polyMesh(rcAllocPolyMesh(), rcFreePolyMesh);
         if (!polyMesh || !rcBuildPolyMesh(&context, *contours, config.maxVertsPerPoly, *polyMesh))
         {
             throw std::runtime_error("Recast polygon construction failed");
         }
 
-        return polyMesh;
+        // Contour vertices describe horizontal boundaries, not the height changes
+        // inside a polygon. Sample the surviving compact spans before releasing
+        // them so stairs, landings and terrain follow their supporting layer.
+        RecastOwner<rcPolyMeshDetail, rcFreePolyMeshDetail> detail(rcAllocPolyMeshDetail(), rcFreePolyMeshDetail);
+        if (!detail || !rcBuildPolyMeshDetail(&context, *polyMesh, *compact, config.detailSampleDist,
+                                              config.detailSampleMaxError, *detail))
+        {
+            throw std::runtime_error("Recast height detail construction failed");
+        }
+        // Detail vertices are already Recast world coordinates. Recast adds one
+        // vertical voxel to every detail vertex; remove that offset to retain
+        // the contour mesh's rasterized floor-height convention.
+        for (int vertex = 0; vertex < detail->nverts; ++vertex)
+        {
+            detail->verts[vertex * 3 + 1] -= config.ch;
+        }
+        return detail;
     }
 
     /// Keep referenced vertices in first-use order and rebase polygons, preserving the no-orphan invariant.
@@ -416,23 +443,33 @@ namespace
         mesh.vertices = std::move(used);
     }
 
-    /// Restore Skyrim Z-up vertices and counterclockwise triangles with no adjacency assigned yet.
-    [[nodiscard]] NavMesh ConvertRecastMesh(const rcPolyMesh &polyMesh)
+    /// Restore Skyrim Z-up detail triangles; weld shared patch boundaries before assigning adjacency.
+    [[nodiscard]] NavMesh ConvertRecastMesh(const rcPolyMeshDetail &detail)
     {
         NavMesh mesh;
-        for (int i = 0; i < polyMesh.nverts; ++i)
+        std::map<std::array<float, 3>, std::uint32_t> vertices;
+        const auto vertexIndex = [&](unsigned int index)
         {
-            const auto *v = polyMesh.verts + 3 * i;
-            mesh.vertices.push_back({polyMesh.bmin[0] + v[0] * polyMesh.cs, polyMesh.bmin[2] + v[2] * polyMesh.cs,
-                                     polyMesh.bmin[1] + v[1] * polyMesh.ch});
-        }
-        for (int i = 0; i < polyMesh.npolys; ++i)
-        {
-            const auto *poly = polyMesh.polys + i * polyMesh.nvp * 2;
-            for (int j = 2; j < polyMesh.nvp && poly[j] != RC_MESH_NULL_IDX; ++j)
+            const auto *vertex = detail.verts + index * 3;
+            const Vec3 point{vertex[0], vertex[2], vertex[1]};
+            const auto [entry, added] = vertices.try_emplace(std::array{point.x, point.y, point.z},
+                                                             static_cast<std::uint32_t>(mesh.vertices.size()));
+            if (added)
             {
+                mesh.vertices.push_back(point);
+            }
+            return entry->second;
+        };
+        for (int patchIndex = 0; patchIndex < detail.nmeshes; ++patchIndex)
+        {
+            const auto *patch = detail.meshes + patchIndex * 4;
+            for (unsigned int triangle = 0; triangle < patch[3]; ++triangle)
+            {
+                // Triangle indices are local to this patch's contiguous vertex range.
+                const auto *indices = detail.tris + (patch[2] + triangle) * 4;
                 NavPolygon face;
-                face.vertices = {poly[0], poly[j - 1], poly[j]};
+                face.vertices = {vertexIndex(patch[0] + indices[0]), vertexIndex(patch[0] + indices[1]),
+                                 vertexIndex(patch[0] + indices[2])};
                 if (Cross(mesh.vertices[face.vertices[0]], mesh.vertices[face.vertices[1]],
                           mesh.vertices[face.vertices[2]]) < 0)
                 {
@@ -791,10 +828,25 @@ namespace navmesh::core
         }
         const auto sourceIndex = BuildSourceIndex(scene, input.sources);
         const auto config = MakeRecastConfig(input.bounds, profile, settings);
+        if (config.cs > settings.cellSize)
+        {
+            result.warnings.push_back(std::format(
+                "Recast increased horizontal voxel size to {} Skyrim units (requested {}) for the raster extent; "
+                "narrow stair treads may need a smaller generation area.",
+                config.cs, settings.cellSize));
+        }
+        const auto effectiveClimb = config.walkableClimb * config.ch;
+        if (effectiveClimb < profile.stepHeight)
+        {
+            result.warnings.push_back(
+                std::format("Recast rounds step height down to {} Skyrim units (requested {}; vertical voxel size {}). "
+                            "Use a finer vertical voxel size to represent small steps.",
+                            effectiveClimb, profile.stepHeight, config.ch));
+        }
 
         // Voxelize, partition, and restore a neutral mesh before attaching evidence.
-        const auto polyMesh = BuildRecastPolyMesh(input, config, partitioningAlgorithm, result.statistics);
-        result.mesh = ConvertRecastMesh(*polyMesh);
+        const auto detailMesh = BuildRecastDetailMesh(input, config, partitioningAlgorithm, result.statistics);
+        result.mesh = ConvertRecastMesh(*detailMesh);
         if (cellBounds)
         {
             ClipGeneratedMesh(result.mesh, *cellBounds);

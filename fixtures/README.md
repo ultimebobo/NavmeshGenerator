@@ -6,6 +6,48 @@ No Bethesda game assets, plugins, or extracted NIFs are committed here. Unit tes
 
 Add fixture files only when their license, provenance, and regeneration path are documented in this directory.
 
+## Stairs and overpasses
+
+`tests/navigation_obstacle_tests.cpp` builds a synthetic collision scene from
+closed boxes. It is project-authored, redistributable under the repository
+license, and contains no game assets. The ordinary C++ suite checks tread and
+landing coverage, shared-edge reachability, separate stacked levels, pier
+obstructions, insufficient headroom, a corner descent with uneven risers leading
+under a bridge, and oversized risers with each supported
+region partitioning strategy. It uses the current navigation defaults.
+
+Build the assertion-enabled test executable as described in the
+[development guide](../docs/development.md), then export the visual fixture:
+
+```powershell
+./build/windows/x64/debug/navmesh-tests.exe --export-navigation-fixture ./output/navigation-obstacles
+```
+
+Open `output/navigation-obstacles/scene.glb` in a compatible viewer. Named
+collision objects identify narrow stairs, diagonal stairs, switchback stairs,
+oversized steps, a bridge over a road, a low overpass, and a bridge reached by
+stairs, plus a corner descent beneath a bridge. Toggle `Collision`,
+`Candidate NAVM`, and `Doors` to compare the support with the generated surface.
+`candidate-navm.json` records the settings,
+connectivity and source evidence; `scene.glb.provenance.json` records object
+names. The output is regenerated from the same builder used by the automated
+checks, so it also serves as a visual regression scene.
+
+Expected: traversable stairs cover every central tread and connect both
+landings; bridge decks follow their own level; an open underpass remains
+traversable around its pier; the low underpass has no path beneath the deck;
+oversized steps do not connect to the lower entrance. A bridge with stair
+access connects its deck to that entrance while the road beneath stays on a
+separate component. Radius erosion intentionally leaves clearance at exposed
+edges. Run only these checks with `navmesh-tests.exe --obstacles-only`.
+
+The corner descent represents a street at an exterior boundary, taller and
+slightly uneven steps, a lower landing and the road beneath a crossing deck.
+The tests also generate it with CELL bounds and no doors: the street's actual
+border edges must retain the entire lower route. A deliberately insufficient
+climb reproduces removal of the disconnected descent. This fixture uses only
+project-authored solids and has no location-specific generation rule.
+
 The Recast stair regression can use a local Riverwood03 geometry export without
 committing Bethesda assets. Run a candidate export of that CELL with supported
 collision, then invoke `navmesh-tests.exe --local-stair-obj <geometry.obj>` on
