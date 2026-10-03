@@ -313,26 +313,29 @@ namespace
     }
 
     /// Convert physical profile constraints to voxel counts and pad Recast Y-up raster bounds.
-    [[nodiscard]] rcConfig MakeRecastConfig(const AABB &bounds, const NavigationProfile &profile)
+    [[nodiscard]] rcConfig MakeRecastConfig(const AABB &bounds, const NavigationProfile &profile,
+                                            const RecastSettings &settings)
     {
         // Resolve narrow stair treads in one cell and the default neighboring
         // cell ring while limiting wider areas to roughly 2048 columns per axis.
         const float width = bounds.max.x - bounds.min.x, depth = bounds.max.y - bounds.min.y;
-        const float cs = std::max({4.0F, width / 2048.0F, depth / 2048.0F});
-        const float ch = 2.0F;
+        const float cs = std::max({settings.cellSize, width / 2048.0F, depth / 2048.0F});
+        const float ch = settings.cellHeight;
         rcConfig config{};
         config.cs = cs;
         config.ch = ch;
         config.walkableSlopeAngle = profile.maxSlopeDegrees;
-        config.walkableHeight =
-            std::max(3, static_cast<int>(std::ceil(std::max(profile.agentHeight, profile.clearance) / ch)));
-        config.walkableClimb = static_cast<int>(std::floor(profile.stepHeight / ch));
-        config.walkableRadius = static_cast<int>(std::ceil(profile.agentRadius / cs));
-        config.maxEdgeLen = 0;
-        config.maxSimplificationError = 2.0F;
-        config.minRegionArea = static_cast<int>(std::ceil(profile.minimumRegionArea / (cs * cs)));
+        config.walkableHeight = std::max(
+            3, static_cast<int>(std::ceil(std::max(profile.agentHeight, profile.clearance) / static_cast<double>(ch))));
+        config.walkableClimb = static_cast<int>(std::floor(profile.stepHeight / static_cast<double>(ch)));
+        config.walkableRadius = static_cast<int>(std::ceil(profile.agentRadius / static_cast<double>(cs)));
+        config.maxEdgeLen = static_cast<int>(settings.maxEdgeLength / static_cast<double>(cs));
+        config.maxSimplificationError = settings.maxSimplificationError;
+        const double voxelArea = static_cast<double>(cs) * cs;
+        config.minRegionArea = static_cast<int>(std::ceil(profile.minimumRegionArea / voxelArea));
         // Scale the merge threshold with the profile's physical minimum area.
-        config.mergeRegionArea = static_cast<int>(std::ceil(4.0F * profile.minimumRegionArea / (cs * cs)));
+        config.mergeRegionArea =
+            static_cast<int>(std::ceil(settings.mergeRegionAreaMultiplier * (profile.minimumRegionArea / voxelArea)));
         config.maxVertsPerPoly = 3;
         config.bmin[0] = bounds.min.x - cs * 2;
         config.bmin[1] = bounds.min.z - ch * 2;
@@ -643,22 +646,51 @@ namespace
 
 namespace navmesh::core
 {
+    void ValidateRecastSettings(const NavigationProfile &profile, const RecastSettings &settings)
+    {
+        const auto nonnegative = [](float value) { return std::isfinite(value) && value >= 0; };
+        const auto positive = [&](float value) { return nonnegative(value) && value > 0; };
+        if (!nonnegative(profile.agentRadius) || !positive(profile.agentHeight) || !positive(profile.clearance) ||
+            !nonnegative(profile.stepHeight) || !nonnegative(profile.maxSlopeDegrees) ||
+            profile.maxSlopeDegrees >= 90 || !nonnegative(profile.minimumRegionArea) ||
+            !positive(profile.weldTolerance) || !positive(settings.cellSize) || !positive(settings.cellHeight) ||
+            !nonnegative(settings.maxSimplificationError) || !nonnegative(settings.maxEdgeLength) ||
+            !nonnegative(settings.mergeRegionAreaMultiplier))
+        {
+            throw std::invalid_argument("Invalid Recast settings: use finite positive voxel sizes, height, clearance "
+                                        "and weld tolerance; nonnegative radius, climb, area and contour controls; "
+                                        "and a slope below 90 degrees.");
+        }
+        // Check conversions at the finest requested resolution. Adaptive horizontal sizing
+        // only reduces these counts; vertical spans must also fit Recast's packed span height.
+        const double cellSize = settings.cellSize;
+        const double area = profile.minimumRegionArea / (cellSize * cellSize);
+        const double integerLimit = std::numeric_limits<int>::max() - 1.0;
+        if (std::ceil(area) > integerLimit || std::ceil(area * settings.mergeRegionAreaMultiplier) > integerLimit ||
+            std::ceil(profile.agentRadius / cellSize) > integerLimit ||
+            settings.maxEdgeLength / cellSize > integerLimit ||
+            std::ceil(std::max(profile.agentHeight, profile.clearance) / static_cast<double>(settings.cellHeight)) >
+                RC_SPAN_MAX_HEIGHT ||
+            std::floor(profile.stepHeight / static_cast<double>(settings.cellHeight)) > RC_SPAN_MAX_HEIGHT)
+        {
+            throw std::invalid_argument("Recast settings exceed voxel count or vertical span limits.");
+        }
+    }
+
     CandidateNavMesh RecastCandidateGenerator::Generate(const Scene &scene, const NavigationProfile &profile,
                                                         std::optional<AABB> cellBounds,
                                                         std::vector<CandidateExit> exits,
-                                                        RegionPartitioningAlgorithm partitioningAlgorithm) const
+                                                        RegionPartitioningAlgorithm partitioningAlgorithm,
+                                                        const RecastSettings &settings) const
     {
         if (!scene.HasCompleteTriangleProvenance())
         {
             throw std::invalid_argument("Recast requires complete triangle provenance");
         }
-        if (profile.agentRadius < 0 || profile.agentHeight <= 0 || profile.stepHeight < 0 ||
-            profile.maxSlopeDegrees < 0 || profile.maxSlopeDegrees >= 90)
-        {
-            throw std::invalid_argument("Invalid navigation settings for Recast");
-        }
+        ValidateRecastSettings(profile, settings);
         CandidateNavMesh result;
         result.profile = profile;
+        result.recastSettings = settings;
         result.exits = std::move(exits);
         switch (partitioningAlgorithm)
         {
@@ -684,7 +716,7 @@ namespace navmesh::core
         {
             const auto width = rasterBounds->max.x - rasterBounds->min.x;
             const auto depth = rasterBounds->max.y - rasterBounds->min.y;
-            const auto voxelSize = std::max({4.0F, width / 2048.0F, depth / 2048.0F});
+            const auto voxelSize = std::max({settings.cellSize, width / 2048.0F, depth / 2048.0F});
             const auto halo = (std::ceil(profile.agentRadius / voxelSize) + 3.0F) * voxelSize;
             rasterBounds->min.x -= halo;
             rasterBounds->min.y -= halo;
@@ -698,7 +730,7 @@ namespace navmesh::core
             return result;
         }
         const auto sourceIndex = BuildSourceIndex(scene, input.sources);
-        const auto config = MakeRecastConfig(input.bounds, profile);
+        const auto config = MakeRecastConfig(input.bounds, profile, settings);
 
         // Voxelize, partition, and restore a neutral mesh before attaching evidence.
         const auto polyMesh = BuildRecastPolyMesh(input, config, partitioningAlgorithm, result.statistics);

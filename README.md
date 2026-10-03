@@ -28,6 +28,23 @@ The desktop build uses the Nifly and Recast Navigation submodules. Archived asse
 
 ## Example
 
+Launch the executable without switches for the dark Dear ImGui desktop workspace.
+Select an existing MO2 folder and profile, choose a rebuild scope, and choose an
+output folder. **Cell** shows only the selected Form ID or editor ID input;
+**Plugin** shows the affected plugin and **Copy selected plugin**. Batch output
+and estimation appear for Plugin and Load order scopes. **List cells to file**
+is a separate action that writes `cells.json` without requiring a target.
+
+**Advanced settings** starts collapsed. It contains numerical analysis and
+performance controls, plus Recast agent, voxel, contour and region inputs when
+generation is enabled. Choices are persisted in the local application settings;
+hidden target/export choices are excluded from the run. The desktop uses MO2
+input and standard artifact paths. Direct plugin/Data/manifest input, custom
+OBJ paths, exterior coordinates, diagnostic HTML and terrain-only switches
+remain CLI developer/inspection options. See the
+[desktop workflow](docs/operator-workflow.md#desktop-workspace) and
+[Recast settings](docs/operator-workflow.md#advanced-generation-settings).
+
 ```powershell
 xmake build navmesh-offline
 ./build/windows/x64/releasedbg/navmesh-offline.exe --mo2 "D:/Modding/MO2/Skyrim SE" --profile "My Actual Profile" --cell-formid 00027D1C --output ./output

@@ -682,5 +682,51 @@ class BatchRebuild(unittest.TestCase):
             self.run_cli("--rebuild-plugin", "Patch.esp", *args, code=1)
 
 
+    def test_listing_writes_catalog_without_console_rows(self):
+        output = self.root / "catalog"
+        completed = subprocess.run([str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
+                                    "--list-cells", "--output", str(output)], capture_output=True, text=True, timeout=90)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertTrue((output / "cells.json").exists())
+        self.assertNotIn("editor_id=", completed.stdout)
+        self.assertNotIn("coords=", completed.stdout)
+        self.assertFalse((output / "geometry.json").exists())
+        self.assertFalse((output / "candidate-navm.json").exists())
+
+    def test_recast_settings_reach_cell_and_batch_and_invalidate_cache(self):
+        flags = ["--agent-radius", "8", "--agent-height", "120", "--agent-clearance", "120",
+                 "--agent-step-height", "24", "--agent-max-slope", "40", "--minimum-region-area", "5000",
+                 "--weld-tolerance", "0.1", "--recast-cell-size", "8", "--recast-cell-height", "4",
+                 "--recast-simplification-error", "1.5", "--recast-max-edge-length", "256",
+                 "--recast-merge-area-multiplier", "3"]
+        single = self.run_cli("--cell-formid", "100", "--generate-candidate", *flags, output="custom-cell")
+        batch = self.run_cli("--rebuild-plugin", "Patch.esp", *flags, output="custom-batch")
+        reference = json.loads((single / "candidate-navm.json").read_text())
+        self.assertEqual(reference["profile"]["agent_radius"], 8)
+        self.assertEqual(reference["profile"]["step_height"], 24)
+        self.assertEqual(reference["recast_settings"], {"cell_size": 8, "cell_height": 4,
+            "max_simplification_error": 1.5, "max_edge_length": 256, "merge_region_area_multiplier": 3})
+        for cell in (batch / "cells").iterdir():
+            candidate = json.loads((cell / "candidate-navm.json").read_text())
+            self.assertEqual(candidate["profile"], reference["profile"])
+            self.assertEqual(candidate["recast_settings"], reference["recast_settings"])
+            self.assertTrue(candidate["topology"]["valid"])
+        repeated = self.run_cli("--rebuild-plugin", "Patch.esp", *flags, output="custom-repeated")
+        self.assertEqual(json.loads((repeated / "batch-report.json").read_text())["candidate_cache_hits"], 2)
+        revised = self.run_cli("--rebuild-plugin", "Patch.esp", *flags, "--recast-cell-height", "2", output="custom-revised")
+        self.assertEqual(json.loads((revised / "batch-report.json").read_text())["candidate_cache_hits"], 0)
+
+    def test_recast_settings_reject_invalid_values(self):
+        invalid = [("--recast-cell-size", "0"), ("--recast-cell-height", "nan"), ("--agent-height", "inf"),
+                   ("--agent-radius", "-1"), ("--agent-max-slope", "90"), ("--minimum-region-area", "-1"),
+                   ("--recast-simplification-error", "-1"), ("--recast-max-edge-length", "1junk"),
+                   ("--recast-merge-area-multiplier", "-1"), ("--weld-tolerance", "0"),
+                   ("--recast-cell-height", "0.000001"), ("--agent-step-height", "-1")]
+        for flag, value in invalid:
+            with self.subTest(flag=flag, value=value):
+                self.run_cli("--rebuild-plugin", "Patch.esp", flag, value, code=1)
+        self.run_cli("--rebuild-plugin", "Patch.esp", "--recast-cell-size", code=1)
+
+
 if __name__ == "__main__":
     unittest.main()

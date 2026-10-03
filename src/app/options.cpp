@@ -8,10 +8,40 @@ namespace navmesh::app
     Options ParseCommandLine(int argc, char **argv)
     {
         Options options;
+        const std::array generationInputs{
+            std::pair{"--agent-radius", &options.navigationProfile.agentRadius},
+            std::pair{"--agent-height", &options.navigationProfile.agentHeight},
+            std::pair{"--agent-clearance", &options.navigationProfile.clearance},
+            std::pair{"--agent-step-height", &options.navigationProfile.stepHeight},
+            std::pair{"--agent-max-slope", &options.navigationProfile.maxSlopeDegrees},
+            std::pair{"--minimum-region-area", &options.navigationProfile.minimumRegionArea},
+            std::pair{"--weld-tolerance", &options.navigationProfile.weldTolerance},
+            std::pair{"--recast-cell-size", &options.recastSettings.cellSize},
+            std::pair{"--recast-cell-height", &options.recastSettings.cellHeight},
+            std::pair{"--recast-simplification-error", &options.recastSettings.maxSimplificationError},
+            std::pair{"--recast-max-edge-length", &options.recastSettings.maxEdgeLength},
+            std::pair{"--recast-merge-area-multiplier", &options.recastSettings.mergeRegionAreaMultiplier}};
         for (int index = 1; index < argc; ++index)
         {
             const std::string argument = argv[index];
-            if (argument == "--plugin" && index + 1 < argc)
+            const auto generationInput = std::find_if(generationInputs.begin(), generationInputs.end(),
+                                                      [&](const auto &input) { return argument == input.first; });
+            if (generationInput != generationInputs.end())
+            {
+                if (index + 1 == argc)
+                {
+                    throw std::invalid_argument(argument + " requires a number");
+                }
+                const std::string value = argv[++index];
+                std::size_t end{};
+                const auto number = std::stof(value, &end);
+                if (end != value.size())
+                {
+                    throw std::invalid_argument(argument + " requires a number without trailing characters");
+                }
+                *generationInput->second = number;
+            }
+            else if (argument == "--plugin" && index + 1 < argc)
             {
                 options.plugin = argv[++index];
             }

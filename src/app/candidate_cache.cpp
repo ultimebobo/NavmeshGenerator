@@ -1,4 +1,5 @@
 #include "app/candidate_cache.h"
+#include "core/navmesh/generator.h"
 
 #include "core/io/content_hash.h"
 
@@ -22,7 +23,7 @@ namespace navmesh::app::detail
     namespace
     {
         // Private cache layout is deliberately versioned, distinct from supported inspection/export formats.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-2/recast-pipeline-4";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-3/recast-pipeline-5";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)
@@ -66,6 +67,10 @@ namespace navmesh::app::detail
             a(v.name, v.agentRadius, v.agentHeight, v.maxSlopeDegrees, v.stepHeight, v.clearance, v.weldTolerance,
               v.minimumRegionArea, v.contourSimplificationTolerance, v.cellBorderPolicy);
         }
+        template <class Archive> void Fields(Archive &a, core::RecastSettings &v)
+        {
+            a(v.cellSize, v.cellHeight, v.maxSimplificationError, v.maxEdgeLength, v.mergeRegionAreaMultiplier);
+        }
         template <class Archive> void Fields(Archive &a, core::CandidateRegion &v)
         {
             a(v.id, v.area, v.polygons, v.sourceTriangles, v.geometrySources, v.reachesBorder, v.exitFormIds);
@@ -94,8 +99,9 @@ namespace navmesh::app::detail
         }
         template <class Archive> void Fields(Archive &a, core::CandidateNavMesh &v)
         {
-            a(v.profile, v.partitioningAlgorithm, v.mesh, v.polygonSourceTriangles, v.polygonContributingTriangles,
-              v.regions, v.exits, v.borderLinks, v.contours, v.topology, v.statistics, v.warnings);
+            a(v.profile, v.recastSettings, v.partitioningAlgorithm, v.mesh, v.polygonSourceTriangles,
+              v.polygonContributingTriangles, v.regions, v.exits, v.borderLinks, v.contours, v.topology, v.statistics,
+              v.warnings);
         }
 
         /// One field visitor supplies deterministic hashing and private binary storage without copying whole candidates.
@@ -264,7 +270,8 @@ namespace navmesh::app::detail
 
     std::string CandidateFingerprint(const core::Scene &scene, const core::NavigationProfile &profile,
                                      std::optional<core::AABB> bounds, const std::vector<core::CandidateExit> &exits,
-                                     const std::vector<core::NavMesh> &neighbors, std::string_view partitioning)
+                                     const std::vector<core::NavMesh> &neighbors, std::string_view partitioning,
+                                     const core::RecastSettings &settings)
     {
         core::ContentHash hash;
         hash.Add(Schema);
@@ -277,7 +284,8 @@ namespace navmesh::app::detail
         hash.Add(partitioning);
         Archive archive(hash);
         archive(Writable(scene.mesh.vertices), Writable(scene.mesh.triangles), Writable(scene.geometrySources),
-                Writable(scene.triangleProvenance), Writable(profile), bounds, Writable(exits), Writable(neighbors));
+                Writable(scene.triangleProvenance), Writable(profile), Writable(settings), bounds, Writable(exits),
+                Writable(neighbors));
         return archive.good ? hash.Hex() : std::string{};
     }
 
@@ -359,6 +367,7 @@ namespace navmesh::app::detail
                 return false;
             }
             archive(loaded, sources.geometrySources, sources.triangleProvenance);
+            core::ValidateRecastSettings(loaded.profile, loaded.recastSettings);
             std::uint8_t extra{};
             const bool ended = gzread(file, &extra, 1) == 0 && gzeof(file);
             const bool closed = owner.Close();

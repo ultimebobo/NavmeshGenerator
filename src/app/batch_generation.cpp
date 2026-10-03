@@ -110,8 +110,8 @@ namespace navmesh::app::detail
                 options.partitioningAlgorithm == core::RegionPartitioningAlgorithm::Monotone ? "monotone"
                 : options.partitioningAlgorithm == core::RegionPartitioningAlgorithm::Layers ? "layers"
                                                                                              : "watershed";
-            const auto key = CandidateFingerprint(input.geometry.scene, core::NavigationProfile{}, input.bounds,
-                                                  input.exits, input.adjacent, algorithm);
+            const auto key = CandidateFingerprint(input.geometry.scene, options.navigationProfile, input.bounds,
+                                                  input.exits, input.adjacent, algorithm, options.recastSettings);
             result.auditPath = key.empty() ? input.stagingDirectory / std::format("{:08X}.gz", result.cell->id)
                                            : input.cacheDirectory / "candidates" / (key + ".gz");
             core::Scene evidence;
@@ -120,8 +120,8 @@ namespace navmesh::app::detail
             {
                 const auto started = std::chrono::steady_clock::now();
                 result.candidate = core::RecastCandidateGenerator{}.Generate(
-                    input.geometry.scene, core::NavigationProfile{}, input.bounds, std::move(input.exits),
-                    options.partitioningAlgorithm);
+                    input.geometry.scene, options.navigationProfile, input.bounds, std::move(input.exits),
+                    options.partitioningAlgorithm, options.recastSettings);
                 if (input.bounds)
                 {
                     (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent);

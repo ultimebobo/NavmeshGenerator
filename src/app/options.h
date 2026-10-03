@@ -42,6 +42,10 @@ namespace navmesh::app
         bool skipExistingNavmesh{};
         /// Recast region strategy used for candidate generation; watershed is the default.
         core::RegionPartitioningAlgorithm partitioningAlgorithm{core::RegionPartitioningAlgorithm::Watershed};
+        /// Agent dimensions and movement limits in Skyrim units; shared by all generation scopes.
+        core::NavigationProfile navigationProfile;
+        /// Recast voxel and contour controls; validated before input resolution and cache reuse.
+        core::RecastSettings recastSettings;
         /// Exterior geometry/impact halo in CELL units; generation always includes
         /// adjacent geometry and remains clipped to each selected CELL.
         int neighboringCellRadius{};

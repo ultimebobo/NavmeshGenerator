@@ -225,6 +225,19 @@ namespace
             options.generateCandidate = true;
         }
 
+        if (options.generateCandidate)
+        {
+            navmesh::core::ValidateRecastSettings(options.navigationProfile, options.recastSettings);
+        }
+        if (!std::isfinite(options.surfaceSearchRadius) || options.surfaceSearchRadius <= 0 ||
+            !std::isfinite(options.maxSupportDistance) || options.maxSupportDistance < 0 ||
+            !std::isfinite(options.maxSlope) || options.maxSlope < 0 || options.maxSlope >= 90)
+        {
+            std::cerr << "Analysis settings require a positive search radius, nonnegative support distance, "
+                         "and a slope below 90 degrees; all values must be finite.\n";
+            return 1;
+        }
+
         return 0;
     }
 
@@ -401,20 +414,6 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         {
             std::filesystem::create_directories(options.output);
             navmesh::cli::WriteCellsJson(options.output / "cells.json", cells);
-        }
-        for (const auto &cell : cells)
-        {
-            std::cout << std::format("{:08X} editor_id=\"{}\" name=\"{}\" type={} coords=", cell.id, cell.editorId,
-                                     cell.name, cell.isInterior ? "interior" : "exterior");
-            if (cell.exteriorCoordinates)
-            {
-                std::cout << std::format("{},{}", (*cell.exteriorCoordinates)[0], (*cell.exteriorCoordinates)[1]);
-            }
-            else
-            {
-                std::cout << "-";
-            }
-            std::cout << "\n";
         }
         update(100, cells.empty() ? "No cells found" : "Cell list complete");
         return cells.empty() ? 2 : 0;
@@ -784,8 +783,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         {
             update(83, "Generating candidate NAVM");
             candidate = navmesh::core::RecastCandidateGenerator{}.Generate(
-                geometry.scene, navmesh::core::NavigationProfile{}, candidateBounds, std::move(exits),
-                options.partitioningAlgorithm);
+                geometry.scene, options.navigationProfile, candidateBounds, std::move(exits),
+                options.partitioningAlgorithm, options.recastSettings);
             update(85, "Candidate NAVM generated");
             if (wasCancelled())
             {

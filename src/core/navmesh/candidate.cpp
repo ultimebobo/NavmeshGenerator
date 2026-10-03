@@ -2794,6 +2794,12 @@ namespace navmesh::core
                "\"metadata\": "
             << metadataJson << ",\n";
         out << std::format("  \"partitioning_algorithm\": \"{}\",\n", candidate.partitioningAlgorithm);
+        const auto &recast = candidate.recastSettings;
+        out << std::format("  \"recast_settings\": {{\"cell_size\":{},\"cell_height\":{},"
+                           "\"max_simplification_error\":{},\"max_edge_length\":{},"
+                           "\"merge_region_area_multiplier\":{}}},\n",
+                           recast.cellSize, recast.cellHeight, recast.maxSimplificationError, recast.maxEdgeLength,
+                           recast.mergeRegionAreaMultiplier);
         out << std::format("  \"profile\": "
                            "{{\"name\":\"{}\",\"agent_radius\":{},\"agent_height\":{},\"max_slope_degrees\":{},\"step_"
                            "height\":{},\"clearance\":{},\"weld_tolerance\":{},\"minimum_region_area\":{},\"contour_"

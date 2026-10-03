@@ -15,7 +15,73 @@ that exceed the source's full/light format stop export. Existing output files
 and source plugins are never overwritten. The default **Write plugin** export
 still produces a separate NAVM-only patch. See [batch rebuilding](batch-rebuilding.md).
 
-## One input model for the whole product
+## Desktop workspace
+
+Starting without command-line switches opens a dark Dear ImGui workspace with
+input-profile, target and output cards. Folder inputs have native browse buttons;
+the layout scrolls while progress and actions remain visible. The title bar uses
+the Windows dark appearance where supported. Keyboard navigation and DPI scaling
+are enabled.
+
+Select an MO2 folder, an existing profile name and an output folder. **List cells
+to file** exports `cells.json`; it is an action rather than a saved run mode and
+does not require a selected cell or valid generation settings. Cell rows are
+written only to the catalog, including for CLI `--list-cells` runs.
+
+**Rebuild scope** controls which settings appear:
+
+- **Cell** shows **Cell identification** and either a Form ID or editor ID field.
+  Enable candidate generation or plugin writing to expose generation controls.
+- **Plugin** shows **Affected plugin** and **Copy selected plugin**. Copy mode
+  enables writing through the shared runner.
+- **Load order** selects affected cells without a cell identifier or affected
+  plugin. Both batch scopes expose cost estimation, output policy and workers.
+
+**Skip cells with existing navmesh** appears when generation is enabled. The
+plugin-only output policy is available when batch writing or estimation is
+selected. Settings retain their saved values when hidden, but inactive selectors
+and dependent flags are cleared before invoking `app::Run`.
+
+**Advanced settings** starts folded each time the workspace opens. It contains
+numerical analysis thresholds, neighboring-cell radius, disk/working budgets,
+batch workers, optional moved-mod recovery and cache folders. Recast settings
+appear only for generation; analysis thresholds appear only for Cell scope.
+The desktop persists choices in the existing local `NavmeshGenerator/config.ini`
+and validates relevant values before running. Developer input routes, custom OBJ
+paths, exterior coordinates, terrain-only and diagnostic HTML controls are CLI
+options.
+
+## Advanced generation settings
+
+The UI and CLI pass the same navigation profile and Recast settings to Cell,
+Plugin and Load order generation. Defaults come from `NavigationProfile` and
+`RecastSettings`; numeric constraints are checked by `ValidateRecastSettings`.
+Distances use Skyrim world units, region area uses square world units, and slope
+uses degrees. Values must be finite and conversions must fit Recast's voxel
+counts and packed vertical spans. Horizontal voxel size is a requested minimum;
+the generator increases it for large scenes to bound the grid.
+
+| CLI input | Advanced setting | Meaning |
+| --- | --- | --- |
+| `--agent-radius` | Agent radius | Horizontal agent footprint. |
+| `--agent-height` | Agent height | Standing height. |
+| `--agent-clearance` | Agent clearance | Required headroom, combined with standing height. |
+| `--agent-step-height` | Step height | Traversable climb. |
+| `--agent-max-slope` | Walkable slope | Generation slope limit, separate from analysis slope. |
+| `--minimum-region-area` | Minimum region area | Disconnected-island cutoff. |
+| `--weld-tolerance` | Weld tolerance | Positive output/border matching distance tolerance. |
+| `--recast-cell-size` | Horizontal voxel size | Requested minimum raster width. |
+| `--recast-cell-height` | Vertical voxel size | Raster height. |
+| `--recast-simplification-error` | Contour simplification error | Maximum deviation in horizontal voxels. |
+| `--recast-max-edge-length` | Maximum contour edge length | Subdivision distance; zero disables it. |
+| `--recast-merge-area-multiplier` | Region merge multiplier | Merge area relative to the minimum area. |
+| `--partitioning-algorithm` | Region partitioning | Watershed, monotone or layers. |
+
+Layer partitioning does not use the merge-area multiplier, so that input is
+hidden for Layers. Requested settings appear in candidate JSON. Cached candidates
+include these settings in their fingerprint; changing them invalidates reuse.
+
+## MO2 command input
 
 ```powershell
 navmesh-offline.exe --mo2 "D:\Modding\MO2\Skyrim SE" --profile "My Actual Profile" --output "D:\NavmeshWork\run-001" <operation>

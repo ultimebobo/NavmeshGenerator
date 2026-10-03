@@ -19,7 +19,8 @@ The shared CLI and Windows runner use the same settings and validation.
 | `--estimate-only` | Estimate batch cost | Select the full target set and generate a stratified sample, cache the work, and finish before writing a plugin. |
 
 Numeric defaults and accepted limits come from `app::Options` and shared run
-validation. The desktop persists every setting and provides a scrolling form.
+validation. The dark desktop persists every setting and provides a scrolling
+workspace with numerical controls in the initially folded **Advanced settings**.
 Single-cell inspection retains its existing exports; batch output policy applies
 to Plugin and Load order scopes.
 

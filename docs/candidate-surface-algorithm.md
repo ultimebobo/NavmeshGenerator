@@ -13,10 +13,11 @@ CLI and Windows UI also expose monotone and layer partitioning. The selected
 strategy is recorded in `candidate-navm.json`. It triangulates Recast polygons for the neutral
 candidate JSON/OBJ and combined GLB. Horizontal voxel size grows with the
 extracted area to limit grid dimensions. Finer voxels resolve narrow stair treads,
-while larger extracted areas can lose them. The human profile supplies the
-traversable climb and other movement limits. Contour edges are not subdivided
-by a maximum length. Contours allow two horizontal voxels of simplification
-error, and Recast emits triangles directly for the neutral mesh. Disconnected
+while larger extracted areas can lose them. The navigation profile supplies
+traversable climb and other movement limits. The shared CLI/UI advanced settings
+configure requested horizontal and vertical voxel sizes, contour simplification
+error, optional maximum edge length and merge-area multiplier. Recast emits
+triangles directly for the neutral mesh. Disconnected
 regions below the profile's minimum area are removed. Watershed and monotone
 partitioning can merge small adjacent regions; layer partitioning does not use
 the merge threshold. Recast converts the area thresholds to horizontal voxel
@@ -77,10 +78,12 @@ Source-triangle provenance is recovered by the closest source height at each
 generated triangle's XY centroid. This is an approximate audit join after
 voxelization. Recast's smoothing and erosion can remove small supported areas;
 output is still an inspection candidate and is not Bethesda NAVM serialization.
-The fixed settings for agent dimensions, clearance, slope, step height, radius, and
-minimum region area feed the Recast build. Weld tolerance, contour tolerance,
-and cell-border policy remain in the exported settings for output
-compatibility but do not control this voxel-based build.
+Agent dimensions, clearance, slope, step height, radius and minimum region area
+feed the Recast build through the shared navigation profile. Voxel/contour
+controls come from `RecastSettings` and are retained in candidate JSON and cache
+fingerprints. Weld tolerance controls later geometry/border matching; profile
+contour tolerance and cell-border policy remain export evidence and do not
+control voxel construction. See [advanced generation settings](operator-workflow.md#advanced-generation-settings).
 
 A Windows UI terrain-only run on a local exterior CELL on 2026-09-29 produced
 516 Recast candidate triangles in two connected regions. Its candidate topology

@@ -1,888 +1,1077 @@
 #include "ui/windows_ui.h"
-
 #include "app/run.h"
+#include "ui/options_model.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <commctrl.h>
-#include <uxtheme.h>
-#include <array>
+#include <d3d11.h>
+#include <dwmapi.h>
+#include <shobjidl.h>
+#include <wrl/client.h>
+
+#include <imgui.h>
+#include <imgui_impl_dx11.h>
+#include <imgui_impl_win32.h>
+#include <misc/cpp/imgui_stdlib.h>
+
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
-#include <cctype>
-#include <cstdio>
+#include <cmath>
 #include <filesystem>
+#include <format>
+#include <map>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
-#include <memory>
-#include <stdexcept>
+
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
 namespace
 {
-    constexpr UINT ProgressMessage = WM_APP + 1;
-    constexpr UINT CompleteMessage = WM_APP + 2;
-    constexpr int RunButton = 900;
-    constexpr int ListButton = 901;
-    constexpr int CancelButton = 902;
-    constexpr int FieldBase = 100;
-    constexpr int CheckBase = 200;
-    constexpr int TargetBase = 300;
-    constexpr int PartitioningAlgorithmControl = 400;
-    constexpr int RebuildScopeControl = 401;
-    constexpr int PartitioningAlgorithmControlHeight = 100;
+    using Microsoft::WRL::ComPtr;
+    using navmesh::app::Options;
+    using navmesh::app::RebuildScope;
+    using navmesh::ui::CellIdentification;
 
-    struct Field
+    std::wstring Wide(std::string_view text)
     {
-        const char *key;
-        const char *label;
-        const char *hint;
-    };
-    constexpr std::array Fields{
-        Field{"mo2", "Mod Organizer 2 folder", "An existing MO2 instance or portable root. Requires a profile."},
-        Field{"profile", "MO2 profile", "Name of the existing MO2 profile to import."},
-        Field{"mods", "Moved mods folder", "Optional read-only recovery location for moved MO2 mod folders."},
-        Field{"plugin", "Plugin file", "Direct plugin input. Use with the legacy/direct reader."},
-        Field{"data", "Game Data folder", "Data directory used with a direct load-order manifest."},
-        Field{"load", "Load-order manifest", "Developer/direct input listing plugins in load order."},
-        Field{"output", "Output folder",
-              "Folder that receives requested reports, inspection exports, and generated plugins."},
-        Field{"geometry", "Geometry OBJ path", "Optional custom path for the extracted support geometry OBJ."},
-        Field{"analysis", "Analysis OBJ path", "Optional custom path for the navmesh/support comparison OBJ."},
-        Field{"world", "Worldspace", "Optional worldspace name for direct plugin cell lookup."},
-        Field{"cell", "Legacy cell selector",
-              "Optional direct-reader cell selector; form ID, editor ID, or coordinates are clearer alternatives."},
-        Field{"form", "Cell form ID", "Hexadecimal CELL form ID from List cells."},
-        Field{"editor", "Cell editor ID", "Exact CELL editor ID from List cells."},
-        Field{"x", "Exterior cell X", "Exterior CELL X coordinate. Select Coordinates to use it."},
-        Field{"y", "Exterior cell Y", "Exterior CELL Y coordinate. Select Coordinates to use it."},
-        Field{"radius", "Surface search radius",
-              "Maximum horizontal search radius for support geometry, in game units."},
-        Field{"support", "Max support distance", "Maximum vertical distance to a support surface, in game units."},
-        Field{"slope", "Max slope", "Maximum support-surface slope in degrees."},
-        Field{"neighboring_cell_radius", "Neighboring cells",
-              "Exterior scene neighborhood and batch impact halo in cells. Distant models can contribute intersecting "
-              "geometry without adding their terrain or NAVM. Generation includes adjacent geometry and stays clipped "
-              "to each target CELL."},
-        Field{"affected_plugin", "Affected plugin",
-              "Active ESP/ESM/ESL filename for Plugin scope. The full resolved load order supplies winning geometry "
-              "and overrides."},
-        Field{"batch_output", "Batch output policy",
-              "auto, full, compact, or plugin_only. Auto writes minimal reports with a plugin; full writes inspection "
-              "JSON/OBJ; compact writes gzip JSON."},
-        Field{"asset_cache", "Shared cache folder",
-              "Optional root for generated shared asset and candidate caches. Empty uses system temporary storage. "
-              "Input assets and requested exports are never pruned."},
-        Field{"cache_budget_mib", "Cache disk budget (MiB)",
-              "Retention budget for generated cache files. Zero retains none after safe consumption. Active inspection "
-              "evidence may temporarily remain until export."},
-        Field{"working_memory_mib", "Work/cache budget (MiB)",
-              "Budget for reusable models and admitted generation work. One oversized target runs alone; resolved "
-              "plugin records are separate."},
-        Field{"workers", "Generation workers",
-              "Maximum independent target tasks admitted under the shared work budget. Final border reconciliation and "
-              "plugin writing stay ordered."},
-    };
-    constexpr std::array Checks{
-        Field{"list", "List cells only", "Discover and export cells without extracting geometry or analysis."},
-        Field{"diagnostics", "Write diagnostics HTML", "Create an HTML report with representative support examples."},
-        Field{"terrain", "Terrain only", "Skip reference-model geometry and export decoded exterior terrain only."},
-        Field{"candidate", "Generate candidate NAVM",
-              "Use Recast Navigation to rasterize terrain and supported collision, then export candidate JSON/OBJ and "
-              "show it in the scene GLB. Valid regions are retained; compatible exterior edges connect to neighboring "
-              "NAVMs where supported geometry reaches the CELL border."},
-        Field{"generate_plugin", "Write plugin",
-              "Write an ESP, ESL-flagged when eligible, after its source plugins. Matched door and border portals are "
-              "written; other authored links need validation. Requires a resolved load order. Cell, Plugin, and Load "
-              "order scopes are supported."},
-        Field{"skip_existing_navmesh", "Skip cells with existing navmesh",
-              "Generate only in selected cells without any winning NAVM record. Preserves authored geometry; "
-              "matched borders may add reciprocal links. Requires MO2 or load-order input and generation. "
-              "Empty, unsupported, and deleted NAVM records also protect their cells."},
-        Field{"copy_plugin", "Copy selected plugin",
-              "Write a copy of the affected plugin with generated navigation. Requires Plugin scope. Preserves "
-              "other records, the filename, flags, and master indices. Use the copy in place of the source plugin. "
-              "Links requiring dependencies outside its existing master table cannot be exported."},
-        Field{"estimate_only", "Estimate batch cost",
-              "Sample eligible interior/exterior and density strata using actual generation. Cache candidates and "
-              "write a cost report; plugin writing is deferred until this setting is unchecked."},
-    };
-
-    struct WindowState
-    {
-        HWND window{}, tooltip{}, progress{}, status{}, percent{}, title{}, subtitle{}, lookupLabel{};
-        HWND partitioningAlgorithmLabel{}, rebuildScopeLabel{};
-        int scrollOffset{};
-        std::array<HWND, Fields.size()> fieldLabels{}, fieldHelps{};
-        std::array<HWND, 4> sectionLabels{};
-        std::array<HWND, Checks.size()> checkHelps{};
-        HFONT heading{}, body{}, label{};
-        std::filesystem::path config;
-        std::shared_ptr<std::atomic_bool> cancelRequested;
-    };
-    struct RunCompletion
-    {
-        double elapsed{};
-        std::string summary;
-    };
-    WindowState *State(HWND window)
-    {
-        return reinterpret_cast<WindowState *>(GetWindowLongPtrA(window, GWLP_USERDATA));
-    }
-    std::string Text(HWND window, int id)
-    {
-        char value[4096]{};
-        GetWindowTextA(GetDlgItem(window, id), value, static_cast<int>(std::size(value)));
-        return value;
-    }
-    std::string Trim(std::string value)
-    {
-        const auto whitespace = [](unsigned char character) { return std::isspace(character) != 0; };
-        const auto first = std::find_if_not(value.begin(), value.end(), whitespace);
-        if (first == value.end())
+        if (text.empty())
         {
             return {};
         }
-        return {first, std::find_if_not(value.rbegin(), value.rend(), whitespace).base()};
+        const auto count = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        std::wstring result(count, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), count);
+        return result;
     }
-    void SetText(HWND window, int id, const std::string &value)
+
+    std::string Utf8(std::wstring_view text)
     {
-        SetWindowTextA(GetDlgItem(window, id), value.c_str());
+        if (text.empty())
+        {
+            return {};
+        }
+        const auto count =
+            WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+        std::string result(count, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), count, nullptr,
+                            nullptr);
+        return result;
     }
+
+    std::string PathText(const std::filesystem::path &path)
+    {
+        return Utf8(path.wstring());
+    }
+
     std::filesystem::path ConfigPath()
     {
-        char appData[MAX_PATH]{};
-        GetEnvironmentVariableA("LOCALAPPDATA", appData, MAX_PATH);
-        auto directory = std::filesystem::path(appData) / "NavmeshGenerator";
+        std::array<wchar_t, 32768> buffer{};
+        const auto count = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (!count || count >= buffer.size())
+        {
+            throw std::runtime_error("Cannot locate the local application settings folder.");
+        }
+        const auto directory = std::filesystem::path(buffer.data()) / "NavmeshGenerator";
         std::filesystem::create_directories(directory);
         return directory / "config.ini";
     }
-    std::string ReadConfig(const std::filesystem::path &path, const char *key, const std::string &fallback = {})
+
+    std::string ReadConfig(const std::filesystem::path &path, const char *key, const std::string &fallback)
     {
-        char value[4096]{};
-        GetPrivateProfileStringA("options", key, fallback.c_str(), value, static_cast<DWORD>(std::size(value)),
-                                 path.string().c_str());
-        return value;
+        std::array<wchar_t, 32768> buffer{};
+        GetPrivateProfileStringW(L"options", Wide(key).c_str(), Wide(fallback).c_str(), buffer.data(),
+                                 static_cast<DWORD>(buffer.size()), path.c_str());
+        return Utf8(buffer.data());
     }
-    void AddTooltip(WindowState &state, HWND control, const char *text)
+
+    void WriteConfig(const std::filesystem::path &path, const char *key, const std::string &value)
     {
-        TOOLINFOA item{.cbSize = sizeof(TOOLINFOA),
-                       .uFlags = TTF_IDISHWND | TTF_SUBCLASS,
-                       .hwnd = state.window,
-                       .uId = reinterpret_cast<UINT_PTR>(control),
-                       .lpszText = const_cast<char *>(text)};
-        SendMessageA(state.tooltip, TTM_ADDTOOLA, 0, reinterpret_cast<LPARAM>(&item));
-    }
-    void Theme(HWND control)
-    {
-        SetWindowTheme(control, L"Explorer", nullptr);
-    }
-    void Font(HWND control, HFONT font)
-    {
-        SendMessageA(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-    }
-    HWND Label(WindowState &state, const char *text, int x, int y, int width, HFONT font = nullptr)
-    {
-        auto label = CreateWindowA("STATIC", text, WS_CHILD | WS_VISIBLE, x, y, width, 18, state.window, nullptr,
-                                   nullptr, nullptr);
-        Font(label, font ? font : state.label);
-        return label;
-    }
-    void AddSection(WindowState &state, int index, const char *title, int y)
-    {
-        state.sectionLabels[index] = Label(state, title, 30, y, 600, state.label);
-    }
-    void AddField(WindowState &state, int index, int x, int y)
-    {
-        const auto &field = Fields[index];
-        state.fieldLabels[index] = Label(state, field.label, x, y, 250);
-        auto edit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                                    x, y + 19, 254, 29, state.window,
-                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(FieldBase + index)), nullptr, nullptr);
-        auto help = CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, x + 262, y + 21, 25,
-                                  25, state.window, nullptr, nullptr, nullptr);
-        state.fieldHelps[index] = help;
-        Theme(edit);
-        Font(edit, state.body);
-        AddTooltip(state, help, field.hint);
-        SendMessageA(edit, EM_SETCUEBANNER, 0, reinterpret_cast<LPARAM>(field.hint));
-    }
-    void Move(HWND control, int x, int y, int width, int height)
-    {
-        MoveWindow(control, x, y, width, height, TRUE);
-    }
-    void Layout(WindowState &state)
-    {
-        RECT client{};
-        GetClientRect(state.window, &client);
-        constexpr int margin = 30, gap = 18, helpWidth = 25;
-        const int width = static_cast<int>(client.right), height = static_cast<int>(client.bottom);
-        const int contentHeight = std::max(1080, height);
-        const int maximumScroll = std::max(0, contentHeight - height);
-        state.scrollOffset = std::clamp(state.scrollOffset, 0, maximumScroll);
-        SCROLLINFO scrolling{.cbSize = sizeof(SCROLLINFO),
-                             .fMask = SIF_RANGE | SIF_PAGE | SIF_POS,
-                             .nMin = 0,
-                             .nMax = contentHeight - 92,
-                             .nPage = static_cast<UINT>(std::max(1, height - 91)),
-                             .nPos = state.scrollOffset};
-        SetScrollInfo(state.window, SB_VERT, &scrolling, TRUE);
-        const auto moveBody = [&](HWND control, int x, int y, int controlWidth, int controlHeight)
+        if (!WritePrivateProfileStringW(L"options", Wide(key).c_str(), Wide(value).c_str(), path.c_str()))
         {
-            Move(control, x, y - state.scrollOffset, controlWidth, controlHeight);
-            ShowWindow(control, y - state.scrollOffset >= 91 ? SW_SHOWNA : SW_HIDE);
+            throw std::runtime_error("Could not save desktop settings.");
+        }
+    }
+
+    struct NumericField
+    {
+        const char *key;
+        const char *label;
+        const char *help;
+        float *value;
+    };
+
+    auto AnalysisFields(Options &options)
+    {
+        return std::array{
+            NumericField{"radius", "Surface search radius", "Horizontal support search distance in Skyrim units.",
+                         &options.surfaceSearchRadius},
+            NumericField{"support", "Max support distance", "Vertical support distance in Skyrim units.",
+                         &options.maxSupportDistance},
+            NumericField{"slope", "Analysis max slope", "Support-surface slope limit in degrees.", &options.maxSlope}};
+    }
+
+    auto RecastFields(Options &options)
+    {
+        auto &profile = options.navigationProfile;
+        auto &recast = options.recastSettings;
+        return std::array{
+            NumericField{"agent_radius", "Agent radius", "Horizontal agent radius in Skyrim units.",
+                         &profile.agentRadius},
+            NumericField{"agent_height", "Agent height", "Standing agent height in Skyrim units.",
+                         &profile.agentHeight},
+            NumericField{"agent_clearance", "Agent clearance",
+                         "Required headroom in Skyrim units; combined with height.", &profile.clearance},
+            NumericField{"agent_step_height", "Step height", "Maximum traversable climb in Skyrim units.",
+                         &profile.stepHeight},
+            NumericField{"agent_max_slope", "Walkable slope", "Maximum walking slope in degrees, below a right angle.",
+                         &profile.maxSlopeDegrees},
+            NumericField{"minimum_region_area", "Minimum region area",
+                         "Disconnected island cutoff in square Skyrim units.", &profile.minimumRegionArea},
+            NumericField{"weld_tolerance", "Weld tolerance",
+                         "Positive distance tolerance for output geometry and border matching, in Skyrim units.",
+                         &profile.weldTolerance},
+            NumericField{"recast_cell_size", "Horizontal voxel size",
+                         "Requested voxel width in Skyrim units. Large scenes increase it to bound grid dimensions.",
+                         &recast.cellSize},
+            NumericField{"recast_cell_height", "Vertical voxel size", "Positive voxel height in Skyrim units.",
+                         &recast.cellHeight},
+            NumericField{"recast_simplification_error", "Contour simplification error",
+                         "Maximum contour deviation in horizontal voxels.", &recast.maxSimplificationError},
+            NumericField{"recast_max_edge_length", "Maximum contour edge length",
+                         "Edge subdivision limit in Skyrim units. Zero disables subdivision.", &recast.maxEdgeLength},
+            NumericField{"recast_merge_area_multiplier", "Region merge multiplier",
+                         "Merge area as a multiple of minimum region area. Used by watershed and monotone.",
+                         &recast.mergeRegionAreaMultiplier}};
+    }
+
+    auto BooleanFields(Options &options)
+    {
+        return std::array{
+            std::pair{"candidate", &options.generateCandidate}, std::pair{"generate_plugin", &options.generatePlugin},
+            std::pair{"skip_existing_navmesh", &options.skipExistingNavmesh},
+            std::pair{"copy_plugin", &options.copyPlugin}, std::pair{"estimate_only", &options.estimateOnly}};
+    }
+
+    auto IntegerFields(Options &options)
+    {
+        return std::array{std::pair{"cache_budget_mib", &options.cacheBudgetMiB},
+                          std::pair{"working_memory_mib", &options.workingMemoryMiB},
+                          std::pair{"workers", &options.workers}};
+    }
+
+    /// Worker evidence is published under a mutex; the UI thread alone owns controls and rendering.
+    struct RunStatus
+    {
+        std::mutex mutex;
+        std::atomic_bool cancel{};
+        int percent{}, code{};
+        std::string text{"Ready. Select an MO2 profile and a rebuild target."};
+        bool complete{};
+    };
+
+    struct Workspace
+    {
+        Options draft;
+        std::map<std::string, std::string> text;
+        std::filesystem::path config;
+        int identification{};
+        bool busy{};
+        RunStatus status;
+        std::thread worker;
+
+        ~Workspace()
+        {
+            status.cancel = true;
+            if (worker.joinable())
+            {
+                worker.join();
+            }
+        }
+    };
+
+    void LoadSettings(Workspace &workspace)
+    {
+        auto &options = workspace.draft;
+        workspace.config = ConfigPath();
+        workspace.text = {{"mo2", PathText(options.mo2)},
+                          {"profile", options.profile},
+                          {"mods", PathText(options.modsDirectory)},
+                          {"output", PathText(options.output)},
+                          {"asset_cache", PathText(options.assetCache)},
+                          {"form", options.cellFormId ? std::format("{:08X}", *options.cellFormId) : ""},
+                          {"editor", options.editorId},
+                          {"affected_plugin", options.affectedPlugin}};
+        for (auto &[key, value] : workspace.text)
+        {
+            value = ReadConfig(workspace.config, key.c_str(), value);
+        }
+        for (const auto &field : BooleanFields(options))
+        {
+            *field.second = ReadConfig(workspace.config, field.first, *field.second ? "1" : "0") == "1";
+        }
+        const auto readNumbers = [&](const auto &fields)
+        {
+            for (const auto &field : fields)
+            {
+                try
+                {
+                    std::size_t end{};
+                    const auto text = ReadConfig(workspace.config, field.key, std::format("{:.9g}", *field.value));
+                    const auto number = std::stof(text, &end);
+                    if (end == text.size() && std::isfinite(number))
+                    {
+                        *field.value = number;
+                    }
+                }
+                catch (const std::exception &)
+                {
+                    // Malformed persisted numbers retain the shared option defaults.
+                }
+            }
         };
-        const int usableWidth = std::max(720, width - margin * 2);
-        const int columnWidth = (usableWidth - gap * 2) / 3;
-        const int columns[] = {margin, margin + columnWidth + gap, margin + (columnWidth + gap) * 2};
-        Move(state.title, margin, 23, width - margin * 2, 30);
-        Move(state.subtitle, margin + 1, 55, width - margin * 2, 22);
-        const int sectionY[] = {107, 253, 342, 511};
-        for (int index{}; index < 4; ++index)
+        readNumbers(AnalysisFields(options));
+        readNumbers(RecastFields(options));
+        for (const auto &field : IntegerFields(options))
         {
-            moveBody(state.sectionLabels[index], margin, sectionY[index], width - margin * 2, 18);
+            try
+            {
+                std::size_t end{};
+                const auto text = ReadConfig(workspace.config, field.first, std::to_string(*field.second));
+                const auto number = std::stoull(text, &end);
+                if (!text.empty() && text.front() != '-' && end == text.size())
+                {
+                    *field.second = number;
+                }
+            }
+            catch (const std::exception &)
+            {
+            }
         }
-        for (int index{}; index < static_cast<int>(Fields.size()); ++index)
+        try
         {
-            int y{};
-            if (index < 6)
-            {
-                y = 130 + (index / 3) * 57;
-            }
-            else if (index < 9)
-            {
-                y = 276;
-            }
-            else if (index < 15)
-            {
-                y = 365 + ((index - 9) / 3) * 57;
-            }
-            else if (index < 20)
-            {
-                y = 534 + ((index - 15) / 3) * 57;
-            }
-            else
-            {
-                y = 808 + ((index - 20) / 3) * 57;
-            }
-            const int x = columns[index == 19 ? 2 : index >= 20 ? (index - 20) % 3 : index % 3];
-            moveBody(state.fieldLabels[index], x, y, columnWidth - helpWidth - 8, 18);
-            moveBody(GetDlgItem(state.window, FieldBase + index), x, y + 19, columnWidth - helpWidth - 8, 29);
-            moveBody(state.fieldHelps[index], x + columnWidth - helpWidth, y + 21, helpWidth, helpWidth);
-        }
-        moveBody(state.lookupLabel, margin, 654, 120, 20);
-        moveBody(state.partitioningAlgorithmLabel, columns[1], 591, columnWidth - helpWidth - 8, 18);
-        moveBody(GetDlgItem(state.window, PartitioningAlgorithmControl), columns[1], 610, columnWidth - helpWidth - 8,
-                 PartitioningAlgorithmControlHeight);
-        moveBody(state.rebuildScopeLabel, columns[2], 650, columnWidth - 8, 18);
-        moveBody(GetDlgItem(state.window, RebuildScopeControl), columns[2], 669, columnWidth - 8, 120);
-        const int selectionX = margin + 127;
-        for (int index{}; index < 3; ++index)
-        {
-            moveBody(GetDlgItem(state.window, TargetBase + index), selectionX + index * 125, 652, 116, 24);
-        }
-        for (int index{}; index < static_cast<int>(Checks.size()); ++index)
-        {
-            const int x = columns[index % 3], y = 715 + (index / 3) * 28;
-            moveBody(GetDlgItem(state.window, CheckBase + index), x, y, columnWidth - 30, 24);
-            moveBody(state.checkHelps[index], x + columnWidth - 25, y, 22, 22);
-        }
-        const int footerTop = std::max(934, contentHeight - 145);
-        moveBody(state.progress, margin, footerTop, std::max(300, width - margin * 2 - 75), 20);
-        moveBody(state.percent, width - margin - 60, footerTop, 60, 20);
-        moveBody(state.status, margin, footerTop + 29, width - margin * 2, 22);
-        moveBody(GetDlgItem(state.window, ListButton), width - margin - 425, footerTop + 68, 130, 38);
-        moveBody(GetDlgItem(state.window, CancelButton), width - margin - 275, footerTop + 68, 120, 38);
-        moveBody(GetDlgItem(state.window, RunButton), width - margin - 145, footerTop + 68, 145, 38);
-    }
-    navmesh::app::Options ReadOptions(HWND window, bool listOnly)
-    {
-        navmesh::app::Options result;
-        result.mo2 = Text(window, FieldBase);
-        result.profile = Text(window, FieldBase + 1);
-        result.modsDirectory = Text(window, FieldBase + 2);
-        result.plugin = Text(window, FieldBase + 3);
-        result.data = Text(window, FieldBase + 4);
-        result.loadOrder = Text(window, FieldBase + 5);
-        result.output = Text(window, FieldBase + 6);
-        result.exportGeometry = Text(window, FieldBase + 7);
-        result.exportAnalysis = Text(window, FieldBase + 8);
-        result.worldspace = Trim(Text(window, FieldBase + 9));
-        result.cell = Trim(Text(window, FieldBase + 10));
-        const auto scope = static_cast<int>(SendMessageA(GetDlgItem(window, RebuildScopeControl), CB_GETCURSEL, 0, 0));
-        result.rebuildScope = listOnly     ? navmesh::app::RebuildScope::Cell
-                              : scope == 1 ? navmesh::app::RebuildScope::Plugin
-                              : scope == 2 ? navmesh::app::RebuildScope::LoadOrder
-                                           : navmesh::app::RebuildScope::Cell;
-        result.affectedPlugin = Trim(Text(window, FieldBase + 19));
-        result.batchOutput = Trim(Text(window, FieldBase + 20));
-        result.assetCache = Trim(Text(window, FieldBase + 21));
-        const auto integer = [&](int field)
-        {
-            const auto text = Trim(Text(window, FieldBase + field));
+            const auto text =
+                ReadConfig(workspace.config, "neighboring_cell_radius", std::to_string(options.neighboringCellRadius));
             std::size_t end{};
-            const auto value = std::stoull(text, &end);
-            if (text.empty() || text.front() == '-' || end != text.size())
+            const auto radius = std::stoi(text, &end);
+            if (end == text.size())
             {
-                throw std::runtime_error("Cache/work budgets and workers require nonnegative integers.");
+                options.neighboringCellRadius = radius;
             }
-            return static_cast<std::size_t>(value);
+        }
+        catch (const std::exception &)
+        {
+        }
+        const char *scopes[] = {"cell", "plugin", "load_order"};
+        const auto scope =
+            ReadConfig(workspace.config, "rebuild_scope", scopes[static_cast<int>(options.rebuildScope)]);
+        options.rebuildScope = scope == "plugin"       ? RebuildScope::Plugin
+                               : scope == "load_order" ? RebuildScope::LoadOrder
+                                                       : RebuildScope::Cell;
+        workspace.identification =
+            ReadConfig(workspace.config, "target", options.editorId.empty() ? "0" : "1") == "1" ? 1 : 0;
+        const char *algorithms[] = {"watershed", "monotone", "layers"};
+        const auto algorithm = ReadConfig(workspace.config, "partitioning_algorithm",
+                                          algorithms[static_cast<int>(options.partitioningAlgorithm)]);
+        options.partitioningAlgorithm = algorithm == "monotone" ? navmesh::core::RegionPartitioningAlgorithm::Monotone
+                                        : algorithm == "layers" ? navmesh::core::RegionPartitioningAlgorithm::Layers
+                                                                : navmesh::core::RegionPartitioningAlgorithm::Watershed;
+        options.batchOutput = ReadConfig(workspace.config, "batch_output", options.batchOutput);
+        if (options.batchOutput != "auto" && options.batchOutput != "full" && options.batchOutput != "compact" &&
+            options.batchOutput != "plugin_only")
+        {
+            options.batchOutput = "auto";
+        }
+    }
+
+    void SaveSettings(Workspace &workspace)
+    {
+        for (const auto &[key, value] : workspace.text)
+        {
+            WriteConfig(workspace.config, key.c_str(), value);
+        }
+        for (const auto &field : BooleanFields(workspace.draft))
+        {
+            WriteConfig(workspace.config, field.first, *field.second ? "1" : "0");
+        }
+        for (const auto &field : IntegerFields(workspace.draft))
+        {
+            WriteConfig(workspace.config, field.first, std::to_string(*field.second));
+        }
+        for (const auto &field : AnalysisFields(workspace.draft))
+        {
+            WriteConfig(workspace.config, field.key, std::format("{:.9g}", *field.value));
+        }
+        for (const auto &field : RecastFields(workspace.draft))
+        {
+            WriteConfig(workspace.config, field.key, std::format("{:.9g}", *field.value));
+        }
+        const char *scopes[] = {"cell", "plugin", "load_order"};
+        const char *algorithms[] = {"watershed", "monotone", "layers"};
+        WriteConfig(workspace.config, "rebuild_scope", scopes[static_cast<int>(workspace.draft.rebuildScope)]);
+        WriteConfig(workspace.config, "partitioning_algorithm",
+                    algorithms[static_cast<int>(workspace.draft.partitioningAlgorithm)]);
+        WriteConfig(workspace.config, "target", std::to_string(workspace.identification));
+        WriteConfig(workspace.config, "batch_output", workspace.draft.batchOutput);
+        WriteConfig(workspace.config, "neighboring_cell_radius", std::to_string(workspace.draft.neighboringCellRadius));
+    }
+
+    Options ReadOptions(Workspace &workspace, bool listOnly)
+    {
+        auto options = workspace.draft;
+        const auto value = [&](const char *key)
+        {
+            const auto &text = workspace.text.at(key);
+            const auto first = text.find_first_not_of(" \t\r\n");
+            return first == std::string::npos ? std::string{}
+                                              : text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
         };
-        result.cacheBudgetMiB = integer(22);
-        result.workingMemoryMiB = integer(23);
-        result.workers = integer(24);
-        if (result.batchOutput != "auto" && result.batchOutput != "full" && result.batchOutput != "compact" &&
-            result.batchOutput != "plugin_only")
+        options.mo2 = Wide(value("mo2"));
+        options.profile = value("profile");
+        options.modsDirectory = Wide(value("mods"));
+        options.output = Wide(value("output"));
+        options.assetCache = Wide(value("asset_cache"));
+        options.affectedPlugin = value("affected_plugin");
+        options.editorId = value("editor");
+        options.cellFormId.reset();
+        if (!listOnly && options.rebuildScope == RebuildScope::Cell && workspace.identification == 0)
         {
-            throw std::runtime_error("Batch output policy must be auto, full, compact, or plugin_only.");
+            const auto text = value("form");
+            std::size_t end{};
+            const auto form = std::stoull(text, &end, 16);
+            if (text.empty() || text.front() == '-' || end != text.size() || form == 0 || form > UINT32_MAX)
+            {
+                throw std::invalid_argument("Cell Form ID must be a nonzero hexadecimal identifier from cells.json.");
+            }
+            options.cellFormId = static_cast<std::uint32_t>(form);
         }
-        if (result.rebuildScope != navmesh::app::RebuildScope::Cell)
-        {
-            result.cell.clear();
-        }
-        const bool lookupCell = !listOnly && result.rebuildScope == navmesh::app::RebuildScope::Cell;
-        const auto target = static_cast<int>(SendMessageA(GetDlgItem(window, TargetBase), BM_GETCHECK, 0, 0));
+        options = navmesh::ui::PrepareDesktopOptions(options, static_cast<CellIdentification>(workspace.identification),
+                                                     listOnly);
+        return options;
+    }
+
+    void Execute(Workspace &workspace, const Options &options, bool listOnly)
+    {
+        const auto started = std::chrono::steady_clock::now();
+        int code{};
+        std::string summary;
         try
         {
-            if (lookupCell && target == BST_CHECKED)
-            {
-                const auto formId = Trim(Text(window, FieldBase + 11));
-                if (formId.empty())
+            code = navmesh::app::Run(
+                options,
+                [&](int percent, std::string_view text)
                 {
-                    throw std::runtime_error("Enter a cell form ID or select another lookup method.");
-                }
-                result.cellFormId = static_cast<std::uint32_t>(std::stoul(formId, nullptr, 16));
-            }
-            else if (lookupCell && SendMessageA(GetDlgItem(window, TargetBase + 1), BM_GETCHECK, 0, 0) == BST_CHECKED)
-            {
-                result.editorId = Trim(Text(window, FieldBase + 12));
-                if (result.editorId.empty())
-                {
-                    throw std::runtime_error("Enter a CELL editor ID or select another lookup method.");
-                }
-            }
-            else if (lookupCell && SendMessageA(GetDlgItem(window, TargetBase + 2), BM_GETCHECK, 0, 0) == BST_CHECKED)
-            {
-                result.cellX = std::stoi(Text(window, FieldBase + 13));
-                result.cellY = std::stoi(Text(window, FieldBase + 14));
-            }
-            result.surfaceSearchRadius = std::stof(Text(window, FieldBase + 15));
-            result.maxSupportDistance = std::stof(Text(window, FieldBase + 16));
-            result.maxSlope = std::stof(Text(window, FieldBase + 17));
-            result.neighboringCellRadius = std::stoi(Text(window, FieldBase + 18));
-            if (result.neighboringCellRadius < 0)
-            {
-                throw std::invalid_argument("negative neighboring-cell radius");
-            }
-        }
-        catch (...)
-        {
-            throw std::runtime_error("Cell coordinates, analysis thresholds, and neighboring-cell radius must be valid "
-                                     "numbers. Neighboring cells cannot be negative.");
-        }
-        result.listCells = listOnly || SendMessageA(GetDlgItem(window, CheckBase), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        result.diagnostics = SendMessageA(GetDlgItem(window, CheckBase + 1), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        result.estimateOnly =
-            !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 7), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        result.terrainOnly = SendMessageA(GetDlgItem(window, CheckBase + 2), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        result.generateCandidate = SendMessageA(GetDlgItem(window, CheckBase + 3), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        result.generatePlugin =
-            !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 4), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        result.skipExistingNavmesh =
-            !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 5), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        result.copyPlugin =
-            !listOnly && SendMessageA(GetDlgItem(window, CheckBase + 6), BM_GETCHECK, 0, 0) == BST_CHECKED;
-        if (result.copyPlugin)
-        {
-            if (result.rebuildScope != navmesh::app::RebuildScope::Plugin)
-            {
-                throw std::runtime_error("Copy selected plugin requires Plugin rebuild scope.");
-            }
-            result.generatePlugin = true;
-        }
-        if (result.generatePlugin)
-        {
-            result.generateCandidate = true;
-        }
-        if (result.rebuildScope != navmesh::app::RebuildScope::Cell)
-        {
-            result.generateCandidate = true;
-            if (result.rebuildScope == navmesh::app::RebuildScope::Plugin && result.affectedPlugin.empty())
-            {
-                throw std::runtime_error("Enter the active plugin filename for Plugin scope.");
-            }
-        }
-        if (result.generatePlugin && result.mo2.empty() && result.loadOrder.empty())
-        {
-            throw std::runtime_error("Plugin generation needs an MO2 profile or developer load-order input.");
-        }
-        const auto algorithm =
-            static_cast<int>(SendMessageA(GetDlgItem(window, PartitioningAlgorithmControl), CB_GETCURSEL, 0, 0));
-        result.partitioningAlgorithm = algorithm == 1   ? navmesh::core::RegionPartitioningAlgorithm::Monotone
-                                       : algorithm == 2 ? navmesh::core::RegionPartitioningAlgorithm::Layers
-                                                        : navmesh::core::RegionPartitioningAlgorithm::Watershed;
-        return result;
-    }
-    void Save(HWND window)
-    {
-        const auto path = State(window)->config.string();
-        for (size_t i{}; i < Fields.size(); ++i)
-        {
-            WritePrivateProfileStringA("options", Fields[i].key, Text(window, FieldBase + static_cast<int>(i)).c_str(),
-                                       path.c_str());
-        }
-        for (size_t i{}; i < Checks.size(); ++i)
-        {
-            WritePrivateProfileStringA(
-                "options", Checks[i].key,
-                SendMessageA(GetDlgItem(window, CheckBase + static_cast<int>(i)), BM_GETCHECK, 0, 0) == BST_CHECKED
-                    ? "1"
-                    : "0",
-                path.c_str());
-        }
-        const auto algorithm =
-            static_cast<int>(SendMessageA(GetDlgItem(window, PartitioningAlgorithmControl), CB_GETCURSEL, 0, 0));
-        const char *algorithmName = algorithm == 1 ? "monotone" : algorithm == 2 ? "layers" : "watershed";
-        WritePrivateProfileStringA("options", "partitioning_algorithm", algorithmName, path.c_str());
-        const auto scope = SendMessageA(GetDlgItem(window, RebuildScopeControl), CB_GETCURSEL, 0, 0);
-        WritePrivateProfileStringA("options", "rebuild_scope",
-                                   scope == 1   ? "plugin"
-                                   : scope == 2 ? "load_order"
-                                                : "cell",
-                                   path.c_str());
-        for (int i{}; i != 3; ++i)
-        {
-            if (SendMessageA(GetDlgItem(window, TargetBase + i), BM_GETCHECK, 0, 0) == BST_CHECKED)
-            {
-                WritePrivateProfileStringA("options", "target", std::to_string(i).c_str(), path.c_str());
-            }
-        }
-    }
-    void Start(HWND window, bool listOnly)
-    {
-        try
-        {
-            const auto options = ReadOptions(window, listOnly);
-            Save(window);
-            EnableWindow(GetDlgItem(window, RunButton), FALSE);
-            EnableWindow(GetDlgItem(window, ListButton), FALSE);
-            EnableWindow(GetDlgItem(window, CancelButton), TRUE);
-            SendMessageA(State(window)->progress, PBM_SETPOS, 0, 0);
-            SetWindowTextA(State(window)->status, "Starting…");
-            State(window)->cancelRequested = std::make_shared<std::atomic_bool>(false);
-            const auto cancelRequested = State(window)->cancelRequested;
-            std::thread(
-                [window, options, cancelRequested]
-                {
-                    const auto started = std::chrono::steady_clock::now();
-                    int result{};
-                    std::string finalStatus;
-                    try
-                    {
-                        result = navmesh::app::Run(
-                            options,
-                            [window, &finalStatus](int percent, std::string_view status)
-                            {
-                                finalStatus = status;
-                                auto *message = new std::string(status);
-                                PostMessageA(window, ProgressMessage, static_cast<WPARAM>(percent),
-                                             reinterpret_cast<LPARAM>(message));
-                            },
-                            [cancelRequested] { return cancelRequested->load(); });
-                    }
-                    catch (const std::exception &error)
-                    {
-                        result = 255;
-                        auto *message = new std::string("Failed: " + std::string(error.what()));
-                        PostMessageA(window, ProgressMessage, 0, reinterpret_cast<LPARAM>(message));
-                    }
-                    const auto elapsed =
-                        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-                    PostMessageA(window, CompleteMessage, static_cast<WPARAM>(result),
-                                 reinterpret_cast<LPARAM>(new RunCompletion{elapsed, std::move(finalStatus)}));
-                })
-                .detach();
+                    summary = text;
+                    std::lock_guard lock(workspace.status.mutex);
+                    workspace.status.percent = std::clamp(percent, 0, 100);
+                    workspace.status.text = text;
+                },
+                [&] { return workspace.status.cancel.load(); });
         }
         catch (const std::exception &error)
         {
-            MessageBoxA(window, error.what(), "Invalid options", MB_ICONWARNING);
+            code = 1;
+            summary = error.what();
+        }
+        const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        std::lock_guard lock(workspace.status.mutex);
+        workspace.status.code = code;
+        if (code == 0)
+        {
+            workspace.status.percent = 100;
+            workspace.status.text =
+                std::format("Completed in {:.2f}s. {}", elapsed,
+                            listOnly ? "Cell catalog saved to " + PathText(options.output / "cells.json") : summary);
+        }
+        else
+        {
+            workspace.status.text =
+                std::format("{} in {:.2f}s. {}", code == 3 ? "Cancelled" : "Stopped", elapsed, summary);
+        }
+        workspace.status.complete = true;
+    }
+
+    void Start(Workspace &workspace, bool listOnly)
+    {
+        try
+        {
+            const auto options = ReadOptions(workspace, listOnly);
+            SaveSettings(workspace);
+            if (workspace.worker.joinable())
+            {
+                workspace.worker.join();
+            }
+            workspace.status.cancel = false;
+            {
+                std::lock_guard lock(workspace.status.mutex);
+                workspace.status.percent = 0;
+                workspace.status.code = 0;
+                workspace.status.text = listOnly ? "Exporting cell catalog..." : "Starting...";
+                workspace.status.complete = false;
+            }
+            workspace.worker = std::thread([&workspace, options, listOnly] { Execute(workspace, options, listOnly); });
+            workspace.busy = true;
+        }
+        catch (const std::exception &error)
+        {
+            std::lock_guard lock(workspace.status.mutex);
+            workspace.status.text = error.what();
+            workspace.status.code = 1;
         }
     }
-    LRESULT CALLBACK Procedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+
+    void Help(const char *text)
     {
-        if (message == WM_NCCREATE)
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            SetWindowLongPtrA(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(new WindowState{}));
+            ImGui::SetTooltip("%s", text);
         }
-        auto *state = State(window);
-        switch (message)
+    }
+
+    void BrowseFolder(HWND window, std::string &value)
+    {
+        ComPtr<IFileOpenDialog> dialog;
+        if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
         {
-        case WM_CREATE:
-        {
-            state->window = window;
-            state->config = ConfigPath();
-            state->heading =
-                CreateFontA(-25, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, "Segoe UI");
-            state->body = CreateFontA(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                      CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, "Segoe UI");
-            state->label =
-                CreateFontA(-12, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, "Segoe UI");
-            state->tooltip = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, nullptr, WS_POPUP | TTS_ALWAYSTIP, 0, 0, 0,
-                                             0, window, nullptr, nullptr, nullptr);
-            state->title = Label(*state, "NAVMESH GENERATOR", 30, 23, 500, state->heading);
-            state->subtitle =
-                Label(*state, "Offline Skyrim navmesh inspection and support analysis", 31, 55, 600, state->body);
-            AddSection(*state, 0, "INPUT SOURCE", 107);
-            const int columns[] = {30, 330, 630};
-            for (int i{}; i < 6; ++i)
-            {
-                AddField(*state, i, columns[i % 3], 130 + (i / 3) * 57);
-            }
-            AddSection(*state, 1, "OUTPUT", 253);
-            for (int i{}; i < 3; ++i)
-            {
-                AddField(*state, i + 6, columns[i], 276);
-            }
-            AddSection(*state, 2, "CELL", 342);
-            for (int i{}; i < 6; ++i)
-            {
-                AddField(*state, i + 9, columns[i % 3], 365 + (i / 3) * 57);
-            }
-            AddSection(*state, 3, "ANALYSIS THRESHOLDS", 511);
-            for (int i{}; i < 3; ++i)
-            {
-                AddField(*state, i + 15, columns[i], 534);
-            }
-            AddField(*state, 18, columns[0], 591);
-            AddField(*state, 19, columns[2], 591);
-            for (int i = 20; i < static_cast<int>(Fields.size()); ++i)
-            {
-                AddField(*state, i, columns[(i - 20) % 3], 808 + ((i - 20) / 3) * 57);
-            }
-            state->rebuildScopeLabel = Label(*state, "Rebuild scope", columns[2], 650, 250);
-            auto scope =
-                CreateWindowExA(WS_EX_CLIENTEDGE, "COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                columns[2], 669, 254, 120, window,
-                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(RebuildScopeControl)), nullptr, nullptr);
-            Font(scope, state->body);
-            Theme(scope);
-            for (const char *text : {"Cell", "Plugin", "Load order"})
-            {
-                SendMessageA(scope, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text));
-            }
-            AddTooltip(*state, scope,
-                       "Plugin: cells possibly affected by that active plugin. Load order: changes after the first "
-                       "baseline plugin. Both include adjacent impact cells.");
-            const auto savedScope = ReadConfig(state->config, "rebuild_scope", "cell");
-            SendMessageA(scope, CB_SETCURSEL, savedScope == "plugin" ? 1 : savedScope == "load_order" ? 2 : 0, 0);
-            state->partitioningAlgorithmLabel = Label(*state, "Partitioning algorithm", columns[1], 591, 250);
-            auto algorithm = CreateWindowExA(
-                WS_EX_CLIENTEDGE, "COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, columns[1],
-                610, 254, PartitioningAlgorithmControlHeight, window,
-                reinterpret_cast<HMENU>(static_cast<INT_PTR>(PartitioningAlgorithmControl)), nullptr, nullptr);
-            Theme(algorithm);
-            Font(algorithm, state->body);
-            for (const char *value : {"Watershed", "Monotone", "Layers"})
-            {
-                SendMessageA(algorithm, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value));
-            }
-            AddTooltip(*state, algorithm, "Recast region partitioning strategy used for candidate NAVM generation.");
-            state->lookupLabel = CreateWindowA("STATIC", "LOOK UP CELL BY", WS_CHILD | WS_VISIBLE, 30, 654, 120, 20,
-                                               window, nullptr, nullptr, nullptr);
-            Font(state->lookupLabel, state->label);
-            const char *targets[] = {"Form ID", "Editor ID", "Coordinates"};
-            for (int i{}; i < 3; ++i)
-            {
-                auto button =
-                    CreateWindowA("BUTTON", targets[i],
-                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | (i == 0 ? WS_GROUP : 0),
-                                  157 + i * 125, 652, 116, 24, window,
-                                  reinterpret_cast<HMENU>(static_cast<INT_PTR>(TargetBase + i)), nullptr, nullptr);
-                Theme(button);
-                Font(button, state->body);
-                AddTooltip(*state, button,
-                           i == 0   ? "Select exactly one cell-lookup method."
-                           : i == 1 ? "Use this method to select a CELL by editor ID."
-                                    : "Use this method to select an exterior CELL by X/Y coordinates.");
-            }
-            for (size_t i{}; i < Checks.size(); ++i)
-            {
-                auto check = CreateWindowA(
-                    "BUTTON", Checks[i].label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                    535 + static_cast<int>(i) * 125, 685, 104, 24, window,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(CheckBase + static_cast<int>(i))), nullptr, nullptr);
-                Theme(check);
-                Font(check, state->body);
-                auto help =
-                    CreateWindowA("BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                                  640 + static_cast<int>(i) * 125, 685, 22, 22, window, nullptr, nullptr, nullptr);
-                state->checkHelps[i] = help;
-                AddTooltip(*state, help, Checks[i].hint);
-            }
-            state->progress = CreateWindowExA(0, PROGRESS_CLASSA, nullptr, WS_CHILD | WS_VISIBLE, 30, 772, 770, 20,
-                                              window, nullptr, nullptr, nullptr);
-            Theme(state->progress);
-            SendMessageA(state->progress, PBM_SETRANGE32, 0, 100);
-            state->percent = Label(*state, "0%", 815, 772, 90, state->label);
-            state->status = CreateWindowA("STATIC", "Ready to analyze", WS_CHILD | WS_VISIBLE, 30, 801, 860, 22, window,
-                                          nullptr, nullptr, nullptr);
-            Font(state->status, state->body);
-            auto list =
-                CreateWindowA("BUTTON", "List cells", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 480, 840, 130,
-                              38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ListButton)), nullptr, nullptr);
-            Font(list, state->body);
-            auto cancel =
-                CreateWindowA("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 620, 840, 120, 38,
-                              window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(CancelButton)), nullptr, nullptr);
-            Font(cancel, state->body);
-            EnableWindow(cancel, FALSE);
-            auto run = CreateWindowA("BUTTON", "Run analysis", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 760,
-                                     840, 145, 38, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(RunButton)),
-                                     nullptr, nullptr);
-            Font(run, state->body);
-            for (size_t i{}; i < Fields.size(); ++i)
-            {
-                SetText(window, FieldBase + static_cast<int>(i),
-                        ReadConfig(state->config, Fields[i].key,
-                                   i == 6    ? "."
-                                   : i == 15 ? "64"
-                                   : i == 16 ? "32"
-                                   : i == 17 ? "45"
-                                   : i == 18 ? "1"
-                                   : i == 20 ? navmesh::app::Options{}.batchOutput
-                                   : i == 22 ? std::to_string(navmesh::app::Options{}.cacheBudgetMiB)
-                                   : i == 23 ? std::to_string(navmesh::app::Options{}.workingMemoryMiB)
-                                   : i == 24 ? std::to_string(navmesh::app::Options{}.workers)
-                                             : ""));
-            }
-            for (size_t i{}; i < Checks.size(); ++i)
-            {
-                SendMessageA(GetDlgItem(window, CheckBase + static_cast<int>(i)), BM_SETCHECK,
-                             ReadConfig(state->config, Checks[i].key) == "1" ? BST_CHECKED : BST_UNCHECKED, 0);
-            }
-            const auto savedAlgorithm = ReadConfig(state->config, "partitioning_algorithm", "watershed");
-            const int algorithmIndex = savedAlgorithm == "monotone" ? 1 : savedAlgorithm == "layers" ? 2 : 0;
-            SendMessageA(GetDlgItem(window, PartitioningAlgorithmControl), CB_SETCURSEL, algorithmIndex, 0);
-            const auto target = std::clamp(std::stoi(ReadConfig(state->config, "target", "0")), 0, 2);
-            SendMessageA(GetDlgItem(window, TargetBase + target), BM_SETCHECK, BST_CHECKED, 0);
-            Layout(*state);
-            return 0;
+            return;
         }
-        case WM_GETMINMAXINFO:
+        dialog->SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR);
+        if (FAILED(dialog->Show(window)))
         {
-            auto *info = reinterpret_cast<MINMAXINFO *>(lParam);
-            info->ptMinTrackSize.x = 960;
-            info->ptMinTrackSize.y = 700;
-            return 0;
+            return;
         }
-        case WM_SIZE:
-            if (state && state->progress)
+        ComPtr<IShellItem> folder;
+        PWSTR path{};
+        if (SUCCEEDED(dialog->GetResult(&folder)) && SUCCEEDED(folder->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+        {
+            value = Utf8(path);
+            CoTaskMemFree(path);
+        }
+    }
+
+    void TextField(Workspace &workspace, HWND window, const char *key, const char *label, const char *hint,
+                   bool folder = false)
+    {
+        ImGui::PushID(key);
+        ImGui::TextUnformatted(label);
+        ImGui::SetNextItemWidth(folder ? ImGui::GetContentRegionAvail().x - 92 * ImGui::GetStyle().FontScaleDpi : -1);
+        ImGui::InputTextWithHint("##value", hint, &workspace.text.at(key));
+        Help(hint);
+        if (folder)
+        {
+            ImGui::SameLine();
+            if (ImGui::Button("Browse", ImVec2(-1, 0)))
             {
-                Layout(*state);
-                InvalidateRect(window, nullptr, TRUE);
+                BrowseFolder(window, workspace.text.at(key));
             }
-            return 0;
-        case WM_VSCROLL:
-        case WM_MOUSEWHEEL:
-            if (state && state->progress)
+        }
+        ImGui::PopID();
+    }
+
+    /// Auto-sized cards flow with contextual rows, so hidden controls leave no fixed-position gaps.
+    void BeginCard(const char *id, const char *title, const char *description = nullptr)
+    {
+        ImGui::BeginChild(id, ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::SeparatorText(title);
+        if (description)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s", description);
+            ImGui::PopStyleColor();
+        }
+        ImGui::Spacing();
+    }
+
+    void EndCard()
+    {
+        ImGui::EndChild();
+        ImGui::Spacing();
+    }
+
+    template <std::size_t Size> void DrawNumbers(const std::array<NumericField, Size> &fields, bool layers = false)
+    {
+        if (ImGui::BeginTable("numbers", 2, ImGuiTableFlags_SizingStretchSame))
+        {
+            for (const auto &field : fields)
             {
-                SCROLLINFO scrolling{.cbSize = sizeof(SCROLLINFO), .fMask = SIF_ALL};
-                GetScrollInfo(window, SB_VERT, &scrolling);
-                if (message == WM_MOUSEWHEEL)
+                if (layers && std::string_view(field.key) == "recast_merge_area_multiplier")
                 {
-                    state->scrollOffset -= GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA * 57;
+                    continue;
                 }
-                else
+                ImGui::TableNextColumn();
+                ImGui::PushID(field.key);
+                ImGui::TextUnformatted(field.label);
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputFloat("##value", field.value, 0, 0, "%.6g");
+                Help(field.help);
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    void DrawAdvanced(Workspace &workspace, HWND window, bool cellScope, bool generation)
+    {
+        auto &options = workspace.draft;
+        if (!ImGui::CollapsingHeader("Advanced settings"))
+        {
+            return;
+        }
+        BeginCard("advanced", "PERFORMANCE & GEOMETRY", "Distances use Skyrim units; areas use square Skyrim units.");
+        TextField(workspace, window, "mods", "Moved mods folder (optional)",
+                  "Recovery location for moved MO2 mod folders", true);
+        TextField(workspace, window, "asset_cache", "Shared cache folder (optional)",
+                  "Leave empty to use temporary storage", true);
+        ImGui::TextUnformatted("Neighboring cell radius");
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputInt("##neighboring", &options.neighboringCellRadius);
+        Help("Scene neighborhood and batch impact halo in CELL units. Generation remains clipped to each target cell.");
+        const auto integers = IntegerFields(options);
+        const char *labels[] = {"Cache disk budget (MiB)", "Working memory budget (MiB)", "Generation workers"};
+        const char *hints[] = {"Generated cache retention only. Zero retains none after safe consumption.",
+                               "Model cache and generation admission budget; an oversized target runs alone.",
+                               "Maximum independent batch generation tasks; final serialization stays ordered."};
+        for (std::size_t index = 0; index < integers.size(); ++index)
+        {
+            if (cellScope && index == 2)
+            {
+                continue;
+            }
+            ImGui::TextUnformatted(labels[index]);
+            ImGui::SetNextItemWidth(-1);
+            const auto id = "##" + std::string(integers[index].first);
+            ImGui::InputScalar(id.c_str(), ImGuiDataType_U64, integers[index].second);
+            Help(hints[index]);
+        }
+        if (cellScope)
+        {
+            ImGui::SeparatorText("Analysis");
+            ImGui::PushID("analysis");
+            DrawNumbers(AnalysisFields(options));
+            ImGui::PopID();
+        }
+        if (generation)
+        {
+            ImGui::SeparatorText("Recast generation");
+            int algorithm = static_cast<int>(options.partitioningAlgorithm);
+            ImGui::TextUnformatted("Region partitioning");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::Combo("##partitioning", &algorithm, "Watershed\0Monotone\0Layers\0"))
+            {
+                options.partitioningAlgorithm = static_cast<navmesh::core::RegionPartitioningAlgorithm>(algorithm);
+            }
+            ImGui::PushID("recast");
+            DrawNumbers(RecastFields(options), algorithm == 2);
+            ImGui::PopID();
+        }
+        EndCard();
+    }
+
+    void DrawTarget(Workspace &workspace, HWND window)
+    {
+        auto &options = workspace.draft;
+        BeginCard("target", "REBUILD TARGET");
+        int scope = static_cast<int>(options.rebuildScope);
+        ImGui::TextUnformatted("Rebuild scope");
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::Combo("##scope", &scope, "Cell\0Plugin\0Load order\0"))
+        {
+            options.rebuildScope = static_cast<RebuildScope>(scope);
+        }
+        if (options.rebuildScope == RebuildScope::Cell)
+        {
+            ImGui::TextUnformatted("Cell identification");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::Combo("##identification", &workspace.identification, "Form ID\0Editor ID\0");
+            if (workspace.identification == 0)
+            {
+                TextField(workspace, window, "form", "Cell Form ID", "Hexadecimal CELL identifier from cells.json");
+            }
+            else
+            {
+                TextField(workspace, window, "editor", "Cell editor ID", "Exact CELL editor ID from cells.json");
+            }
+        }
+        else if (options.rebuildScope == RebuildScope::Plugin)
+        {
+            TextField(workspace, window, "affected_plugin", "Affected plugin", "Active ESP, ESM or ESL filename");
+        }
+        else
+        {
+            ImGui::TextWrapped(
+                "Rebuild cells affected by changes after the baseline plugin and MO2 model replacements.");
+        }
+        EndCard();
+    }
+
+    void DrawOutput(Workspace &workspace, HWND window)
+    {
+        auto &options = workspace.draft;
+        const bool cellScope = options.rebuildScope == RebuildScope::Cell;
+        const bool pluginScope = options.rebuildScope == RebuildScope::Plugin;
+        BeginCard("output", "OUTPUT", "Reports and exports are saved under this folder.");
+        TextField(workspace, window, "output", "Output folder", "Folder for this run's results", true);
+        if (cellScope)
+        {
+            bool candidate = options.generateCandidate || options.generatePlugin;
+            ImGui::BeginDisabled(options.generatePlugin);
+            if (ImGui::Checkbox("Generate candidate NAVM", &candidate))
+            {
+                options.generateCandidate = candidate;
+            }
+            ImGui::EndDisabled();
+            Help("Generate navigation using supported terrain and collision with the advanced Recast settings.");
+        }
+        bool writing = options.generatePlugin || (pluginScope && options.copyPlugin);
+        ImGui::BeginDisabled(pluginScope && options.copyPlugin);
+        if (ImGui::Checkbox("Write plugin", &writing))
+        {
+            options.generatePlugin = writing;
+        }
+        ImGui::EndDisabled();
+        Help("Write a verified NAVM patch; light format is selected automatically when eligible.");
+        if (pluginScope)
+        {
+            ImGui::Checkbox("Copy selected plugin", &options.copyPlugin);
+            Help("Enables plugin writing. Preserve other records and the filename; install this copy in place of the "
+                 "source.");
+        }
+        if (!cellScope || options.generateCandidate || options.generatePlugin)
+        {
+            ImGui::Checkbox("Skip cells with existing navmesh", &options.skipExistingNavmesh);
+            Help("Generate only for uncovered cells. Any winning NAVM record protects its cell.");
+        }
+        if (!cellScope)
+        {
+            ImGui::Checkbox("Estimate batch cost", &options.estimateOnly);
+            Help("Sample eligible targets, cache the work and write a cost report before a full rebuild.");
+            const bool minimalAllowed =
+                options.generatePlugin || (pluginScope && options.copyPlugin) || options.estimateOnly;
+            const char *policies[] = {"auto", "full", "compact", "plugin_only"};
+            const char *labels[] = {"Automatic", "Full inspection (JSON / OBJ)", "Compressed inspection (gzip JSON)",
+                                    "Plugin and reports only"};
+            int policy{};
+            for (int index = 0; index < 4; ++index)
+            {
+                if (options.batchOutput == policies[index])
                 {
-                    switch (LOWORD(wParam))
+                    policy = index;
+                }
+            }
+            if (!minimalAllowed && policy == 3)
+            {
+                options.batchOutput = "auto";
+                policy = 0;
+            }
+            ImGui::TextUnformatted("Batch output");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::BeginCombo("##batch", labels[policy]))
+            {
+                for (int index = 0; index < (minimalAllowed ? 4 : 3); ++index)
+                {
+                    if (ImGui::Selectable(labels[index], policy == index))
                     {
-                    case SB_LINEUP:
-                        state->scrollOffset -= 57;
-                        break;
-                    case SB_LINEDOWN:
-                        state->scrollOffset += 57;
-                        break;
-                    case SB_PAGEUP:
-                        state->scrollOffset -= scrolling.nPage;
-                        break;
-                    case SB_PAGEDOWN:
-                        state->scrollOffset += scrolling.nPage;
-                        break;
-                    case SB_THUMBTRACK:
-                        state->scrollOffset = scrolling.nTrackPos;
-                        break;
+                        options.batchOutput = policies[index];
                     }
                 }
-                Layout(*state);
-                InvalidateRect(window, nullptr, TRUE);
+                ImGui::EndCombo();
             }
-            return 0;
-        case WM_ERASEBKGND:
+        }
+        EndCard();
+    }
+
+    void DrawActions(Workspace &workspace)
+    {
+        const float scale = ImGui::GetStyle().FontScaleDpi;
+        int percent{}, code{};
+        std::string status;
+        {
+            std::lock_guard lock(workspace.status.mutex);
+            percent = workspace.status.percent;
+            code = workspace.status.code;
+            status = workspace.status.text;
+            if (workspace.status.complete)
+            {
+                workspace.busy = false;
+            }
+        }
+        ImGui::Separator();
+        ImGui::ProgressBar(percent / 100.0F, ImVec2(-1, 7 * scale), "");
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+        ImGui::BeginChild("status", ImVec2(0, 58 * scale));
+        ImGui::PopStyleColor();
+        const bool error = code != 0 && !workspace.busy;
+        if (error)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.58F, 0.5F, 1));
+        }
+        ImGui::TextWrapped("%s", status.c_str());
+        if (error)
+        {
+            ImGui::PopStyleColor();
+        }
+        ImGui::EndChild();
+        ImGui::BeginDisabled(workspace.busy);
+        if (ImGui::Button("List cells to file", ImVec2(172 * scale, 36 * scale)))
+        {
+            Start(workspace, true);
+        }
+        Help("Write cells.json in the output folder. Cell selection and generation settings are ignored.");
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!workspace.busy || workspace.status.cancel.load());
+        if (ImGui::Button("Cancel", ImVec2(90 * scale, 36 * scale)))
+        {
+            workspace.status.cancel = true;
+            std::lock_guard lock(workspace.status.mutex);
+            workspace.status.text = "Cancelling after the current safe operation...";
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(workspace.busy);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16F, 0.41F, 0.85F, 1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.23F, 0.51F, 0.96F, 1));
+        const char *action = workspace.draft.rebuildScope != RebuildScope::Cell && workspace.draft.estimateOnly
+                                 ? "Estimate batch"
+                                 : "Run";
+        if (ImGui::Button(action, ImVec2(-1, 36 * scale)))
+        {
+            Start(workspace, false);
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::EndDisabled();
+    }
+
+    void DrawWorkspace(Workspace &workspace, HWND window)
+    {
+        const float scale = ImGui::GetStyle().FontScaleDpi;
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+        ImGui::Begin("Workspace", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::TextColored(ImVec4(0.38F, 0.67F, 1, 1), "SKYRIM  /  OFFLINE WORKSPACE");
+        ImGui::PushFont(nullptr, 28);
+        ImGui::TextUnformatted("Navmesh Generator");
+        ImGui::PopFont();
+        ImGui::TextDisabled("Inspect cells and rebuild navigation from your MO2 profile.");
+        ImGui::Spacing();
+        // Settings scroll independently so progress, cancellation and run actions stay visible.
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+        ImGui::BeginChild("settings", ImVec2(0, -158 * scale));
+        ImGui::PopStyleColor();
+        ImGui::BeginDisabled(workspace.busy);
+        const int columns = ImGui::GetContentRegionAvail().x >= 760 * scale ? 2 : 1;
+        if (ImGui::BeginTable("setup", columns, ImGuiTableFlags_SizingStretchSame))
+        {
+            ImGui::TableNextColumn();
+            BeginCard("source", "INPUT PROFILE", "Use an existing MO2 instance and profile.");
+            TextField(workspace, window, "mo2", "Mod Organizer 2 folder", "Instance folder or portable MO2 root", true);
+            TextField(workspace, window, "profile", "MO2 profile", "Existing profile name");
+            EndCard();
+            ImGui::TableNextColumn();
+            DrawTarget(workspace, window);
+            ImGui::EndTable();
+        }
+        DrawOutput(workspace, window);
+        const auto &options = workspace.draft;
+        const bool cellScope = options.rebuildScope == RebuildScope::Cell;
+        const bool generation = !cellScope || options.generateCandidate || options.generatePlugin;
+        DrawAdvanced(workspace, window, cellScope, generation);
+        ImGui::EndDisabled();
+        ImGui::EndChild();
+        DrawActions(workspace);
+        ImGui::End();
+    }
+
+    /// Windows/DirectX resources stay on the UI thread; resizing releases all backbuffer references first.
+    struct DesktopHost
+    {
+        HWND window{};
+        ComPtr<ID3D11Device> device;
+        ComPtr<ID3D11DeviceContext> context;
+        ComPtr<IDXGISwapChain> swapChain;
+        ComPtr<ID3D11RenderTargetView> renderTarget;
+        UINT width{}, height{};
+        bool closeRequested{};
+        float dpiScale{1};
+
+        void CreateRenderTarget()
+        {
+            ComPtr<ID3D11Texture2D> buffer;
+            if (FAILED(swapChain->GetBuffer(0, IID_PPV_ARGS(&buffer))) ||
+                FAILED(device->CreateRenderTargetView(buffer.Get(), nullptr, &renderTarget)))
+            {
+                throw std::runtime_error("Cannot create the desktop render target.");
+            }
+        }
+
+        void Initialize()
+        {
+            DXGI_SWAP_CHAIN_DESC description{};
+            description.BufferCount = 2;
+            description.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            description.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+            description.OutputWindow = window;
+            description.SampleDesc.Count = 1;
+            description.Windowed = TRUE;
+            description.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+            const auto create = [&](D3D_DRIVER_TYPE driver)
+            {
+                return D3D11CreateDeviceAndSwapChain(nullptr, driver, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,
+                                                     &description, &swapChain, &device, nullptr, &context);
+            };
+            if (FAILED(create(D3D_DRIVER_TYPE_HARDWARE)) && FAILED(create(D3D_DRIVER_TYPE_WARP)))
+            {
+                throw std::runtime_error("DirectX 11 is unavailable for the desktop workspace.");
+            }
+            CreateRenderTarget();
+        }
+    };
+
+    LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        if (ImGui_ImplWin32_WndProcHandler(window, message, wParam, lParam))
+        {
             return TRUE;
-        case WM_PAINT:
-        {
-            PAINTSTRUCT paint{};
-            auto device = BeginPaint(window, &paint);
-            RECT client{};
-            GetClientRect(window, &client);
-            HBRUSH page = CreateSolidBrush(RGB(246, 248, 252));
-            FillRect(device, &client, page);
-            DeleteObject(page);
-            RECT header{0, 0, client.right, 91};
-            HBRUSH navy = CreateSolidBrush(RGB(15, 23, 42));
-            FillRect(device, &header, navy);
-            DeleteObject(navy);
-            RECT accent{0, 88, client.right, 91};
-            HBRUSH blue = CreateSolidBrush(RGB(59, 130, 246));
-            FillRect(device, &accent, blue);
-            DeleteObject(blue);
-            EndPaint(window, &paint);
-            return 0;
         }
-        case WM_CTLCOLORSTATIC:
+        auto *host = reinterpret_cast<DesktopHost *>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE)
         {
-            auto device = reinterpret_cast<HDC>(wParam);
-            SetBkMode(device, TRANSPARENT);
-            SetTextColor(device, reinterpret_cast<HWND>(lParam) == state->title      ? RGB(248, 250, 252)
-                                 : reinterpret_cast<HWND>(lParam) == state->subtitle ? RGB(191, 219, 254)
-                                                                                     : RGB(51, 65, 85));
-            return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
+            host = static_cast<DesktopHost *>(reinterpret_cast<CREATESTRUCTW *>(lParam)->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(host));
         }
-        case WM_CTLCOLOREDIT:
+        if (host)
         {
-            auto device = reinterpret_cast<HDC>(wParam);
-            SetTextColor(device, RGB(30, 41, 59));
-            SetBkColor(device, RGB(255, 255, 255));
-            return reinterpret_cast<LRESULT>(GetStockObject(WHITE_BRUSH));
-        }
-        case WM_COMMAND:
-            if (LOWORD(wParam) == RunButton)
+            switch (message)
             {
-                Start(window, false);
+            case WM_SIZE:
+                if (wParam != SIZE_MINIMIZED)
+                {
+                    host->width = LOWORD(lParam);
+                    host->height = HIWORD(lParam);
+                }
+                return 0;
+            case WM_GETMINMAXINFO:
+                reinterpret_cast<MINMAXINFO *>(lParam)->ptMinTrackSize = {static_cast<LONG>(700 * host->dpiScale),
+                                                                          static_cast<LONG>(660 * host->dpiScale)};
+                return 0;
+            case WM_DPICHANGED:
+            {
+                host->dpiScale = HIWORD(wParam) / 96.0F;
+                const auto *rect = reinterpret_cast<RECT *>(lParam);
+                SetWindowPos(window, nullptr, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top,
+                             SWP_NOACTIVATE | SWP_NOZORDER);
                 return 0;
             }
-            else if (LOWORD(wParam) == ListButton)
-            {
-                Start(window, true);
+            case WM_CLOSE:
+                host->closeRequested = true;
                 return 0;
-            }
-            else if (LOWORD(wParam) == CancelButton && state->cancelRequested)
-            {
-                state->cancelRequested->store(true);
-                EnableWindow(GetDlgItem(window, CancelButton), FALSE);
-                SetWindowTextA(state->status, "Cancelling after the current safe operation…");
+            case WM_DESTROY:
+                PostQuitMessage(0);
                 return 0;
-            }
-            break;
-        case WM_DRAWITEM:
-        {
-            const auto *item = reinterpret_cast<DRAWITEMSTRUCT *>(lParam);
-            if (item->CtlType != ODT_BUTTON)
-            {
+            case WM_SYSCOMMAND:
+                if ((wParam & 0xfff0) == SC_KEYMENU)
+                {
+                    return 0;
+                }
                 break;
             }
-            if (item->CtlID == RunButton || item->CtlID == ListButton || item->CtlID == CancelButton)
-            {
-                const auto primary = item->CtlID == RunButton;
-                HBRUSH brush = CreateSolidBrush(primary ? RGB(37, 99, 235) : RGB(226, 232, 240));
-                HPEN pen = CreatePen(PS_SOLID, 1, primary ? RGB(37, 99, 235) : RGB(203, 213, 225));
-                auto oldBrush = SelectObject(item->hDC, brush);
-                auto oldPen = SelectObject(item->hDC, pen);
-                RoundRect(item->hDC, item->rcItem.left, item->rcItem.top, item->rcItem.right, item->rcItem.bottom, 10,
-                          10);
-                SelectObject(item->hDC, oldBrush);
-                SelectObject(item->hDC, oldPen);
-                DeleteObject(brush);
-                DeleteObject(pen);
-                RECT bounds = item->rcItem;
-                SetBkMode(item->hDC, TRANSPARENT);
-                SetTextColor(item->hDC, primary ? RGB(255, 255, 255) : RGB(30, 41, 59));
-                const char *text = primary ? "Run analysis" : item->CtlID == CancelButton ? "Cancel" : "List cells";
-                DrawTextA(item->hDC, text, -1, &bounds, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                return TRUE;
-            }
-            HBRUSH brush = CreateSolidBrush(RGB(37, 99, 235));
-            auto previousBrush = SelectObject(item->hDC, brush);
-            Ellipse(item->hDC, item->rcItem.left + 2, item->rcItem.top + 2, item->rcItem.right - 2,
-                    item->rcItem.bottom - 2);
-            SelectObject(item->hDC, previousBrush);
-            DeleteObject(brush);
-            RECT bounds = item->rcItem;
-            SetBkMode(item->hDC, TRANSPARENT);
-            SetTextColor(item->hDC, RGB(255, 255, 255));
-            DrawTextA(item->hDC, "?", 1, &bounds, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            return TRUE;
         }
-        case ProgressMessage:
-        {
-            std::unique_ptr<std::string> status(reinterpret_cast<std::string *>(lParam));
-            SendMessageA(state->progress, PBM_SETPOS, wParam, 0);
-            SetWindowTextA(state->percent, (std::to_string(wParam) + "%").c_str());
-            SetWindowTextA(state->status, status->c_str());
-            RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-            return 0;
-        }
-        case CompleteMessage:
-        {
-            std::unique_ptr<RunCompletion> completed(reinterpret_cast<RunCompletion *>(lParam));
-            char elapsed[80]{};
-            std::snprintf(elapsed, sizeof(elapsed), "%s in %.2f seconds.",
-                          wParam == 0   ? "Completed"
-                          : wParam == 3 ? "Cancelled"
-                                        : "Stopped",
-                          completed->elapsed);
-            std::string status = elapsed;
-            if ((wParam == 0 || completed->summary.starts_with("Plugin generation failed")) &&
-                !completed->summary.empty())
-            {
-                status += " " + completed->summary;
-            }
-            SetWindowTextA(state->status, status.c_str());
-            SendMessageA(state->progress, PBM_SETPOS,
-                         wParam == 3 ? SendMessageA(state->progress, PBM_GETPOS, 0, 0) : 100, 0);
-            SetWindowTextA(state->percent,
-                           wParam == 3 ? (std::to_string(SendMessageA(state->progress, PBM_GETPOS, 0, 0)) + "%").c_str()
-                                       : "100%");
-            EnableWindow(GetDlgItem(window, RunButton), TRUE);
-            EnableWindow(GetDlgItem(window, ListButton), TRUE);
-            EnableWindow(GetDlgItem(window, CancelButton), FALSE);
-            RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-            return 0;
-        }
-        case WM_DESTROY:
-            DeleteObject(state->heading);
-            DeleteObject(state->body);
-            DeleteObject(state->label);
-            delete state;
-            PostQuitMessage(0);
-            return 0;
-        }
-        return DefWindowProcA(window, message, wParam, lParam);
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    void ApplyTheme(float scale)
+    {
+        auto &style = ImGui::GetStyle();
+        style = ImGuiStyle{};
+        ImGui::StyleColorsDark();
+        style.WindowPadding = ImVec2(24, 20);
+        style.FramePadding = ImVec2(12, 9);
+        style.ItemSpacing = ImVec2(12, 10);
+        style.ItemInnerSpacing = ImVec2(8, 8);
+        style.WindowRounding = 0;
+        style.ChildRounding = 12;
+        style.FrameRounding = 6;
+        style.PopupRounding = 8;
+        style.ScrollbarRounding = 8;
+        style.ChildBorderSize = 0;
+        style.FrameBorderSize = 1;
+        style.Colors[ImGuiCol_WindowBg] = ImVec4(0.055F, 0.071F, 0.102F, 1);
+        style.Colors[ImGuiCol_ChildBg] = ImVec4(0.083F, 0.11F, 0.16F, 1);
+        style.Colors[ImGuiCol_FrameBg] = ImVec4(0.12F, 0.16F, 0.22F, 1);
+        style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.16F, 0.21F, 0.29F, 1);
+        style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.18F, 0.25F, 0.34F, 1);
+        style.Colors[ImGuiCol_Border] = ImVec4(0.2F, 0.26F, 0.35F, 1);
+        style.Colors[ImGuiCol_Text] = ImVec4(0.9F, 0.93F, 0.98F, 1);
+        style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.56F, 0.64F, 0.75F, 1);
+        style.Colors[ImGuiCol_Button] = ImVec4(0.16F, 0.21F, 0.29F, 1);
+        style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.21F, 0.3F, 0.43F, 1);
+        style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.17F, 0.36F, 0.65F, 1);
+        style.Colors[ImGuiCol_Header] = ImVec4(0.12F, 0.17F, 0.25F, 1);
+        style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.17F, 0.27F, 0.41F, 1);
+        style.Colors[ImGuiCol_CheckMark] = ImVec4(0.38F, 0.67F, 1, 1);
+        style.Colors[ImGuiCol_PlotHistogram] = ImVec4(0.26F, 0.53F, 0.96F, 1);
+        style.ScaleAllSizes(scale);
+        style.FontScaleDpi = scale;
     }
 } // namespace
 
-int navmesh::ui::RunWindowsUi(const navmesh::app::Options &)
+int navmesh::ui::RunWindowsUi(const app::Options &initialOptions)
 {
-    INITCOMMONCONTROLSEX controls{.dwSize = sizeof(controls), .dwICC = ICC_PROGRESS_CLASS | ICC_WIN95_CLASSES};
-    InitCommonControlsEx(&controls);
-    const WNDCLASSA klass{.lpfnWndProc = Procedure,
-                          .hInstance = GetModuleHandleA(nullptr),
-                          .hCursor = LoadCursor(nullptr, IDC_ARROW),
-                          .hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1),
-                          .lpszClassName = "NavmeshGeneratorWindow"};
-    RegisterClassA(&klass);
-    auto window = CreateWindowExA(0, klass.lpszClassName, "Navmesh Generator", WS_OVERLAPPEDWINDOW | WS_VSCROLL,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, 1040, 1020, nullptr, nullptr, klass.hInstance, nullptr);
-    ShowWindow(window, SW_SHOW);
-    UpdateWindow(window);
-    MSG message;
-    while (GetMessageA(&message, nullptr, 0, 0) > 0)
+    const auto com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    ImGui_ImplWin32_EnableDpiAwareness();
+    DesktopHost host;
+    const WNDCLASSEXW klass{sizeof(WNDCLASSEXW),
+                            CS_CLASSDC,
+                            WindowProcedure,
+                            0,
+                            0,
+                            GetModuleHandleW(nullptr),
+                            nullptr,
+                            LoadCursor(nullptr, IDC_ARROW),
+                            nullptr,
+                            nullptr,
+                            L"NavmeshGeneratorWorkspace",
+                            nullptr};
+    if (!RegisterClassExW(&klass))
     {
-        TranslateMessage(&message);
-        DispatchMessageA(&message);
+        if (SUCCEEDED(com))
+        {
+            CoUninitialize();
+        }
+        return 1;
     }
-    return static_cast<int>(message.wParam);
+    bool platformInitialized{}, rendererInitialized{};
+    int result{};
+    try
+    {
+        Workspace workspace;
+        workspace.draft = initialOptions;
+        LoadSettings(workspace);
+        host.dpiScale = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
+        host.window = CreateWindowExW(0, klass.lpszClassName, L"Navmesh Generator", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+                                      CW_USEDEFAULT, static_cast<int>(880 * host.dpiScale),
+                                      static_cast<int>(950 * host.dpiScale), nullptr, nullptr, klass.hInstance, &host);
+        if (!host.window)
+        {
+            throw std::runtime_error("Cannot create the desktop workspace window.");
+        }
+        host.Initialize();
+        const BOOL darkTitle = TRUE;
+        DwmSetWindowAttribute(host.window, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkTitle, sizeof(darkTitle));
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        auto &io = ImGui::GetIO();
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        io.IniFilename = nullptr;
+        io.LogFilename = nullptr;
+        std::array<wchar_t, MAX_PATH> windowsDirectory{};
+        GetWindowsDirectoryW(windowsDirectory.data(), static_cast<UINT>(windowsDirectory.size()));
+        const auto font = std::filesystem::path(windowsDirectory.data()) / "Fonts" / "segoeui.ttf";
+        if (std::filesystem::exists(font))
+        {
+            io.Fonts->AddFontFromFileTTF(PathText(font).c_str(), 18);
+        }
+        ApplyTheme(host.dpiScale);
+        platformInitialized = ImGui_ImplWin32_Init(host.window);
+        rendererInitialized = ImGui_ImplDX11_Init(host.device.Get(), host.context.Get());
+        if (!platformInitialized || !rendererInitialized)
+        {
+            throw std::runtime_error("Cannot initialize Dear ImGui desktop rendering.");
+        }
+        ShowWindow(host.window, SW_SHOWDEFAULT);
+        UpdateWindow(host.window);
+        bool quit{};
+        while (!quit)
+        {
+            MSG message{};
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+            {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+                quit = quit || message.message == WM_QUIT;
+            }
+            if (quit)
+            {
+                break;
+            }
+            if (host.closeRequested)
+            {
+                workspace.status.cancel = true;
+                std::lock_guard lock(workspace.status.mutex);
+                if (!workspace.busy || workspace.status.complete)
+                {
+                    break;
+                }
+                workspace.status.text = "Closing after the current safe operation...";
+            }
+            if (IsIconic(host.window))
+            {
+                Sleep(30);
+                continue;
+            }
+            if (host.width && host.height)
+            {
+                host.context->OMSetRenderTargets(0, nullptr, nullptr);
+                host.renderTarget.Reset();
+                if (FAILED(host.swapChain->ResizeBuffers(0, host.width, host.height, DXGI_FORMAT_UNKNOWN, 0)))
+                {
+                    throw std::runtime_error("Cannot resize the desktop workspace.");
+                }
+                host.width = host.height = 0;
+                host.CreateRenderTarget();
+            }
+            if (ImGui::GetStyle().FontScaleDpi != host.dpiScale)
+            {
+                ApplyTheme(host.dpiScale);
+            }
+            ImGui_ImplDX11_NewFrame();
+            ImGui_ImplWin32_NewFrame();
+            ImGui::NewFrame();
+            DrawWorkspace(workspace, host.window);
+            ImGui::Render();
+            const float clear[] = {0.055F, 0.071F, 0.102F, 1};
+            auto *target = host.renderTarget.Get();
+            host.context->OMSetRenderTargets(1, &target, nullptr);
+            host.context->ClearRenderTargetView(target, clear);
+            ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+            if (FAILED(host.swapChain->Present(1, 0)))
+            {
+                throw std::runtime_error("The desktop graphics device stopped rendering.");
+            }
+        }
+        SaveSettings(workspace);
+    }
+    catch (const std::exception &error)
+    {
+        MessageBoxW(host.window, Wide(error.what()).c_str(), L"Navmesh Generator", MB_OK | MB_ICONERROR);
+        result = 1;
+    }
+    if (rendererInitialized)
+    {
+        ImGui_ImplDX11_Shutdown();
+    }
+    if (platformInitialized)
+    {
+        ImGui_ImplWin32_Shutdown();
+    }
+    if (ImGui::GetCurrentContext())
+    {
+        ImGui::DestroyContext();
+    }
+    if (host.window)
+    {
+        DestroyWindow(host.window);
+    }
+    UnregisterClassW(klass.lpszClassName, klass.hInstance);
+    if (SUCCEEDED(com))
+    {
+        CoUninitialize();
+    }
+    return result;
 }

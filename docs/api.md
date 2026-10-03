@@ -39,6 +39,12 @@ this reference.
 - `navmesh::analysis`: spatial queries and navmesh discrepancy analysis.
 - `navmesh::validation`: cell validation findings.
 - `navmesh::app`: command-line options and the shared application runner.
+- `navmesh::ui::RunWindowsUi`: dark Dear ImGui desktop host, persisted MO2
+  controls, background shared-run execution, progress and safe cancellation.
+- `navmesh::ui::PrepareDesktopOptions`: rendering-independent contextual option
+  preparation for cell, plugin, load-order and catalog-export actions.
+- `navmesh::core::RecastSettings`, `NavigationProfile` and `ValidateRecastSettings`:
+  shared movement, voxel, contour and region controls with finite/range validation.
 - `navmesh::app::detail::RunBatch`: affected-cell orchestration with bounded
   geometry reuse and combined plugin writer dispatch.
 - `navmesh::app::detail` geometry-pipeline helpers: world-space extraction

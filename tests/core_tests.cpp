@@ -1867,7 +1867,9 @@ namespace
 
 void TestPerformanceCaches();
 
-int main(int argc, char** argv)
+void TestDesktopOptionsAndRecastSettings();
+
+int main(int argc, char **argv)
 {
     if (argc > 1 && std::string_view(argv[1]) == "--performance-only")
     {
@@ -1904,6 +1906,7 @@ int main(int argc, char** argv)
         TestReciprocalCellTransitions();
         return 0;
     }
+    TestDesktopOptionsAndRecastSettings();
     TestGeometryNeighborhoodCulling();
     TestAffectedCells();
     TestResolvedLoadOrder();

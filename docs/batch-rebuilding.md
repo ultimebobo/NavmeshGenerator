@@ -14,7 +14,7 @@ compressed, or plugin-only artifacts explicitly.
 
 For authoring, **Copy selected plugin** / `--copy-plugin` enables writing and
 uses the selected Plugin-scope file as the output template. The UI persists the
-option and rejects it in Cell or Load order scope. The result is written under
+option and exposes it only in Plugin scope. The result is written under
 the source filename in the output folder and is intended to replace the selected
 plugin while retaining its assets. It preserves encoded unrelated records,
 TES4 flags, and existing master indices. Header accounting is updated; master

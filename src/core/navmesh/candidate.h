@@ -15,22 +15,42 @@ namespace navmesh::core
     /// in Skyrim world units. Only matched portal endpoints may extend beyond candidate cell bounds.
     inline constexpr float AuthoredBorderTolerance{4.0F};
 
-    /// Fixed human movement and surface constraints used to build a candidate navmesh.
+    /// Agent movement and surface constraints used to build a candidate navmesh.
     /// Distances and areas use Skyrim world units; angles use degrees.
     struct NavigationProfile
     {
         std::string name{"human"};
+        /// Finite, nonnegative horizontal footprint radius in Skyrim world units.
         float agentRadius{16.0F};
+        /// Finite, positive standing height in Skyrim world units.
         float agentHeight{128.0F};
+        /// Finite walking slope limit in degrees, nonnegative and below a right angle.
         float maxSlopeDegrees{45.0F};
-        /// Maximum traversable step height in Skyrim world units.
+        /// Finite, nonnegative maximum traversable step height in Skyrim world units.
         float stepHeight{28.0F};
+        /// Finite, positive headroom in Skyrim world units; Recast uses the larger of this and agentHeight.
         float clearance{128.0F};
+        /// Finite, positive distance tolerance for geometry and authored-border matching in Skyrim units.
         float weldTolerance{0.05F};
-        /// Minimum area for a disconnected walkable island, in square Skyrim world units.
+        /// Finite, nonnegative minimum disconnected-island area, in square Skyrim world units.
         float minimumRegionArea{8172.0F};
         float contourSimplificationTolerance{0.05F};
         std::string cellBorderPolicy{"preserve_open_border"};
+    };
+
+    /// Recast voxel and contour controls; input geometry remains in Skyrim world space.
+    struct RecastSettings
+    {
+        /// Finite, positive requested horizontal voxel size in Skyrim units; adaptive sizing may increase it.
+        float cellSize{4.0F};
+        /// Vertical voxel size in Skyrim units; must be finite and positive.
+        float cellHeight{2.0F};
+        /// Maximum contour deviation in horizontal voxels; finite and nonnegative.
+        float maxSimplificationError{2.0F};
+        /// Maximum contour edge length in Skyrim units; zero disables subdivision.
+        float maxEdgeLength{};
+        /// Merge area relative to the profile's minimum region area; ignored by layer partitioning.
+        float mergeRegionAreaMultiplier{4.0F};
     };
 
     struct CandidateRegion
@@ -91,6 +111,8 @@ namespace navmesh::core
     struct CandidateNavMesh
     {
         NavigationProfile profile;
+        /// Requested voxel/contour controls retained as reproducibility evidence.
+        RecastSettings recastSettings;
         /// Recast region partition strategy used to build this candidate.
         std::string partitioningAlgorithm{"watershed"};
         NavMesh mesh;
@@ -111,7 +133,7 @@ namespace navmesh::core
 
     /// Build a candidate from supported terrain and collision triangles in a scene.
     /// @param scene Geometry and source evidence to inspect.
-    /// @param profile Fixed human movement and surface constraints in Skyrim world units.
+    /// @param profile Agent movement and surface constraints in Skyrim world units.
     /// @param cellBounds Optional generated exterior area's world-space bounds for border handling.
     /// @param exits Enabled placed DOOR references in Skyrim world coordinates. A door
     /// anchors only a nearby polygon on the same vertical level.
