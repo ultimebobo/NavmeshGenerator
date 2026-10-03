@@ -4,6 +4,10 @@
 
 namespace navmesh::core
 {
+    /// Skyrim NVNM preferred-route triangle bit; independent of external-edge bits.
+    inline constexpr std::uint16_t PreferredPathFlag = 1U << 6;
+    /// Skyrim NVNM water triangle bit; may coexist with preferred-route marking.
+    inline constexpr std::uint16_t WaterFlag = 1U << 9;
     /// A triangular navigation polygon and its source neighbor/flag data.
     struct NavPolygon
     {

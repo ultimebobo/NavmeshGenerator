@@ -6,6 +6,15 @@ No Bethesda game assets, plugins, or extracted NIFs are committed here. Unit tes
 
 Add fixture files only when their license, provenance, and regeneration path are documented in this directory.
 
+## Triangle tagging
+
+`tests/triangle_tagging_tests.cpp` constructs overlapping marked and unmarked
+floors, stacked surfaces, contradictory markings and malformed authored faces.
+`tools/test_batch_rebuild.py` creates exterior water and preferred-route fixtures,
+checks water-height inheritance, and independently reads exported NVNM flags and
+GLB groups. Cell and batch paths exercise enabled and disabled classification and
+cache invalidation. No location names or game assets enter these fixtures.
+
 ## Stairs and overpasses
 
 `tests/navigation_obstacle_tests.cpp` builds a synthetic collision scene from

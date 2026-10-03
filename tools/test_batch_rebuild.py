@@ -27,14 +27,14 @@ def land(offset=0):
     return sub("VHGT", struct.pack("<f", offset) + bytes(33 * 33 + 3))
 
 
-def navm(x, y=0):
+def navm(x, y=0, flags=(0, 0)):
     vertices = [(x * 4096, y * 4096, 0), ((x + 1) * 4096, y * 4096, 0),
                 ((x + 1) * 4096, (y + 1) * 4096, 0), (x * 4096, (y + 1) * 4096, 0)]
     body = struct.pack("<IIIhhI", 12, 0, 0x400, y, x, 4)
     body += b"".join(struct.pack("<fff", *vertex) for vertex in vertices)
     body += struct.pack("<I", 2)
-    body += struct.pack("<8H", 0, 1, 2, 65535, 65535, 1, 0, 0)
-    body += struct.pack("<8H", 0, 2, 3, 0, 65535, 65535, 0, 0)
+    body += struct.pack("<8H", 0, 1, 2, 65535, 65535, 1, flags[0], 0)
+    body += struct.pack("<8H", 0, 2, 3, 0, 65535, 65535, flags[1], 0)
     body += struct.pack("<4I8fI2H", 0, 0, 0, 1, *([0] * 8), 2, 0, 1)
     return sub("NVNM", body)
 
@@ -88,20 +88,21 @@ class BatchRebuild(unittest.TestCase):
         (self.root / "Patch.esp").write_bytes(record("TES4", 0, patch_header) + group(int.from_bytes(b"WRLD", "little"), 0, patch))
         (self.root / "plugins.txt").write_text("Baseline.esm\nPatch.esp\n")
 
-    def write_baseline(self, navmeshes=None, references=None):
+    def write_baseline(self, navmeshes=None, references=None, water=None, world_data=b""):
         if navmeshes is None:
             navmeshes = {x: navm(x) for x in range(3)}
         cells = b""
         for x in range(3):
             cell = 0x100 + x
             payload = sub("EDID", f"Exterior{x}\0".encode()) + sub("XCLC", struct.pack("<ii", x, 0))
+            payload += (water or {}).get(x, b"")
             children = record("LAND", 0x300 + x, land())
             if x in navmeshes:
                 children += record("NAVM", 0x200 + x, navmeshes[x])
             children += (references or {}).get(x, b"")
             cells += record("CELL", cell, payload) + group(cell, 6, group(cell, 9, children))
         header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
-        world = record("WRLD", 0x400, sub("EDID", b"FixtureWorld\0")) + group(0x400, 1, cells)
+        world = record("WRLD", 0x400, sub("EDID", b"FixtureWorld\0") + world_data) + group(0x400, 1, cells)
         (self.root / "Baseline.esm").write_bytes(record("TES4", 0, header, 1) + group(int.from_bytes(b"WRLD", "little"), 0, world))
 
     def run_cli(self, *args, output="output", code=0, terrain_only=True):
@@ -137,6 +138,87 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(report["selected_cells"], 2)
         self.assertEqual(report["scope"], "load_order")
         self.assertIn("metadata", report)
+
+    def test_triangle_tagging_and_disable(self):
+        self.write_baseline(navmeshes={x: navm(x, flags=(0x40, 0)) for x in range(3)},
+                            water={0: sub("DATA", b"\x02\x00") + sub("XCLW", struct.pack("<f", 10))})
+        def check(candidate, enabled):
+            self.assertEqual(candidate["triangle_tagging"], enabled)
+            polygons = candidate["polygons"]
+            self.assertTrue(polygons)
+            self.assertEqual(any(p["water"] for p in polygons), enabled)
+            self.assertEqual(any(p["preferred_path"] for p in polygons), enabled)
+            for p in polygons:
+                self.assertEqual(p["water"], bool(p["flags"] & 0x200))
+                self.assertEqual(p["preferred_path"], bool(p["flags"] & 0x40))
+        single = self.run_cli("--cell-formid", "100", "--generate-plugin", output="tagged-cell")
+        tagged_candidate = json.loads((single / "candidate-navm.json").read_text())
+        check(tagged_candidate, True)
+        glb = (single / "scene.glb").read_bytes()
+        glb_json_size = struct.unpack_from("<I", glb, 12)[0]
+        scene = json.loads(glb[20:20 + glb_json_size])
+        self.assertTrue(any(mesh["name"] == "Candidate NAVM: water" for mesh in scene["meshes"]))
+        self.assertTrue(any(mesh["name"] == "Candidate NAVM: water_preferred_path" for mesh in scene["meshes"]))
+        # Independent NVNM decoding proves actual plugin flags, beyond inspection JSON.
+        for kind, form, _, payload in read_records(single / "generated-navmesh.esp"):
+            if kind == "NAVM" and form & 0xffffff == 0x200:
+                body = payload[6:]
+                triangle_at = 20 + struct.unpack_from("<I", body, 16)[0] * 12
+                count = struct.unpack_from("<I", body, triangle_at)[0]
+                flags = [struct.unpack_from("<H", body, triangle_at + 4 + i * 16 + 12)[0] for i in range(count)]
+                self.assertTrue(any(f & 0x200 for f in flags))
+                self.assertTrue(any(f & 0x40 for f in flags))
+                break
+        else:
+            self.fail("Expected generated primary NAVM")
+        disabled = self.run_cli("--cell-formid", "100", "--generate-plugin", "--no-triangle-tagging",
+                                output="untagged-cell")
+        untagged_candidate = json.loads((disabled / "candidate-navm.json").read_text())
+        check(untagged_candidate, False)
+        self.assertEqual(tagged_candidate["vertices"], untagged_candidate["vertices"])
+        for tagged, untagged in zip(tagged_candidate["polygons"], untagged_candidate["polygons"]):
+            self.assertEqual(tagged["vertices"], untagged["vertices"])
+            self.assertEqual(tagged["neighbors"], untagged["neighbors"])
+        for kind, _, _, payload in read_records(disabled / "generated-navmesh.esp"):
+            if kind == "NAVM":
+                body = payload[6:]
+                triangle_at = 20 + struct.unpack_from("<I", body, 16)[0] * 12
+                count = struct.unpack_from("<I", body, triangle_at)[0]
+                self.assertFalse(any(struct.unpack_from("<H", body, triangle_at + 4 + i * 16 + 12)[0] & 0x240
+                                     for i in range(count)))
+        batch = self.run_cli("--rebuild-plugin", "Patch.esp", output="tagged-batch")
+        check(json.loads((batch / "cells/00000100/candidate-navm.json").read_text()), True)
+        disabled_batch = self.run_cli("--rebuild-plugin", "Patch.esp", "--no-triangle-tagging",
+                                     output="untagged-batch")
+        check(json.loads((disabled_batch / "cells/00000100/candidate-navm.json").read_text()), False)
+        report = json.loads((disabled_batch / "batch-report.json").read_text())
+        self.assertFalse(any(cell["candidate_reused"] for cell in report["cells"]))
+
+    def test_effective_water_height(self):
+        variants = [(b"", True), (sub("XCLW", struct.pack("<f", -2147483648)), True),
+                    (sub("XCLW", struct.pack("<f", -1)), False),
+                    (sub("XCLW", struct.pack("<f", float("nan"))), False),
+                    (sub("XCLW", b"\0"), False)]
+        for index, (height, expected) in enumerate(variants):
+            with self.subTest(index=index):
+                self.write_baseline(water={0: sub("DATA", b"\x02\x00") + height},
+                                    world_data=sub("DNAM", struct.pack("<ff", 0, 10)))
+                output = self.run_cli("--cell-formid", "100", "--generate-candidate", output=f"water-{index}")
+                candidate = json.loads((output / "candidate-navm.json").read_text())
+                self.assertEqual(any(p["water"] for p in candidate["polygons"]), expected)
+        self.write_baseline(water={0: sub("XCLW", struct.pack("<f", 10))})
+        output = self.run_cli("--cell-formid", "100", "--generate-candidate", output="dry-cell")
+        self.assertFalse(any(p["water"] for p in json.loads((output / "candidate-navm.json").read_text())["polygons"]))
+
+    def test_parent_world_water(self):
+        parent_link = sub("WNAM", struct.pack("<I", 0x401)) + sub("PNAM", struct.pack("<H", 8))
+        self.write_baseline(water={0: sub("DATA", b"\x02\x00")},
+                            world_data=parent_link + sub("DNAM", struct.pack("<ff", 0, -1)))
+        parent = record("WRLD", 0x401, sub("EDID", b"ParentWorld\0") + sub("DNAM", struct.pack("<ff", 0, 10)))
+        with (self.root / "Baseline.esm").open("ab") as plugin:
+            plugin.write(group(int.from_bytes(b"WRLD", "little"), 0, parent))
+        output = self.run_cli("--cell-formid", "100", "--generate-candidate", output="parent-water")
+        self.assertTrue(any(p["water"] for p in json.loads((output / "candidate-navm.json").read_text())["polygons"]))
 
     def test_generated_polygons_reach_door_or_border(self):
         """Check actual adjacency after border stitching in both shared run paths."""

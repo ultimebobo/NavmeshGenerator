@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 #include <unordered_map>
+#include <unordered_set>
 #include <zlib.h>
 
 namespace
@@ -860,6 +861,60 @@ namespace navmesh::skyrim
             input.progress(sources.size(), sources.size(), {});
         }
         std::unordered_map<std::uint32_t, std::size_t> cellsById;
+        // Default CELL heights inherit winning WRLD water. Parent-world water uses
+        // the winning world's master table; cycles or unresolved parents supply no evidence.
+        const auto worldWaterHeight = [&](std::uint32_t worldId) -> std::optional<float>
+        {
+            std::unordered_set<std::uint32_t> visited;
+            while (visited.insert(worldId).second)
+            {
+                const auto winner = winners.find(worldId);
+                if (winner == winners.end())
+                {
+                    return std::nullopt;
+                }
+                const auto &world = result.records[winner->second];
+                if (world.type != "WRLD" || !world.raw || (world.raw->flags & 0x20U))
+                {
+                    return std::nullopt;
+                }
+                std::optional<float> height;
+                std::uint32_t parent{};
+                bool inheritWater{};
+                for (const auto &sub : world.raw->subrecords)
+                {
+                    if (sub.type == "DNAM" && sub.data.size() >= 8)
+                    {
+                        float value;
+                        std::memcpy(&value, sub.data.data() + 4, sizeof(value));
+                        if (std::isfinite(value) && value > -2147483648.0F)
+                        {
+                            height = value;
+                        }
+                    }
+                    else if (sub.type == "WNAM" && sub.data.size() >= 4)
+                    {
+                        parent = U32(sub.data, 0);
+                    }
+                    else if (sub.type == "PNAM" && sub.data.size() >= 2)
+                    {
+                        inheritWater = (U16(sub.data, 0) & (1U << 3)) != 0;
+                    }
+                }
+                if (!inheritWater || !parent)
+                {
+                    return height;
+                }
+                const auto owner = byName.find(Lower(world.winning.plugin));
+                const auto resolvedParent = owner == byName.end() ? std::nullopt : resolve(owner->second, parent);
+                if (!resolvedParent)
+                {
+                    return std::nullopt;
+                }
+                worldId = *resolvedParent;
+            }
+            return std::nullopt;
+        };
         for (const auto &record : result.records)
         {
             if (record.type == "CELL")
@@ -870,6 +925,41 @@ namespace navmesh::skyrim
                                         .name = record.name,
                                         .isInterior = !record.exteriorCoordinates.has_value(),
                                         .exteriorCoordinates = record.exteriorCoordinates});
+                auto &cell = result.cells.back();
+                bool hasWater{};
+                bool defaultHeight = true;
+                if (record.raw && !cell.isInterior && !(record.raw->flags & 0x20U))
+                {
+                    for (const auto &sub : record.raw->subrecords)
+                    {
+                        if (sub.type == "DATA" && !sub.data.empty())
+                        {
+                            hasWater = (sub.data[0] & 2U) != 0;
+                        }
+                        else if (sub.type == "XCLW")
+                        {
+                            defaultHeight = false;
+                            if (sub.data.size() >= sizeof(float))
+                            {
+                                float height;
+                                std::memcpy(&height, sub.data.data(), sizeof(height));
+                                defaultHeight = std::isfinite(height) && height <= -2147483648.0F;
+                                if (std::isfinite(height) && !defaultHeight)
+                                {
+                                    cell.waterHeight = height;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!hasWater)
+                {
+                    cell.waterHeight.reset();
+                }
+                else if (defaultHeight && record.worldspaceFormId)
+                {
+                    cell.waterHeight = worldWaterHeight(*record.worldspaceFormId);
+                }
             }
         }
         for (const auto &record : result.records)

@@ -34,6 +34,8 @@ namespace navmesh::app
         std::string affectedPlugin;
         /// Write generated navigation as NAVM overrides or new records in uncovered cells.
         bool generatePlugin{};
+        /// Detect generated water and preferred-route triangles; disable to export unclassified geometry.
+        bool tagTriangles{true};
         /// Copy the affected plugin with generated NAVMs instead of writing a NAVM-only patch.
         /// Requires Plugin scope and generatePlugin; keeps the source filename and master indices.
         bool copyPlugin{};

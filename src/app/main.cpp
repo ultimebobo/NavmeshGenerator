@@ -7,6 +7,7 @@
 #include "cli/json_report.h"
 #include "core/navmesh/candidate.h"
 #include "core/navmesh/generator.h"
+#include "core/navmesh/triangle_tagging.h"
 #include "core/scene/scene_exporter.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
@@ -132,7 +133,7 @@ namespace
                 << "Usage: NavmeshGenerator --mo2 <instance-or-portable-root> --profile <existing-profile> "
                    "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --rebuild-plugin <active "
                    "filename> | --rebuild-load-order] [--generate-plugin] [--copy-plugin] [--skip-existing-navmesh] "
-                   "[--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
+                   "[--no-triangle-tagging] [--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
                    "[--cache-budget-mib <MiB>] [--working-memory-mib <MiB>] [--workers <count>] [--estimate-only] "
                    "--output "
                    "<dir>\nDeveloper/test override: "
@@ -820,6 +821,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                         "No exterior border edge matched an adjacent NAVM; cross-cell navigation is unlinked.");
                 }
             }
+            navmesh::core::TagCandidateTriangles(*candidate, cell->navMeshes, cell->waterHeight, options.tagTriangles);
         }
         catch (const std::exception &error)
         {

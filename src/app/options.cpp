@@ -170,6 +170,10 @@ namespace navmesh::app
             {
                 options.generateCandidate = true;
             }
+            else if (argument == "--no-triangle-tagging")
+            {
+                options.tagTriangles = false;
+            }
             else if (argument == "--generate-plugin")
             {
                 if (index + 1 < argc &&

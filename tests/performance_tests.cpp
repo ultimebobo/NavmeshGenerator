@@ -45,6 +45,14 @@ void TestPerformanceCaches()
     profile.minimumRegionArea = 0;
     const auto key = app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed");
     assert(!key.empty());
+    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {}, {}, false) != key);
+    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {}, 10.0F) != key);
+    core::NavMesh authored{.vertices = {{0, 0, 0}, {256, 0, 0}, {0, 256, 0}},
+                           .polygons = {{.vertices = {0, 1, 2}, .flags = core::PreferredPathFlag}}};
+    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {authored}) != key);
+    const auto authoredKey = app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {authored});
+    authored.polygons[0].flags = 0;
+    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {authored}) != authoredKey);
     scene.geometrySources[0].navigationObstacle = true;
     assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed") != key);
     scene.geometrySources[0].navigationObstacle = false;
@@ -58,6 +66,8 @@ void TestPerformanceCaches()
 
     auto candidate = core::GenerateCandidate(scene, profile);
     assert(candidate.topology.valid && candidate.mesh.polygons.size() == 2);
+    candidate.triangleTagging = true;
+    candidate.mesh.polygons.front().flags = core::WaterFlag | core::PreferredPathFlag;
     const auto root = std::filesystem::temp_directory_path() / "navmesh-cache-round-trip";
     std::filesystem::create_directories(root);
     const auto path = root / "candidate.gz";

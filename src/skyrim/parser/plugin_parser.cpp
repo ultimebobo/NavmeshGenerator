@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -308,6 +309,7 @@ namespace navmesh::skyrim
                     core::Cell cell{};
                     cell.id = header->formId;
                     cell.name = "Tamriel";
+                    bool hasWater{};
                     std::size_t subOffset = 0;
                     while (subOffset + 6 <= payload->size())
                     {
@@ -336,6 +338,19 @@ namespace navmesh::skyrim
                         {
                             cell.isInterior = true;
                         }
+                        else if (subType == "DATA" && subSize >= 1)
+                        {
+                            hasWater = ((*payload)[subDataStart] & 2U) != 0;
+                        }
+                        else if (subType == "XCLW" && subSize >= sizeof(float))
+                        {
+                            float height;
+                            std::memcpy(&height, payload->data() + subDataStart, sizeof(height));
+                            if (std::isfinite(height) && height > -2147483648.0F)
+                            {
+                                cell.waterHeight = height;
+                            }
+                        }
                         else if (subType == "XCLC" && subSize >= 8)
                         {
                             // XCLC's coordinates define an exterior CELL. The
@@ -345,6 +360,10 @@ namespace navmesh::skyrim
                                                         ReadI32LE(*payload, subDataStart + 4)};
                         }
                         subOffset = subDataEnd;
+                    }
+                    if (!hasWater || cell.isInterior)
+                    {
+                        cell.waterHeight.reset();
                     }
                     cells.push_back(std::move(cell));
                 }

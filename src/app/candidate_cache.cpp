@@ -23,7 +23,7 @@ namespace navmesh::app::detail
     namespace
     {
         // Private cache layout is deliberately versioned, distinct from supported inspection/export formats.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-4/recast-pipeline-8";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-5/recast-pipeline-9";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)
@@ -100,7 +100,7 @@ namespace navmesh::app::detail
         }
         template <class Archive> void Fields(Archive &a, core::CandidateNavMesh &v)
         {
-            a(v.profile, v.recastSettings, v.partitioningAlgorithm, v.mesh, v.polygonSourceTriangles,
+            a(v.profile, v.recastSettings, v.partitioningAlgorithm, v.triangleTagging, v.mesh, v.polygonSourceTriangles,
               v.polygonContributingTriangles, v.regions, v.exits, v.borderLinks, v.contours, v.topology, v.statistics,
               v.warnings);
         }
@@ -272,7 +272,8 @@ namespace navmesh::app::detail
     std::string CandidateFingerprint(const core::Scene &scene, const core::NavigationProfile &profile,
                                      std::optional<core::AABB> bounds, const std::vector<core::CandidateExit> &exits,
                                      const std::vector<core::NavMesh> &neighbors, std::string_view partitioning,
-                                     const core::RecastSettings &settings)
+                                     const core::RecastSettings &settings, const std::vector<core::NavMesh> &authored,
+                                     std::optional<float> waterHeight, bool tagTriangles)
     {
         core::ContentHash hash;
         hash.Add(Schema);
@@ -286,7 +287,7 @@ namespace navmesh::app::detail
         Archive archive(hash);
         archive(Writable(scene.mesh.vertices), Writable(scene.mesh.triangles), Writable(scene.geometrySources),
                 Writable(scene.triangleProvenance), Writable(profile), Writable(settings), bounds, Writable(exits),
-                Writable(neighbors));
+                Writable(neighbors), Writable(authored), waterHeight, tagTriangles);
         return archive.good ? hash.Hex() : std::string{};
     }
 

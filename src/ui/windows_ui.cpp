@@ -157,10 +157,12 @@ namespace
 
     auto BooleanFields(Options &options)
     {
-        return std::array{
-            std::pair{"candidate", &options.generateCandidate}, std::pair{"generate_plugin", &options.generatePlugin},
-            std::pair{"skip_existing_navmesh", &options.skipExistingNavmesh},
-            std::pair{"copy_plugin", &options.copyPlugin}, std::pair{"estimate_only", &options.estimateOnly}};
+        return std::array{std::pair{"candidate", &options.generateCandidate},
+                          std::pair{"generate_plugin", &options.generatePlugin},
+                          std::pair{"skip_existing_navmesh", &options.skipExistingNavmesh},
+                          std::pair{"triangle_tagging", &options.tagTriangles},
+                          std::pair{"copy_plugin", &options.copyPlugin},
+                          std::pair{"estimate_only", &options.estimateOnly}};
     }
 
     auto IntegerFields(Options &options)
@@ -218,7 +220,11 @@ namespace
         }
         for (const auto &field : BooleanFields(options))
         {
-            *field.second = ReadConfig(workspace.config, field.first, *field.second ? "1" : "0") == "1";
+            const auto value = ReadConfig(workspace.config, field.first, *field.second ? "1" : "0");
+            if (value == "0" || value == "1")
+            {
+                *field.second = value == "1";
+            }
         }
         const auto readNumbers = [&](const auto &fields)
         {
@@ -570,6 +576,9 @@ namespace
         if (generation)
         {
             ImGui::SeparatorText("Recast generation");
+            ImGui::Checkbox("Tag water and preferred path triangles", &options.tagTriangles);
+            Help("Classify submerged floors using exterior water levels and preserve nearby authored preferred "
+                 "routes on the same floor. Without a supported water plane, authored water tags provide evidence.");
             int algorithm = static_cast<int>(options.partitioningAlgorithm);
             ImGui::TextUnformatted("Region partitioning");
             ImGui::SetNextItemWidth(-1);

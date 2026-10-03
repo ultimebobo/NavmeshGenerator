@@ -52,6 +52,10 @@ Generation uses simplified contours and movement-bounded height detail to keep
 triangle counts closer to authored navigation. Straight stair flights can become
 compact ramps while landings, turns and obstructions retain the detail they need.
 Landscape rock collision blocks movement without creating walkable rock tops.
+Generation also tags submerged triangles as water and preserves nearby authored
+preferred paths on matching floors. Disable **Tag water and preferred path
+triangles** in Advanced settings to omit these tags. Candidate JSON and scene
+colors expose the classifications for review; exported plugins retain the tags.
 Use **Reset** in Advanced settings to adopt current numerical defaults if your
 desktop configuration already has saved values. Smaller contour error follows
 obstacle outlines more closely and can increase the triangle count.

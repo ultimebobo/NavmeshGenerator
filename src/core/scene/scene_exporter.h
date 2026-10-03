@@ -47,6 +47,7 @@ namespace navmesh::core
                                        SceneLayer::RenderFallback, SceneLayer::DiagnosticMarkers};
         std::optional<SceneBounds> bounds;
         bool detailedProvenance{true};
+        /// Borrowed generated mesh; water/preferred flags select distinct inspection materials.
         const NavMesh *candidateNavmesh{};
         /// Placed exits to another area, including physical doors and cave entrances, shown in orange.
         /// Positions use Skyrim world coordinates; optional polygon indices color the candidate's linked faces.

@@ -2,6 +2,7 @@
 
 #include "app/candidate_cache.h"
 #include "core/navmesh/generator.h"
+#include "core/navmesh/triangle_tagging.h"
 #include "core/reproducibility/export_metadata.h"
 
 #include <algorithm>
@@ -110,8 +111,9 @@ namespace navmesh::app::detail
                 options.partitioningAlgorithm == core::RegionPartitioningAlgorithm::Monotone ? "monotone"
                 : options.partitioningAlgorithm == core::RegionPartitioningAlgorithm::Layers ? "layers"
                                                                                              : "watershed";
-            const auto key = CandidateFingerprint(input.geometry.scene, options.navigationProfile, input.bounds,
-                                                  input.exits, input.adjacent, algorithm, options.recastSettings);
+            const auto key = CandidateFingerprint(
+                input.geometry.scene, options.navigationProfile, input.bounds, input.exits, input.adjacent, algorithm,
+                options.recastSettings, result.cell->navMeshes, result.cell->waterHeight, options.tagTriangles);
             result.auditPath = key.empty() ? input.stagingDirectory / std::format("{:08X}.gz", result.cell->id)
                                            : input.cacheDirectory / "candidates" / (key + ".gz");
             core::Scene evidence;
@@ -128,6 +130,8 @@ namespace navmesh::app::detail
                 }
                 result.generationSeconds =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+                core::TagCandidateTriangles(result.candidate, result.cell->navMeshes, result.cell->waterHeight,
+                                            options.tagTriangles);
                 if (!result.candidate.topology.valid)
                 {
                     throw std::runtime_error("Candidate topology validation failed");

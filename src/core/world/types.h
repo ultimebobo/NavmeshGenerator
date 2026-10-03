@@ -40,5 +40,8 @@ namespace navmesh::core
         std::optional<std::array<std::int32_t, 2>> exteriorCoordinates;
         std::vector<Reference> references;
         std::vector<NavMesh> navMeshes;
+        /// Effective exterior water surface Z in Skyrim world units, when supported and finite.
+        /// Absent for dry cells, interiors, or unresolved/default water data.
+        std::optional<float> waterHeight;
     };
 } // namespace navmesh::core

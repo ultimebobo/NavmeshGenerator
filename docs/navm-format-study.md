@@ -45,6 +45,13 @@ connection sections are not carried into generated geometry.
 
 ## Preservation and failure policy
 
+Generated classification uses the preferred-path and water flag bits defined in
+[xEdit's shared NAVM flags](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsCommon.pas).
+These are independent of external-edge and traversal fields. Optional classification
+runs before serialization; read-back comparison checks the complete triangle flags.
+See [generated triangle tagging](command-line.md#generated-triangle-tagging).
+
+
 - Every indexed roadmap record keeps its header/file byte ranges, exact on-disk
   payload, decoded payload, and ordered encoded subrecords.  Unknown subrecords,
   duplicate subrecords, ordering, and `XXXX` encodings are therefore available

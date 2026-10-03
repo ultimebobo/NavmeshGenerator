@@ -24,6 +24,9 @@ inside its owning group.
 | `Existing NAVM ...: unsupported` | dark gray | unsupported or unknown classification |
 | `Existing NAVM ...: door_linked` / `Candidate NAVM: door_linked` | orange | triangles associated with an exit; this material takes priority over the analysis face color |
 | `Candidate NAVM` | blue-green | generated navigation connected to an entrance or exterior cell border |
+| `Candidate NAVM: water` | blue | generated triangles classified as water |
+| `Candidate NAVM: preferred_path` | yellow | generated triangles following authored preferred routes |
+| `Candidate NAVM: water_preferred_path` | teal | generated triangles with both independent tags |
 | `Authored link ...` / `Candidate link ...` | bright green | solid bars running along the recorded edge between connected triangles, lifted above the surface |
 | `Door ...` | orange | enabled exit position, including physical doors and invisible cave entrances |
 | `Terrain` | brown-green | decoded `LAND` height surface |
@@ -51,6 +54,8 @@ objects, source record/model provenance, and connection endpoint identities.
 `analysis.json` links each NAVM classification to its selected world-triangle
 index; `geometry.json` resolves that index to complete triangle provenance.
 Door coloring does not change the analysis classification or repair evidence.
+Generated water/preferred classifications take color priority over door-linked
+faces; the door marker and candidate JSON door association remain available.
 
 Every requested layer is emitted as a top-level GLB group, even when it has no
 child mesh. An empty `Terrain`, `Collision`, or `Original NAVM (current cell)` group therefore

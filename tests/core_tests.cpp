@@ -1944,6 +1944,7 @@ namespace
 }
 
 void TestPerformanceCaches();
+void TestTriangleTagging();
 
 void TestDesktopOptionsAndRecastSettings();
 void TestNavigationObstacleFixture();
@@ -1951,6 +1952,7 @@ void ExportNavigationObstacleFixture(const std::filesystem::path &directory);
 
 int main(int argc, char **argv)
 {
+    TestTriangleTagging();
     if (argc > 2 && std::string_view(argv[1]) == "--export-navigation-fixture")
     {
         ExportNavigationObstacleFixture(argv[2]);

@@ -6,6 +6,13 @@ this reference.
 
 ## Code map
 
+- `navmesh::core::TagCandidateTriangles`: optional centroid-based water detection
+  and closest-floor authored water/preferred-path transfer after border reshaping.
+  It preserves geometry and connection bits; `WaterFlag` and `PreferredPathFlag`
+  name the independent Skyrim NVNM classification bits.
+- `navmesh::core::Cell::waterHeight`: supported effective exterior water-surface Z
+  supplied by the Skyrim parser, including winning worldspace inheritance.
+
 - `navmesh::core`: neutral geometry, world and navmesh data, scene provenance,
   candidate generation, and exports.
 - `navmesh::core::WriteCombinedGlb`: ordered scene groups, separate selected-cell

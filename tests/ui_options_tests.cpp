@@ -27,11 +27,13 @@ void TestDesktopOptionsAndRecastSettings()
     draft.copyPlugin = true;
     draft.estimateOnly = true;
     draft.skipExistingNavmesh = true;
+    draft.tagTriangles = false;
     draft.navigationProfile.agentRadius = 7;
     draft.recastSettings.cellSize = 8;
     draft.rebuildScope = app::RebuildScope::Plugin;
     const auto plugin = ui::PrepareDesktopOptions(draft, ui::CellIdentification::FormId, false);
     assert(plugin.copyPlugin && plugin.generatePlugin && plugin.generateCandidate && plugin.estimateOnly);
+    assert(!plugin.tagTriangles);
     assert(!plugin.cellFormId && plugin.editorId.empty() && !plugin.cellX && !plugin.cellY);
     assert(plugin.plugin.empty() && !plugin.terrainOnly && !plugin.diagnostics);
     assert(plugin.navigationProfile.agentRadius == 7 && plugin.recastSettings.cellSize == 8);

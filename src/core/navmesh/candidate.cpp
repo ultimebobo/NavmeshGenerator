@@ -2794,6 +2794,7 @@ namespace navmesh::core
                "\"metadata\": "
             << metadataJson << ",\n";
         out << std::format("  \"partitioning_algorithm\": \"{}\",\n", candidate.partitioningAlgorithm);
+        out << std::format("  \"triangle_tagging\": {},\n", candidate.triangleTagging);
         const auto &recast = candidate.recastSettings;
         out << std::format("  \"recast_settings\": {{\"cell_size\":{},\"cell_height\":{},"
                            "\"max_simplification_error\":{},\"max_edge_length\":{},"
@@ -2840,7 +2841,8 @@ namespace navmesh::core
             {
                 out << (j ? "," : "") << candidate.polygonContributingTriangles[i][j];
             }
-            out << std::format("],\"geometry_source\":{}}}", sourceId);
+            out << std::format("],\"geometry_source\":{},\"flags\":{},\"water\":{},\"preferred_path\":{}}}", sourceId,
+                               tri.flags, (tri.flags & WaterFlag) != 0, (tri.flags & PreferredPathFlag) != 0);
         }
         out << "],\n  \"regions\": [";
         for (std::size_t i{}; i < candidate.regions.size(); ++i)

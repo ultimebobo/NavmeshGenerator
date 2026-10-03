@@ -56,6 +56,13 @@ options.
 
 ## Advanced generation settings
 
+**Tag water and preferred path triangles** enables generated classification and
+is saved with the other desktop choices. Water uses supported exterior water
+levels, with authored water markings as a fallback. Preferred paths follow
+nearby winning authored markings on a matching floor. Disable the checkbox to
+omit both tags; the CLI equivalent is `--no-triangle-tagging`.
+
+
 The UI and CLI pass the same navigation profile and Recast settings to Cell,
 Plugin and Load order generation. Defaults come from `NavigationProfile` and
 `RecastSettings`; numeric constraints are checked by `ValidateRecastSettings`.

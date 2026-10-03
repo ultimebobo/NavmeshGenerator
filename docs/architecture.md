@@ -16,6 +16,15 @@ The current POC keeps this intentionally narrow and reports unsupported record l
 
 ## 2. Skyrim extraction
 
+Winning exterior CELL water flags and heights resolve into `Cell::waterHeight`.
+Default heights use winning WRLD water data and master-aware parent-world
+inheritance; invalid, cyclic or unresolved data supplies no water plane.
+The neutral `core/navmesh/triangle_tagging` module classifies final generated
+triangles using that plane and winning authored floor markings. App cell and
+batch paths invoke it after border reshaping; cache inputs include all tagging
+dependencies. The serializer retains flags and inspection exports expose them.
+
+
 The extraction layer translates raw data into a neutral project model.
 
 - Input: plugin record stream

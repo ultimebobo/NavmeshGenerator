@@ -171,6 +171,34 @@ usage, see [implemented improvements](performance-improvements.md) and the
 [before/after snapshot](performance-improvements-measurements.json). The
 [original analysis](performance-analysis.md) preserves the baseline investigation.
 
+## Generated triangle tagging
+
+Generation enables water and preferred-path tagging by default in Cell, Plugin
+and Load order scopes. Use `--no-triangle-tagging` to disable both. The saved
+desktop setting is **Tag water and preferred path triangles** in Advanced settings.
+
+Water detection compares each final triangle's centroid with the effective
+exterior CELL water surface. The parser requires the CELL water flag and resolves
+explicit heights or default heights from winning worldspace water data, including
+parent-world inheritance. Invalid heights supply no plane. Interiors and the
+direct single-plugin reader have no worldspace-plane inference; explicit exterior
+heights remain usable in the direct reader. Without a supported plane, matching
+authored water markings supply evidence.
+
+Preferred paths come from the closest overlapping winning authored triangle at
+a compatible height. Unmarked floors participate in matching to keep preference
+from transferring between stacked surfaces. Matching tolerance follows the
+movement profile and vertical voxel resolution. Deleted or malformed authored
+triangles are ignored; equally close contradictory markings are conservative.
+This preserves authored route intent; it does not invent routes in areas without
+authored preference evidence. Centroid classification is approximate near shorelines
+and preference boundaries; it does not split generated triangles at those boundaries.
+
+Candidate JSON records `triangle_tagging` and per-polygon `flags`, `water`, and
+`preferred_path`. Plugins serialize both independent bits, which may coexist.
+Disabling tagging leaves geometry and connection flags intact. Cache fingerprints
+include the switch, effective water height, and winning selected-cell NAVMs.
+
 ## Reproducible fixtures and optional game checks
 
 The repository contains only synthetic, redistributable fixture builders; it does not include Skyrim assets. See [fixtures/README.md](../fixtures/README.md) for the policy and [docs/benchmarks.json](benchmarks.json) for the local benchmark reference manifest. To opt into the read-only local-game parser smoke test, configure `SKYRIM_DATA_DIR` as described in [tests/integration/README.md](../tests/integration/README.md). Without it, the complete test suite still runs and skips that check.

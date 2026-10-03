@@ -58,6 +58,18 @@ namespace
     }
     [[nodiscard]] std::size_t MaterialIndex(SceneLayer layer, const std::string &classification = {})
     {
+        if (classification == "water")
+        {
+            return 15;
+        }
+        if (classification == "preferred_path")
+        {
+            return 16;
+        }
+        if (classification == "water_preferred_path")
+        {
+            return 17;
+        }
         if (classification == "door_linked" || classification == "entrance")
         {
             return 13;
@@ -477,6 +489,7 @@ namespace navmesh::core
             Object object{SceneLayer::CandidateNavmesh, "Candidate NAVM", "{\"kind\":\"neutral_candidate\"}"};
             Object doors{SceneLayer::CandidateNavmesh, "Candidate NAVM: door_linked",
                          "{\"kind\":\"neutral_candidate\",\"classification\":\"door_linked\"}", "door_linked"};
+            std::map<std::string, Object> tagged;
             std::set<std::uint32_t> doorPolygons;
             if (options.candidateEntrances)
             {
@@ -495,11 +508,36 @@ namespace navmesh::core
                 {
                     continue;
                 }
-                AppendPolygon(doorPolygons.contains(static_cast<std::uint32_t>(polygonIndex)) ? doors : object,
-                              *points);
+                const auto flags = candidate.polygons[polygonIndex].flags;
+                const bool water = (flags & WaterFlag) != 0;
+                const bool preferred = (flags & PreferredPathFlag) != 0;
+                if (water || preferred)
+                {
+                    const std::string classification = water && preferred ? "water_preferred_path"
+                                                       : water            ? "water"
+                                                                          : "preferred_path";
+                    auto [entry, added] = tagged.try_emplace(classification);
+                    if (added)
+                    {
+                        entry->second = {
+                            SceneLayer::CandidateNavmesh, "Candidate NAVM: " + classification,
+                            std::format("{{\"kind\":\"neutral_candidate\",\"classification\":\"{}\"}}", classification),
+                            classification};
+                    }
+                    AppendPolygon(entry->second, *points);
+                }
+                else
+                {
+                    AppendPolygon(doorPolygons.contains(static_cast<std::uint32_t>(polygonIndex)) ? doors : object,
+                                  *points);
+                }
             }
             objects.push_back(std::move(object));
             objects.push_back(std::move(doors));
+            for (auto &[_, group] : tagged)
+            {
+                objects.push_back(std::move(group));
+            }
         }
         if (options.candidateEntrances && Contains(options.layers, SceneLayer::DiagnosticMarkers))
         {
@@ -663,7 +701,7 @@ namespace navmesh::core
             result.triangles += object.triangles.size();
             ++result.objects;
         }
-        const std::array<const char *, 15> materialNames{"Unclassified NAVM (cyan)",
+        const std::array<const char *, 18> materialNames{"Unclassified NAVM (cyan)",
                                                          "Terrain (brown-green)",
                                                          "Collision (gray)",
                                                          "Render fallback (purple)",
@@ -677,8 +715,11 @@ namespace navmesh::core
                                                          "Unsupported or unknown (dark gray)",
                                                          "Candidate NAVM (blue-green)",
                                                          "Door / door-linked NAVM (orange)",
-                                                         "NAVM link (green)"};
-        const std::array<std::array<float, 4>, 15> colors{{{{0.0F, 0.85F, 0.95F, 0.70F}},
+                                                         "NAVM link (green)",
+                                                         "Water NAVM (blue)",
+                                                         "Preferred path NAVM (yellow)",
+                                                         "Water preferred path NAVM (teal)"};
+        const std::array<std::array<float, 4>, 18> colors{{{{0.0F, 0.85F, 0.95F, 0.70F}},
                                                            {{0.35F, 0.48F, 0.16F, 1.0F}},
                                                            {{0.46F, 0.46F, 0.50F, 1.0F}},
                                                            {{0.58F, 0.25F, 0.75F, 0.80F}},
@@ -692,7 +733,10 @@ namespace navmesh::core
                                                            {{0.25F, 0.28F, 0.32F, 0.75F}},
                                                            {{0.02F, 0.78F, 0.72F, 0.8F}},
                                                            {{1.0F, 0.45F, 0.0F, 1.0F}},
-                                                           {{0.05F, 1.0F, 0.10F, 1.0F}}}};
+                                                           {{0.05F, 1.0F, 0.10F, 1.0F}},
+                                                           {{0.05F, 0.30F, 1.0F, 0.8F}},
+                                                           {{1.0F, 0.85F, 0.10F, 0.8F}},
+                                                           {{0.10F, 0.85F, 0.85F, 0.8F}}}};
         std::vector<std::string> materials;
         for (std::size_t i{}; i < materialNames.size(); ++i)
         {

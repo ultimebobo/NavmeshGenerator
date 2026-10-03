@@ -125,6 +125,15 @@ The named CELL is reproduction data rather than a special-case rule.
 
 ## Evidence and decision
 
+The shared application paths classify the final candidate after authored-border
+reshaping. `TagCandidateTriangles` compares world-space centroids against the
+effective water plane and closest overlapping authored floor; water and preferred
+path bits are independent. Unmarked authored surfaces constrain nearest-height
+matching, preventing lower route markings from leaking onto upper surfaces.
+Classification changes flags only and is optional. It is approximate at boundaries
+and does not infer preference where authored route intent is unavailable.
+
+
 The local exterior benchmark is the existing `output/default` export
 for CELL `00008EA2` at (26, 25). Its saved `geometry.json` identifies the
 winning LAND and collision sources and contains 98,558 source triangles:

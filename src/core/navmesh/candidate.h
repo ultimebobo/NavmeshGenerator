@@ -120,6 +120,8 @@ namespace navmesh::core
         RecastSettings recastSettings;
         /// Recast region partition strategy used to build this candidate.
         std::string partitioningAlgorithm{"watershed"};
+        /// Whether water/preferred-route detection was applied to this generated candidate.
+        bool triangleTagging{};
         NavMesh mesh;
         /// Primary input triangle for each output polygon, retained for simple source joins.
         std::vector<std::size_t> polygonSourceTriangles;
