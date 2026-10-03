@@ -101,7 +101,9 @@ namespace navmesh::core
     struct CandidateStatistics
     {
         std::size_t inputTriangles{}, eligibleTriangles{}, rejectedSlope{}, rejectedClearance{}, rejectedObstruction{},
-            rejectedSource{}, rejectedDegenerate{}, rejectedSmallRegion{}, rejectedUnreachable{};
+            rejectedSource{}, rejectedDegenerate{}, rejectedSmallRegion{};
+        /// Generated triangles discarded because their component reaches neither a border nor a matched door.
+        std::size_t rejectedUnreachable{};
         /// Polygon count after filtering and before conservative interior simplification.
         std::size_t polygonsBeforeSimplification{};
         /// Final candidate triangle count after interior simplification.

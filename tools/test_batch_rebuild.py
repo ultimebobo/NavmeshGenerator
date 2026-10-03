@@ -138,6 +138,39 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(report["scope"], "load_order")
         self.assertIn("metadata", report)
 
+    def test_generated_polygons_reach_door_or_border(self):
+        """Check actual adjacency after border stitching in both shared run paths."""
+        single = self.run_cli("--cell-formid", "100", "--generate-candidate", output="reachable-cell")
+        batch = self.run_cli("--rebuild-plugin", "Patch.esp", output="reachable-batch")
+        candidates = [(single / "candidate-navm.json", 0)]
+        candidates.extend((batch / "cells" / f"{0x100 + x:08X}" / "candidate-navm.json", x) for x in range(2))
+        for path, cell_x in candidates:
+            with self.subTest(path=path):
+                candidate = json.loads(path.read_text())
+                polygons = candidate["polygons"]
+                self.assertGreater(len(polygons), 0)
+                pending = [door["polygon"] for door in candidate["exits"] if door["polygon"] is not None]
+                pending.extend(link["polygon"] for link in candidate["border_links"])
+                for index, polygon in enumerate(polygons):
+                    for edge, neighbor in enumerate(polygon["neighbors"]):
+                        if neighbor is not None:
+                            continue
+                        a = candidate["vertices"][polygon["vertices"][edge]]
+                        b = candidate["vertices"][polygon["vertices"][(edge + 1) % 3]]
+                        if any(abs(a[axis] - limit) <= candidate["profile"]["weld_tolerance"] and
+                               abs(b[axis] - limit) <= candidate["profile"]["weld_tolerance"]
+                               for axis, limit in ((0, cell_x * 4096), (0, (cell_x + 1) * 4096), (1, 0), (1, 4096))):
+                            pending.append(index)
+                reachable = set()
+                while pending:
+                    index = pending.pop()
+                    if index in reachable:
+                        continue
+                    self.assertLess(index, len(polygons))
+                    reachable.add(index)
+                    pending.extend(neighbor for neighbor in polygons[index]["neighbors"] if neighbor is not None)
+                self.assertEqual(reachable, set(range(len(polygons))))
+
     def test_baseline_only_has_no_changes(self):
         (self.root / "plugins.txt").write_text("Baseline.esm\n")
         output = self.run_cli("--rebuild-load-order", "--generate-plugin")

@@ -124,7 +124,8 @@ back before the temporary file is finalized.
 
 In uncovered-cell mode, authored neighbor vertices and triangles are preserved;
 matched borders may add reciprocal portal links to them. Generated navigation
-retains valid regions without an authored portal requirement. Unmatched
+retains only components reaching a matched door or an exterior CELL boundary
+edge, without an authored portal requirement. Unmatched
 borders remain unlinked, including between newly covered cells, and require
 independent connection review. The generated ESP is light-flagged only when its
 master table and newly allocated identities fit the light format.

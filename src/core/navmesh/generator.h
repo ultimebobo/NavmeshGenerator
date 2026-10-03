@@ -36,7 +36,9 @@ namespace navmesh::core
          * @param exits Enabled door positions in Skyrim world coordinates.
          * @param partitioningAlgorithm Recast region strategy; defaults to watershed.
          * @param settings Voxel and contour controls; horizontal resolution adapts to scene extent.
-         * @return Candidate mesh and evidence; throws on invalid input or a build failure.
+         * @return Candidate mesh and evidence; every polygon has a shared-edge path to a
+         * matched door or exterior boundary edge. Empty when no component is anchored.
+         * Throws on invalid input or a build failure.
          */
         [[nodiscard]] virtual CandidateNavMesh Generate(
             const Scene &scene, const NavigationProfile &profile, std::optional<AABB> cellBounds,
@@ -49,16 +51,17 @@ namespace navmesh::core
     class RecastCandidateGenerator final : public CandidateGenerator
     {
       public:
-        /** Rasterize authoritative Skyrim-world terrain and collision and retain valid
-         * walkable components, including components without a door or exterior portal.
-         * Door and border reachability is reported as evidence.
+        /** Rasterize authoritative Skyrim-world terrain and collision and retain only
+         * walkable components with a shared-edge path to a matched door or exterior
+         * boundary edge. Border anchors do not require an authored neighboring portal.
          * @param scene Geometry with complete triangle provenance in Skyrim world coordinates.
          * @param profile Agent dimensions and movement constraints in Skyrim world units.
          * @param cellBounds Optional exterior area in Skyrim world coordinates; absent for interiors.
          * @param exits Enabled placed DOOR references in Skyrim world coordinates.
          * @param partitioningAlgorithm Recast region strategy; defaults to watershed.
          * @param settings Voxel and contour controls; invalid settings throw before voxel allocation.
-         * @return Candidate mesh and evidence; throws on invalid input or a Recast build failure.
+         * @return Candidate mesh and evidence, empty when no component is anchored;
+         * throws on invalid input or a Recast build failure.
          */
         [[nodiscard]] CandidateNavMesh Generate(
             const Scene &scene, const NavigationProfile &profile, std::optional<AABB> cellBounds,

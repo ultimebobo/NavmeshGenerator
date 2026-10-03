@@ -44,9 +44,15 @@ appeared in two connected regions. With the tested 28-unit climb, polygons
 from all three placements joined one connected region. These are local game-data
 measurements; the source assets are not committed.
 
-After polygon construction, the active generator retains every valid walkable
-component, including regions without a nearby door or exterior portal. Door
-matching records the closest compatible triangle as evidence. Exterior input
+After polygon construction and CELL clipping, the active generator retains only
+shared-edge components reaching a matched door or a boundary edge on the selected
+exterior CELL. Door matching selects the closest compatible triangle within the
+horizontal and vertical reach derived from the movement profile and voxel sizes.
+Large roofs and stone tops are discarded when they have no such path, regardless
+of their area. A surface merely near a border, or touching it at one vertex, does
+not qualify. Interiors without a matched door produce empty candidates. Filtering
+preserves source evidence and remaps polygon, neighbor, region, door and vertex
+indices; removed triangles are counted in `rejected_unreachable`. Exterior input
 includes a halo sized for radius erosion and neighboring voxels; the resulting
 mesh is clipped to the selected CELL after Recast construction. This preserves
 walkable seams where supported terrain or collision continues across the border.
@@ -63,8 +69,9 @@ to avoid collapsed connector triangles. Extensions obey distance, step, slope,
 and welding constraints. Inward authored offsets trim generated fans; outward
 offsets add connectors. Matched endpoints preserve the exact authored edge,
 including bounded deviations from the nominal CELL border. Other generated
-vertices stay inside the CELL. Unmatched regions remain present in candidate
-JSON, OBJ, GLB, and plugin output; no portal is invented across unsupported gaps.
+vertices stay inside the CELL. Border-reaching regions remain present in candidate
+JSON, OBJ, GLB, and plugin output even without a matched neighboring portal;
+no portal is invented across unsupported gaps.
 Entrance positions appear as orange markers, including unmatched entrances.
 See the [glossary](glossary.md) for the Creation Kit border-bar interpretation
 and the distinction between neighboring geometry and saved return links.
@@ -178,8 +185,8 @@ Bethesda FormID or serialize NVNM.
 The candidate is reproducible for identical scene geometry, source order, and
 fixed settings. Triangle order from the resolved load order is part of the input.
 Placed, enabled DOOR references are matched to nearby generated polygons at
-compatible heights. Region and exit evidence reports connectivity without
-requiring an entrance or border anchor for retention. For exterior targets with
+compatible heights. Every retained component must reach a matched entrance or a
+CELL boundary edge. For exterior targets with
 a resolved load order, `border_links` records neighboring NAVM targets for complete
 matched edges. The guarded writer serializes matched door and border portals.
 

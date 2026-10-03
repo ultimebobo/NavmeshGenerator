@@ -115,46 +115,13 @@ namespace
         return polygon;
     }
 
-    [[nodiscard]] bool TouchesBorder(Vec3 a, Vec3 b, Vec3 c, const AABB &bounds, float tolerance)
+    /// A border anchor requires a complete boundary edge; a nearby prop or corner is insufficient.
+    [[nodiscard]] bool IsBorderEdge(Vec3 a, Vec3 b, const AABB &bounds, float tolerance)
     {
-        // Intersect the triangle with a narrow strip at each outer cell edge.
-        const auto intersectsStrip = [&](float left, float bottom, float right, float top)
-        {
-            const std::array<Vec3, 3> points{a, b, c};
-            const float centerX = (left + right) * 0.5F, centerY = (bottom + top) * 0.5F;
-            const float halfX = (right - left) * 0.5F, halfY = (top - bottom) * 0.5F;
-            for (const auto [nx, ny] : {std::pair{1.0F, 0.0F}, std::pair{0.0F, 1.0F}})
-            {
-                const auto [low, high] = std::minmax({nx * a.x + ny * a.y, nx * b.x + ny * b.y, nx * c.x + ny * c.y});
-                const float center = nx * centerX + ny * centerY;
-                const float radius = std::abs(nx) * halfX + std::abs(ny) * halfY;
-                if (high < center - radius || low > center + radius)
-                {
-                    return false;
-                }
-            }
-            for (std::size_t side{}; side < 3; ++side)
-            {
-                const auto start = points[side], end = points[(side + 1) % 3];
-                const float nx = start.y - end.y, ny = end.x - start.x;
-                const auto [low, high] = std::minmax({nx * a.x + ny * a.y, nx * b.x + ny * b.y, nx * c.x + ny * c.y});
-                const float center = nx * centerX + ny * centerY;
-                const float radius = std::abs(nx) * halfX + std::abs(ny) * halfY;
-                if (high < center - radius || low > center + radius)
-                {
-                    return false;
-                }
-            }
-            return true;
-        };
-        return intersectsStrip(bounds.min.x - tolerance, bounds.min.y - tolerance, bounds.min.x + tolerance,
-                               bounds.max.y + tolerance) ||
-               intersectsStrip(bounds.max.x - tolerance, bounds.min.y - tolerance, bounds.max.x + tolerance,
-                               bounds.max.y + tolerance) ||
-               intersectsStrip(bounds.min.x - tolerance, bounds.min.y - tolerance, bounds.max.x + tolerance,
-                               bounds.min.y + tolerance) ||
-               intersectsStrip(bounds.min.x - tolerance, bounds.max.y - tolerance, bounds.max.x + tolerance,
-                               bounds.max.y + tolerance);
+        const auto onLine = [&](float first, float second, float limit)
+        { return std::abs(first - limit) <= tolerance && std::abs(second - limit) <= tolerance; };
+        return onLine(a.x, b.x, bounds.min.x) || onLine(a.x, b.x, bounds.max.x) || onLine(a.y, b.y, bounds.min.y) ||
+               onLine(a.y, b.y, bounds.max.y);
     }
 
     using SourceGrid = std::map<std::pair<int, int>, std::vector<std::size_t>>;
@@ -594,9 +561,15 @@ namespace
                             pending.push(neighbor);
                         }
                     }
-                    if (cellBounds && TouchesBorder(a, b, c, *cellBounds, borderTolerance))
+                    for (std::size_t edge{}; cellBounds && edge < face.vertices.size(); ++edge)
                     {
-                        region.reachesBorder = true;
+                        if (face.neighbors[edge] == NoNeighbor &&
+                            IsBorderEdge(result.mesh.vertices[face.vertices[edge]],
+                                         result.mesh.vertices[face.vertices[(edge + 1) % 3]], *cellBounds,
+                                         borderTolerance))
+                        {
+                            region.reachesBorder = true;
+                        }
                     }
                 }
                 std::sort(region.sourceTriangles.begin(), region.sourceTriangles.end());
@@ -640,6 +613,88 @@ namespace
                 result.regions[*door.region].exitFormIds.push_back(door.referenceId);
             }
         }
+    }
+
+    /** Retain whole shared-edge components anchored to a border or matched door.
+     * Stable polygon compaction preserves processing order and source provenance.
+     * Every polygon, neighbor, region and door index is rebased before unused
+     * vertices are removed. An unanchored interior produces an empty candidate.
+     */
+    void RetainReachableRegions(CandidateNavMesh &result)
+    {
+        std::vector<std::uint32_t> polygonRemap(result.mesh.polygons.size(), NoNeighbor);
+        std::vector<std::uint32_t> regionRemap(result.regions.size(), NoNeighbor);
+        std::uint32_t regionCount{};
+        for (const auto &region : result.regions)
+        {
+            if (region.reachesBorder || !region.exitFormIds.empty())
+            {
+                regionRemap[region.id] = regionCount++;
+                for (const auto polygon : region.polygons)
+                {
+                    polygonRemap[polygon] = 0;
+                }
+            }
+        }
+        std::uint32_t polygonCount{};
+        for (auto &polygon : polygonRemap)
+        {
+            if (polygon != NoNeighbor)
+            {
+                polygon = polygonCount++;
+            }
+        }
+        const auto removed = result.mesh.polygons.size() - polygonCount;
+        if (!removed)
+        {
+            return;
+        }
+
+        // Components are removed together, so no retained adjacency crosses into
+        // a discarded component. Source joins follow the same stable remapping.
+        std::vector<NavPolygon> polygons;
+        std::vector<std::size_t> sources;
+        std::vector<std::vector<std::size_t>> contributions;
+        for (std::size_t index{}; index < polygonRemap.size(); ++index)
+        {
+            if (polygonRemap[index] == NoNeighbor)
+            {
+                continue;
+            }
+            auto polygon = result.mesh.polygons[index];
+            for (auto &neighbor : polygon.neighbors)
+            {
+                if (neighbor != NoNeighbor)
+                {
+                    neighbor = polygonRemap[neighbor];
+                }
+            }
+            polygons.push_back(polygon);
+            sources.push_back(result.polygonSourceTriangles[index]);
+            contributions.push_back(std::move(result.polygonContributingTriangles[index]));
+        }
+        result.mesh.polygons = std::move(polygons);
+        result.polygonSourceTriangles = std::move(sources);
+        result.polygonContributingTriangles = std::move(contributions);
+        std::erase_if(result.regions, [&](const auto &region) { return regionRemap[region.id] == NoNeighbor; });
+        for (auto &region : result.regions)
+        {
+            region.id = regionRemap[region.id];
+            for (auto &polygon : region.polygons)
+            {
+                polygon = polygonRemap[polygon];
+            }
+        }
+        for (auto &door : result.exits)
+        {
+            if (door.polygon && door.region)
+            {
+                door.polygon = polygonRemap[*door.polygon];
+                door.region = regionRemap[*door.region];
+            }
+        }
+        CompactMeshVertices(result.mesh);
+        result.statistics.rejectedUnreachable += removed;
     }
 
 } // namespace
@@ -692,6 +747,11 @@ namespace navmesh::core
         result.profile = profile;
         result.recastSettings = settings;
         result.exits = std::move(exits);
+        for (auto &door : result.exits)
+        {
+            door.region.reset();
+            door.polygon.reset();
+        }
         switch (partitioningAlgorithm)
         {
         case RegionPartitioningAlgorithm::Watershed:
@@ -742,9 +802,11 @@ namespace navmesh::core
         BuildMeshAdjacency(result.mesh);
         AssignSourceProvenance(result, scene, sourceIndex, input.sources.front());
 
-        // Record connectivity and anchors without discarding walkable components.
-        BuildCandidateRegions(result, scene, cellBounds, profile.agentRadius + config.cs * 2);
+        // Anchor connectivity after CELL clipping: paths outside the selected
+        // bounds cannot keep a disconnected interior component alive.
+        BuildCandidateRegions(result, scene, cellBounds, profile.weldTolerance);
         MatchExits(result, profile.agentRadius * 4 + config.cs * 2, profile.stepHeight + config.ch * 2);
+        RetainReachableRegions(result);
         result.statistics.polygonsBeforeSimplification = result.mesh.polygons.size();
         result.statistics.outputPolygons = result.mesh.polygons.size();
         result.warnings.push_back("Recast source-triangle provenance is matched by nearest surface after voxelization; "

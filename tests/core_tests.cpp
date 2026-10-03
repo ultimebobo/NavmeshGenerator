@@ -1678,7 +1678,8 @@ namespace
         scene.geometrySources.push_back({.sourceType = GeometrySourceType::Terrain,
                                          .confidence = 1.0F,
                                          .reference = {"Fixture.esm", 0x100, "LAND"}});
-        scene.mesh.vertices = {{0, 0, 0}, {512, 0, 0}, {512, 512, 0}, {0, 512, 0}};
+        // Supported geometry crosses the CELL border so halo erosion leaves a real border edge.
+        scene.mesh.vertices = {{-100, -100, 0}, {512, -100, 0}, {512, 512, 0}, {-100, 512, 0}};
         scene.mesh.triangles = {{{0, 1, 2}}, {{0, 2, 3}}};
         scene.triangleProvenance = {{0, 0, {}}, {0, 1, {}}};
         const NavigationProfile profile{};
@@ -1686,7 +1687,8 @@ namespace
         const CandidateGenerator &generator = RecastCandidateGenerator{};
         const AABB cellBounds{.min = {0, 0, -100}, .max = {1024, 1024, 100}};
         const auto generated = generator.Generate(scene, profile, cellBounds, {});
-        Require(generated.mesh.polygons.size() == 2);
+        Require(!generated.mesh.polygons.empty() && generated.regions.size() == 1 &&
+                generated.regions[0].reachesBorder);
         Require(generated.topology.valid);
         Require(generated.statistics.eligibleTriangles == 2);
         Scene crossing = scene;
@@ -1714,9 +1716,9 @@ namespace
         permissive.minimumRegionArea = 64.0F;
         const auto withOrphan = generator.Generate(withIsland, permissive, cellBounds, {});
         const auto withoutIsland = generator.Generate(withIsland, profile, cellBounds, {});
-        Require(withOrphan.topology.valid && withOrphan.regions.size() == 2);
-        Require(withOrphan.mesh.polygons.size() > generated.mesh.polygons.size());
-        Require(withOrphan.statistics.rejectedUnreachable == 0);
+        Require(withOrphan.topology.valid && withOrphan.regions.size() == 1);
+        Require(withOrphan.mesh.polygons.size() == generated.mesh.polygons.size());
+        Require(withOrphan.statistics.rejectedUnreachable > 0);
         Require(withoutIsland.topology.valid && withoutIsland.regions.size() == 1);
         Require(withoutIsland.mesh.polygons.size() == generated.mesh.polygons.size());
         const auto doorLinked =
@@ -1725,8 +1727,62 @@ namespace
         Require(doorLinked.exits[0].region && !doorLinked.regions[*doorLinked.exits[0].region].reachesBorder);
         Require(doorLinked.mesh.polygons.size() > generated.mesh.polygons.size());
         const auto noAnchor = generator.Generate(scene, profile, std::nullopt, {});
-        Require(!noAnchor.mesh.polygons.empty() && noAnchor.regions.size() == 1 &&
-                noAnchor.statistics.rejectedUnreachable == 0 && noAnchor.topology.valid);
+        Require(noAnchor.mesh.polygons.empty() && noAnchor.mesh.vertices.empty() && noAnchor.regions.empty() &&
+                noAnchor.statistics.rejectedUnreachable > 0 && noAnchor.topology.valid);
+        for (const auto algorithm : {RegionPartitioningAlgorithm::Watershed, RegionPartitioningAlgorithm::Monotone,
+                                     RegionPartitioningAlgorithm::Layers})
+        {
+            // A large elevated surface is still unreachable without stairs or its own door.
+            Scene elevated = withIsland;
+            elevated.geometrySources.push_back({.sourceType = GeometrySourceType::Collision, .confidence = 1.0F});
+            elevated.mesh.vertices.insert(elevated.mesh.vertices.end(),
+                                          {{100, 100, 256}, {400, 100, 256}, {400, 400, 256}, {100, 400, 256}});
+            elevated.mesh.triangles.push_back({{8, 9, 10}});
+            elevated.mesh.triangles.push_back({{8, 10, 11}});
+            elevated.triangleProvenance.push_back({1, 0, {}});
+            elevated.triangleProvenance.push_back({1, 1, {}});
+            const auto filtered = generator.Generate(elevated, permissive, cellBounds, {}, algorithm);
+            Require(filtered.topology.valid && filtered.regions.size() == 1 &&
+                    filtered.statistics.rejectedUnreachable > 0);
+            Require(std::none_of(filtered.mesh.vertices.begin(), filtered.mesh.vertices.end(),
+                                 [](Vec3 point) { return point.z > 100 || point.x > 600; }));
+
+            // With no exterior bounds, only the door's component survives. Supplied
+            // joins must be recomputed, and compaction must keep every evidence index valid.
+            const auto interior = generator.Generate(
+                withIsland, permissive, std::nullopt,
+                {{.referenceId = 0x203, .position = {800, 232, 0}, .region = 999, .polygon = 999}}, algorithm);
+            Require(interior.topology.valid && interior.regions.size() == 1 &&
+                    interior.statistics.rejectedUnreachable > 0 && !interior.regions[0].reachesBorder);
+            Require(interior.exits[0].region == 0 && interior.exits[0].polygon &&
+                    *interior.exits[0].polygon < interior.mesh.polygons.size());
+            Require(interior.regions[0].exitFormIds == std::vector<std::uint32_t>{0x203});
+            Require(interior.polygonSourceTriangles.size() == interior.mesh.polygons.size() &&
+                    interior.polygonContributingTriangles.size() == interior.mesh.polygons.size());
+            for (const auto source : interior.polygonSourceTriangles)
+            {
+                Require(source == 2 || source == 3);
+            }
+            for (const auto polygon : interior.regions[0].polygons)
+            {
+                Require(polygon < interior.mesh.polygons.size());
+            }
+
+            const auto wrongHeight = generator.Generate(
+                withIsland, permissive, std::nullopt, {{.referenceId = 0x204, .position = {800, 232, 256}}}, algorithm);
+            Require(wrongHeight.topology.valid && wrongHeight.mesh.polygons.empty() && !wrongHeight.exits[0].region &&
+                    !wrongHeight.exits[0].polygon);
+
+            // Erosion leaves this floor close to the border but without a border edge.
+            Scene insetFloor = scene;
+            insetFloor.mesh.vertices = {{0, 0, 0}, {512, 0, 0}, {512, 512, 0}, {0, 512, 0}};
+            const auto nearBorder = generator.Generate(insetFloor, profile, cellBounds, {}, algorithm);
+            Require(nearBorder.topology.valid && nearBorder.mesh.polygons.empty() &&
+                    nearBorder.statistics.rejectedUnreachable > 0);
+        }
+        const auto emptyInput = generator.Generate(
+            {}, profile, std::nullopt, {{.referenceId = 0x205, .position = {}, .region = 999, .polygon = 999}});
+        Require(emptyInput.mesh.polygons.empty() && !emptyInput.exits[0].region && !emptyInput.exits[0].polygon);
         const auto root = std::filesystem::temp_directory_path() / "navmesh-recast-scene-test";
         std::filesystem::create_directories(root);
         Require(WriteCandidateJson(root / "candidate.json", generated, scene, "{}"));

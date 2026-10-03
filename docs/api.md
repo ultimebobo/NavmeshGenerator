@@ -27,7 +27,8 @@ this reference.
 - `navmesh::core::CandidateGenerator`: interchangeable scene-to-candidate
   interface. `RecastCandidateGenerator` is the application implementation and
   links against the Recast Navigation submodule under `lib/recastnavigation`.
-  It retains valid components and clips output after exterior-halo rasterization.
+  It clips output after exterior-halo rasterization and retains only shared-edge
+  components reaching a matched door or an exterior boundary edge.
 - `navmesh::core::StitchCandidateBorders`: preserves unlinked regions and matches
   authored border edges, coalescing compatible generated boundary subdivisions
   and splitting containing edges with consistent region, source, contour, door,

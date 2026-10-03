@@ -61,7 +61,12 @@ adjacent NAVM edges in the resolved load order and records reciprocal targets.
 The shared authored-border tolerance allows small deviations from nominal CELL
 bounds only at matched portal endpoints. Both generation and serialization
 preserve those endpoints and keep other generated vertices inside the target.
-Every valid generated component is retained. Stitching can subdivide a containing
+Only components with a shared-edge path to a matched door or a boundary edge on
+the selected exterior CELL are retained. Filtering follows CELL clipping and
+door matching, preserving source joins while compacting polygon, neighbor,
+region, door and vertex indices. Interiors without a matched door produce empty
+candidates. A border anchor does not require a saved neighboring portal.
+Stitching can subdivide a containing
 generated boundary edge to match smaller authored border edges without removing
 the remaining geometry. Collinear generated subdivisions can be coalesced through
 validated boundary-fan retriangulation, preserving the interior rim and remapping
