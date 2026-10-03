@@ -183,9 +183,15 @@ Navigation-equivalence comparison belongs to resolution; affected-cell indexing
 consumes its compact change evidence while preserving historical placements.
 
 `skyrim/extraction/asset_cache` resolves versioned archive-provider snapshots and
-evicts only owned generated files. The project-owned `tools/bsa_index.py` boundary
-indexes archive metadata and reads requested entry ranges. MO2 catalogs share the
-cache root and preserve virtual winner priority. `ModelGeometryCache` retains
+evicts only owned generated files. `skyrim/extraction/bsa_archive` owns native
+BSA directory parsing, bounded zlib/LZ4 decoding, archive precedence, reliable
+negative caching, and atomic publication of requested NIFs. `BsaModelExtractor`
+loads directory tables lazily and retains them for the geometry-cache lifetime;
+its calls are serialized by the model cache. Changed-archive impact selection
+uses the same reader without decompressing payloads. Indexes are run-scoped,
+while extracted model snapshots retain cross-run reuse. The Python reference
+reader under `tools/` supports differential tests and benchmarks. MO2 catalogs
+share the cache root and preserve virtual winner priority. `ModelGeometryCache` retains
 immutable decoded and placed geometry under one byte budget. `GeometryExtraction`
 and `TerrainExtraction` keep support geometry solely in their scene meshes.
 

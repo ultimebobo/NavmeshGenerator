@@ -23,15 +23,18 @@ xmake resolves the compression and model-library packages declared by the build.
 
 ## Archived asset setup
 
-Reading assets from BSA archives requires Python and the bridge dependencies:
+The application reads requested BSA models with its in-process C++ reader and
+reuses a shared disk cache. xmake resolves the native zlib and LZ4 dependencies;
+no Python interpreter or extractor script is needed at runtime. See
+[performance and cache settings](performance-improvements.md) and the
+[BSA performance investigation](bsa-performance.md).
+
+Python and the packages in `tools/requirements.txt` are needed only for the
+Python reference-reader regressions and comparative benchmarks:
 
 ```powershell
 python -m pip install -r tools/requirements.txt
 ```
-
-Python must be available on PATH, or `NAVMESH_PYTHON` must point to its executable.
-Archive extraction uses the BSAFileExtractor submodule and a shared asset cache;
-see [performance and cache settings](performance-improvements.md).
 
 ## Automated checks
 
@@ -49,7 +52,8 @@ Run the CLI regressions against the desktop binary without opening its UI:
 ```powershell
 python tools/test_batch_rebuild.py ./build/windows/x64/releasedbg/NavmeshGenerator.exe
 python tools/test_bsa_index.py
-python tools/test_extract_bsa_models.py
+xmake build navmesh-bsa-probe
+python tools/test_native_bsa.py ./build/windows/x64/releasedbg/navmesh-bsa-probe.exe
 ```
 
 Fixtures are synthetic and redistributable; no Skyrim assets belong in the

@@ -70,8 +70,13 @@ BSA reading indexes directory/file tables and seeks only to requested winning
 payloads. It supports desktop Skyrim archive revisions, filename prefixes,
 per-entry compression toggles, zlib, and LZ4. Requests are deduplicated and missing
 models are remembered only after reliable archive searches. Unreadable winning
-entries do not fall back to lower-priority assets. The Python helper requires the
-packages in `tools/requirements.txt`; `NAVMESH_PYTHON` can select its interpreter.
+entries do not fall back to lower-priority assets. The in-process C++ reader
+retains lazily loaded directory indexes for the geometry-cache lifetime and
+opens each supplying archive once per extraction batch. Extracted NIFs retain
+cross-run disk reuse. Python remains a development reference reader, rather
+than a runtime dependency. See [the BSA investigation](bsa-performance.md).
+Directory indexes are run-scoped; they are rebuilt from archive metadata when
+another run needs an uncached model. `index_hits` counts reuse of those indexes.
 
 Provider paths, size, modification time, priority, and cache schema identify
 archive snapshots. MO2 loose catalogs also include profile/root identities and
@@ -93,7 +98,7 @@ Legacy caches in old output directories are retained; they are not migrated or
 deleted automatically. Requested plugin copies still contain the complete source.
 
 The working-memory setting controls cache retention and admission estimates,
-rather than enforcing a process RAM cap. Resolved records and compact candidate
+rather than enforcing a process RAM cap. Resolved records, run-scoped BSA directory indexes, and compact candidate
 meshes required for global border validation/writing remain resident; unusually
 large vertical-span workloads can exceed the admission estimate. A task exceeding
 the estimated work budget runs alone. Plugin source records are read by byte range;
@@ -109,8 +114,8 @@ workers/estimated bytes, and terminal output bytes grouped by extension.
 Selection categories can overlap. Output byte totals cover the output directory,
 excluding the checkpoint itself and private staging; use a fresh directory for
 comparable measurements. Archive counters describe the shared snapshot's observed
-helper activity during the run; concurrent processes using the same snapshot can
-contribute to these counters.
+reader activity during the run. Concurrent processes sharing a snapshot can
+replace its latest statistics; these counters are observational, not a transactional ledger.
 
 Combined border reconciliation and writer read-back remain mandatory. Synthetic
 regressions verify unchanged plugin bytes across output modes and worker counts,

@@ -14,8 +14,8 @@ You need Windows, a Skyrim SE/AE installation, and an existing Mod Organizer 2
 instance with a configured profile. Have the mods you want to work with enabled
 in that profile.
 
-Start with `NavmeshGenerator.exe`. If you are building from source or need to
-set up support for assets stored in game archives, follow the
+Start with `NavmeshGenerator.exe`. Archived models are read by the native
+application and cached on demand. For source builds, follow the
 [setup guide](docs/development.md).
 
 ## Get started
@@ -82,3 +82,11 @@ test NPC movement in a separate game profile before adopting them.
 - [Command-line options, output files, and detailed limitations](docs/command-line.md)
 - [Build, dependencies, and development](docs/development.md)
 - [Architecture](docs/architecture.md) and [C++ API reference](docs/api.md)
+
+## Acknowledgments
+
+Thanks to [Sw4T's BSAFileExtractor](https://github.com/Sw4T/BSAFileExtractor)
+and [Stephen Bunn's bethesda-structs](https://github.com/stephen-bunn/bethesda-structs)
+for helping establish the project's initial BSA extraction workflow and archive
+format understanding. The current native reader and standalone Python reference
+tool operate independently of these projects.

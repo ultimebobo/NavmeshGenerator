@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace navmesh::skyrim
 {
@@ -19,12 +20,12 @@ namespace navmesh::skyrim
                                                                  const std::filesystem::path &cacheRoot = {});
 
     /** Index winning NIF names supplied by changed archives, excluding loose winners.
-     * @param dataDirectory Game Data root passed to the read-only archive helper.
+     * @param dataDirectory Game Data root passed to the native archive reader.
      * @param assets Ordered archive providers and winning loose model paths.
      * @param snapshot Owned shared asset-cache snapshot directory.
      * @param changedArchives Archive paths belonging to the requested rebuild scope.
      * @param models Receives normalized logical model paths only on complete index success.
-     * @return False on helper/index failure; callers must retain conservative archive impact.
+     * @return False on archive/index failure; callers must retain conservative archive impact.
      */
     [[nodiscard]] bool ChangedArchiveModels(const std::filesystem::path &dataDirectory, const ModelAssetSources &assets,
                                             const std::filesystem::path &snapshot,
@@ -37,9 +38,11 @@ namespace navmesh::skyrim
     void TrimModelAssetCache(const std::filesystem::path &snapshot, std::size_t byteBudget,
                              bool protectCandidates = false);
 
-    /// Invoke the project-owned indexed BSA helper; arguments must already be shell-quoted.
-    [[nodiscard]] bool RunAssetHelper(const std::string &arguments);
-
-    /// Quote a filesystem path for the platform shell used by the asset helper.
-    [[nodiscard]] std::string QuoteAssetPath(const std::filesystem::path &path);
+    /** Resolve BSA providers without opening payloads.
+     * @param dataDirectory Direct-input Data root, enumerated when assets is null.
+     * @param assets Optional MO2 providers already ordered by increasing priority.
+     * @return MO2 order or sorted case-insensitive-extension BSA paths from Data.
+     */
+    [[nodiscard]] std::vector<std::filesystem::path> ModelArchives(const std::filesystem::path &dataDirectory,
+                                                                   const ModelAssetSources *assets);
 } // namespace navmesh::skyrim

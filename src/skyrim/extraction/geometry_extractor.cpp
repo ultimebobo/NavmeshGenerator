@@ -1,12 +1,12 @@
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/asset_cache.h"
+#include "skyrim/extraction/bsa_archive.h"
 
 #include <NifFile.hpp>
 #include <bhk.hpp>
 #include <cmath>
 #include <fstream>
 #include <format>
-#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <unordered_set>
@@ -15,7 +15,6 @@
 #include <mutex>
 #include <memory>
 #include <cstring>
-#include <chrono>
 
 namespace
 {
@@ -506,32 +505,14 @@ namespace
 
     void ExtractBsaModels(const std::filesystem::path &dataDirectory, const std::filesystem::path &cacheDirectory,
                           const navmesh::core::Cell &cell, const navmesh::skyrim::ModelAssetSources *assets,
-                          const std::function<bool(const std::filesystem::path &)> &alreadyDecoded)
+                          const std::function<bool(const std::filesystem::path &)> &alreadyDecoded,
+                          const std::function<bool(const std::set<std::string> &)> &extract)
     {
         if (cacheDirectory.empty())
         {
             return;
         }
-        std::filesystem::create_directories(cacheDirectory);
-        const auto manifest =
-            cacheDirectory /
-            ("requested-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt");
-        struct RequestCleanup
-        {
-            std::filesystem::path path;
-            ~RequestCleanup()
-            {
-                std::error_code error;
-                std::filesystem::remove(path, error);
-            }
-        } cleanup{manifest};
         std::set<std::string> requested;
-        std::set<std::string> missing;
-        std::ifstream missingStream(cacheDirectory / ".missing-models.txt");
-        for (std::string value; std::getline(missingStream, value);)
-        {
-            missing.insert(value);
-        }
         for (const auto &reference : cell.references)
         {
             if (reference.modelPath.empty() || reference.initiallyDisabled || reference.deleted ||
@@ -556,64 +537,15 @@ namespace
             std::replace(logical.begin(), logical.end(), '/', '\\');
             std::transform(logical.begin(), logical.end(), logical.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (missing.contains(logical) || !requested.insert(logical).second)
-            {
-                continue;
-            }
+            requested.insert(logical);
         }
         if (requested.empty())
         {
             return;
         }
-        std::ofstream manifestStream(manifest, std::ios::trunc);
-        for (const auto &logical : requested)
+        if (!extract(requested))
         {
-            manifestStream << logical << '\n';
-        }
-        manifestStream.close();
-        if (!manifestStream)
-        {
-            return;
-        }
-        const auto script = std::filesystem::current_path() / "tools" / "extract_bsa_models.py";
-        if (!std::filesystem::exists(script))
-        {
-            return;
-        }
-        using namespace navmesh::skyrim;
-        const auto archiveManifest = cacheDirectory / "archives.txt";
-        if (!std::filesystem::exists(archiveManifest))
-        {
-            std::ofstream archives(archiveManifest);
-            if (assets)
-            {
-                for (const auto &path : assets->archives)
-                {
-                    archives << path.string() << '\n';
-                }
-            }
-            else
-            {
-                std::vector<std::filesystem::path> paths;
-                for (const auto &entry : std::filesystem::directory_iterator(dataDirectory))
-                {
-                    if (entry.path().extension() == ".bsa")
-                    {
-                        paths.push_back(entry.path());
-                    }
-                }
-                std::sort(paths.begin(), paths.end());
-                for (const auto &path : paths)
-                {
-                    archives << path.string() << '\n';
-                }
-            }
-        }
-        if (!RunAssetHelper("--data " + QuoteAssetPath(dataDirectory) + " --output " + QuoteAssetPath(cacheDirectory) +
-                            " --manifest " + QuoteAssetPath(manifest) + " --archives " +
-                            QuoteAssetPath(archiveManifest)))
-        {
-            std::cerr << "BSA model extraction incomplete; see archive diagnostics and tools/requirements.txt.\n";
+            std::cerr << "BSA model extraction incomplete; see archive diagnostics.\n";
         }
     }
 } // namespace
@@ -655,6 +587,21 @@ namespace navmesh::skyrim
             std::shared_ptr<const T> value;
             std::size_t bytes{}, used{};
         };
+        std::unique_ptr<BsaModelExtractor> archives;
+        std::filesystem::path archiveSnapshot;
+
+        bool ExtractArchives(const std::set<std::string> &requested, const std::filesystem::path &dataDirectory,
+                             const std::filesystem::path &snapshot, const ModelAssetSources *assets)
+        {
+            std::lock_guard lock(mutex);
+            if (!archives || archiveSnapshot != snapshot)
+            {
+                archives = std::make_unique<BsaModelExtractor>(ModelArchives(dataDirectory, assets), snapshot);
+                archiveSnapshot = snapshot;
+            }
+            return archives->Extract(requested);
+        }
+
         mutable std::mutex mutex;
         std::size_t budget{}, clock{};
         ModelCacheStatistics statistics;
@@ -784,8 +731,11 @@ namespace navmesh::skyrim
             return (cacheDirectory / relative).lexically_normal().generic_string() +
                    (navigationOnly ? ":navigation-snapshot" : ":display-snapshot");
         };
-        ExtractBsaModels(dataDirectory, cacheDirectory, cell, assets, [&](const auto &relative)
-                         { return snapshotOwned && cache.impl_->ContainsReadableModel(cachedKey(relative)); });
+        ExtractBsaModels(
+            dataDirectory, cacheDirectory, cell, assets, [&](const auto &relative)
+            { return snapshotOwned && cache.impl_->ContainsReadableModel(cachedKey(relative)); },
+            [&](const auto &requested)
+            { return cache.impl_->ExtractArchives(requested, dataDirectory, cacheDirectory, assets); });
         const auto totalReferences = cell.references.size();
         for (std::size_t referenceIndex{}; referenceIndex < totalReferences; ++referenceIndex)
         {

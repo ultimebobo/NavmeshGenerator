@@ -9,6 +9,7 @@ set_warnings("allextra")
 -- Pin the static package used by both parser compression and fixture builders.
 -- This keeps the test target independent of an ambient SDK zlib installation.
 add_requires("zlib 1.3.2", { configs = { shared = false } })
+add_requires("lz4 1.10.0", { configs = { shared = false } })
 
 -- add common rules
 add_rules("mode.debug", "mode.releasedbg")
@@ -50,7 +51,8 @@ target("NavmeshGenerator")
     add_files("src/app/**.cpp", "src/ui/**.cpp", "src/cli/**.cpp", "src/skyrim/parser/**.cpp", "src/skyrim/mo2/**.cpp", "src/skyrim/extraction/asset_cache.cpp", "src/skyrim/extraction/geometry_extractor.cpp", "src/skyrim/extraction/terrain_extractor.cpp")
     add_headerfiles("src/app/**.h", "src/cli/**.h", "src/skyrim/parser/**.h")
     add_includedirs("src", "lib/nifly/external")
-    add_packages("zlib")
+    add_files("src/skyrim/extraction/bsa_archive.cpp")
+    add_packages("zlib", "lz4")
     add_syslinks("user32", "gdi32", "shell32", "ole32", "uuid")
 
 target("navmesh-tests")
@@ -60,5 +62,14 @@ target("navmesh-tests")
     add_deps("nifly")
     add_files("tests/**.cpp", "src/app/candidate_cache.cpp", "src/app/candidate_artifacts.cpp", "src/app/geometry_pipeline.cpp", "src/skyrim/extraction/asset_cache.cpp", "src/skyrim/extraction/geometry_extractor.cpp", "src/skyrim/extraction/terrain_extractor.cpp", "src/skyrim/parser/**.cpp", "src/skyrim/mo2/**.cpp")
     add_includedirs("src", "lib/nifly/external")
-    add_packages("zlib")
+    add_files("src/skyrim/extraction/bsa_archive.cpp")
+    add_packages("zlib", "lz4")
     add_files("src/ui/options_model.cpp")
+
+-- Development-only probe for archive differential tests and stage benchmarks.
+target("navmesh-bsa-probe")
+    set_kind("binary")
+    set_default(false)
+    add_files("tools/bsa_probe.cpp", "src/skyrim/extraction/bsa_archive.cpp")
+    add_includedirs("src")
+    add_packages("zlib", "lz4")

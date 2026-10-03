@@ -1,70 +1,23 @@
 #include "skyrim/extraction/asset_cache.h"
 
 #include "core/io/content_hash.h"
+#include "skyrim/extraction/bsa_archive.h"
 
 #include <algorithm>
-#include <cstdlib>
 #include <fstream>
 #include <iostream>
 
 namespace navmesh::skyrim
 {
-    std::string QuoteAssetPath(const std::filesystem::path &path)
+    std::vector<std::filesystem::path> ModelArchives(const std::filesystem::path &dataDirectory,
+                                                     const ModelAssetSources *assets)
     {
-        auto value = path.string();
-#ifdef _WIN32
-        // Windows filenames cannot contain a quote. Reject shell expansions rather than interpreting paths as code.
-        if (value.find_first_of("\"\r\n%") != std::string::npos)
-        {
-            throw std::invalid_argument("Asset helper path contains shell expansion characters");
-        }
-        return "\"" + value + "\"";
-#else
-        std::string quoted{"'"};
-        for (const auto character : value)
-        {
-            quoted += character == '\'' ? "'\"'\"'" : std::string(1, character);
-        }
-        return quoted + "'";
-#endif
-    }
-
-    bool RunAssetHelper(const std::string &arguments)
-    {
-        const auto script = std::filesystem::current_path() / "tools" / "extract_bsa_models.py";
-        if (!std::filesystem::exists(script))
-        {
-            std::cerr << "Cannot locate tools/extract_bsa_models.py; launch from the application project directory.\n";
-            return false;
-        }
-        std::string python = "python";
-#ifdef _WIN32
-        char *configured{};
-        std::size_t size{};
-        if (_dupenv_s(&configured, &size, "NAVMESH_PYTHON") == 0 && configured && *configured)
-        {
-            python = QuoteAssetPath(configured);
-        }
-        std::free(configured);
-#else
-        if (const auto *configured = std::getenv("NAVMESH_PYTHON"); configured && *configured)
-        {
-            python = QuoteAssetPath(configured);
-        }
-#endif
-        return std::system((python + " " + QuoteAssetPath(script) + " " + arguments).c_str()) == 0;
-    }
-
-    std::filesystem::path ModelAssetCacheDirectory(const std::filesystem::path &dataDirectory,
-                                                   const ModelAssetSources *assets,
-                                                   const std::filesystem::path &cacheRoot)
-    {
-        std::vector<std::filesystem::path> archives;
         if (assets)
         {
-            archives = assets->archives;
+            return assets->archives;
         }
-        else if (std::filesystem::is_directory(dataDirectory))
+        std::vector<std::filesystem::path> archives;
+        if (std::filesystem::is_directory(dataDirectory))
         {
             for (const auto &entry : std::filesystem::directory_iterator(dataDirectory))
             {
@@ -78,6 +31,14 @@ namespace navmesh::skyrim
             }
             std::sort(archives.begin(), archives.end());
         }
+        return archives;
+    }
+
+    std::filesystem::path ModelAssetCacheDirectory(const std::filesystem::path &dataDirectory,
+                                                   const ModelAssetSources *assets,
+                                                   const std::filesystem::path &cacheRoot)
+    {
+        const auto archives = ModelArchives(dataDirectory, assets);
         core::ContentHash hash;
         hash.Add("navmesh-assets-schema-1\n");
         hash.Add(std::filesystem::absolute(dataDirectory).lexically_normal().generic_string());
@@ -115,34 +76,33 @@ namespace navmesh::skyrim
         {
             return true;
         }
-        const auto changed = snapshot / "changed-archives.txt";
-        const auto output = snapshot / "changed-models.txt";
-        std::ofstream stream(changed, std::ios::trunc);
-        for (const auto &archive : changedArchives)
+        try
         {
-            stream << archive.string() << '\n';
-        }
-        stream.close();
-        if (!RunAssetHelper("--data " + QuoteAssetPath(dataDirectory) + " --output " + QuoteAssetPath(snapshot) +
-                            " --archives " + QuoteAssetPath(snapshot / "archives.txt") + " --changed-archives " +
-                            QuoteAssetPath(changed) + " --changed-models " + QuoteAssetPath(output)))
-        {
-            return false;
-        }
-        std::ifstream names(output);
-        if (!names)
-        {
-            return false;
-        }
-        for (std::string name; std::getline(names, name);)
-        {
-            std::replace(name.begin(), name.end(), '\\', '/');
-            if (!assets.looseModels.contains(name))
+            BsaModelExtractor extractor(ModelArchives(dataDirectory, &assets), snapshot);
+            std::set<std::string> changedModels;
+            if (!extractor.ChangedModels(changedArchives, changedModels))
             {
-                models.insert(name);
+                return false;
             }
+            for (auto model = changedModels.begin(); model != changedModels.end();)
+            {
+                if (assets.looseModels.contains(*model))
+                {
+                    model = changedModels.erase(model);
+                }
+                else
+                {
+                    ++model;
+                }
+            }
+            models.insert(changedModels.begin(), changedModels.end());
+            return true;
         }
-        return names.eof();
+        catch (const std::exception &error)
+        {
+            std::cerr << "BSA model indexing: " << error.what() << '\n';
+            return false;
+        }
     }
 
     namespace

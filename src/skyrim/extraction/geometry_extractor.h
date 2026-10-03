@@ -80,6 +80,7 @@ namespace navmesh::skyrim
     /** Bounded, thread-safe reuse of immutable model-local and placed geometry.
      * Asset keys include physical path, size, modification time, and extraction policy.
      * Objects returned to extraction remain alive when their cache entry is evicted.
+     * Lazy BSA directory indexes are retained for this cache lifetime outside the geometry byte budget.
      */
     class ModelGeometryCache
     {

@@ -11,7 +11,7 @@
   than repeating the C++ signature. Keep documentation accurate when code changes.
 - Add Doxygen comments to internal algorithms when their assumptions or steps
   are not clear from the code. Do not blanket-document trivial implementation
-  details or edit vendored code under `lib/` and `tools/BSAFileExtractor/`.
+  details or edit vendored code under `lib/`.
 - Keep `docs/api.md` and `Doxyfile` current when adding a major module. If
   Doxygen is installed, run `doxygen Doxyfile` and resolve new documentation
   warnings before finishing.

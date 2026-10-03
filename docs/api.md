@@ -18,6 +18,9 @@ this reference.
 - `navmesh::core::ContentHash`: incremental SHA-256 identities for cache dependencies.
 - `navmesh::skyrim::ModelGeometryCache`: byte-budgeted model-local and
   transformed-placement reuse with extraction-policy/provider revision keys.
+- `navmesh::skyrim::BsaModelExtractor`: run-scoped lazy archive indexes,
+  bounded selective zlib/LZ4 decoding, winning changed-model names, negative
+  caching, and atomic extracted-file publication without a Python runtime.
 - `navmesh::skyrim` asset-cache helpers: shared archive snapshot identity,
   winning changed-model lookup, and eviction confined to generated files.
 - `navmesh::app::detail::BuildBatchCandidate`: isolated generation/reuse,
