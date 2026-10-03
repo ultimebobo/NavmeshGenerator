@@ -1,5 +1,8 @@
 # Rebuilding affected cells
 
+For terminology and the distinction between regenerated cell geometry and
+neighboring connection updates, see the [navmesh glossary](glossary.md).
+
 The shared application runner supports **Cell**, **Plugin**, and **Load order**
 scopes. The Windows UI persists the scope and affected-plugin filename with the
 other settings. Plugin and load-order rebuilding require a resolved MO2 profile
@@ -120,8 +123,8 @@ where required. Existing output plugins are refused. Every emitted NAVM is read
 back before the temporary file is finalized.
 
 In uncovered-cell mode, authored neighbor vertices and triangles are preserved;
-matched borders may add reciprocal portal links to them. New CELL navigation
-retains border-reaching regions without an authored portal requirement. Unmatched
+matched borders may add reciprocal portal links to them. Generated navigation
+retains valid regions without an authored portal requirement. Unmatched
 borders remain unlinked, including between newly covered cells, and require
 independent connection review. The generated ESP is light-flagged only when its
 master table and newly allocated identities fit the light format.

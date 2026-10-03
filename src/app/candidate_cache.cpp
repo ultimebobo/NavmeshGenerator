@@ -22,7 +22,7 @@ namespace navmesh::app::detail
     namespace
     {
         // Private cache layout is deliberately versioned, distinct from supported inspection/export formats.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-2/recast-pipeline-2";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-2/recast-pipeline-4";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)
@@ -264,8 +264,7 @@ namespace navmesh::app::detail
 
     std::string CandidateFingerprint(const core::Scene &scene, const core::NavigationProfile &profile,
                                      std::optional<core::AABB> bounds, const std::vector<core::CandidateExit> &exits,
-                                     const std::vector<core::NavMesh> &neighbors, std::string_view partitioning,
-                                     bool removeUnlinkedRegions)
+                                     const std::vector<core::NavMesh> &neighbors, std::string_view partitioning)
     {
         core::ContentHash hash;
         hash.Add(Schema);
@@ -278,8 +277,7 @@ namespace navmesh::app::detail
         hash.Add(partitioning);
         Archive archive(hash);
         archive(Writable(scene.mesh.vertices), Writable(scene.mesh.triangles), Writable(scene.geometrySources),
-                Writable(scene.triangleProvenance), Writable(profile), bounds, Writable(exits), Writable(neighbors),
-                removeUnlinkedRegions);
+                Writable(scene.triangleProvenance), Writable(profile), bounds, Writable(exits), Writable(neighbors));
         return archive.good ? hash.Hex() : std::string{};
     }
 

@@ -51,17 +51,25 @@ The goal is to make a real downstream generation pass possible without hard-codi
 geometry and a neutral candidate navmesh. The shared CLI/Windows run path uses
 `RecastCandidateGenerator` from the Recast Navigation submodule. It accepts only
 terrain and supported collision triangles, converts Skyrim Z-up world positions
-to Recast Y-up coordinates, clips exterior input to the target CELL bounds independently of its geometry suppliers,
-rasterizes and filters walkable spans, erodes them by
+to Recast Y-up coordinates, rasterizes a supported exterior halo around the target CELL,
+filters walkable spans, erodes them by
 agent radius, then builds regions, contours, and a polygon mesh. Recast polygons
-are triangulated into the project's neutral model for JSON, OBJ, and the
+are triangulated and clipped to the target CELL in the project's neutral model for JSON, OBJ, and the
 `Candidate NAVM` GLB layer. Eligible generated geometry can enter the guarded
 plugin writer. The application then matches selected exterior boundary edges to
 adjacent NAVM edges in the resolved load order and records reciprocal targets.
 The shared authored-border tolerance allows small deviations from nominal CELL
 bounds only at matched portal endpoints. Both generation and serialization
 preserve those endpoints and keep other generated vertices inside the target.
-Regions without a matched border portal or door are removed from this candidate.
+Every valid generated component is retained. Stitching can subdivide a containing
+generated boundary edge to match smaller authored border edges without removing
+the remaining geometry. Collinear generated subdivisions can be coalesced through
+validated boundary-fan retriangulation, preserving the interior rim and remapping
+source, region, contour, door, and portal indices. Inward authored offsets trim
+generated fans; outward offsets add connectors. Connections retain full authored endpoints and obey
+distance, height, slope, and welding constraints.
+The [glossary](glossary.md) explains these terms and why single-cell geometry
+replacement can require neighboring NAVM connection overrides.
 
 The previous polygon-based `GenerateCandidate` function remains for historical
 fixture comparisons. Application runs use the Recast implementation.
@@ -77,8 +85,11 @@ The writer always emits an ESP and sets its ESL flag when the override-only
 records and master table fit the light format. Matched door triangles are
 serialized in the generated NAVM. Matched exterior borders add external portals
 to the generated NAVM and reciprocal portals to adjacent NAVM overrides. Authored
-portals targeting any replaced secondary NAVM are redirected to the generated
-primary NAVM. Adjacent geometry remains unchanged. Other authored links, cover
+portals into replaced triangle spaces are removed from every incoming NAVM,
+including records without matched borders. Retained external indices are remapped,
+then matched borders receive fresh reciprocal portals to generated triangles.
+Read-back checks every consuming portal and its emitted destination's triangle
+range. Adjacent geometry remains unchanged. Other authored links, cover
 data, NAVI, and REFR XNDP references remain outside this
 writer's supported remapping.
 
@@ -123,8 +134,8 @@ it consumes the runner's results without choosing generation policy.
 
 The Recast adapter separates input filtering and coordinate conversion, source
 indexing, voxel configuration, Recast resource ownership, neutral mesh
-conversion, adjacency, provenance joins, region discovery, exit matching, and
-reachability filtering into named internal helpers. Mesh compaction rebases
+conversion, output clipping, adjacency, provenance joins, region discovery, and
+exit matching into named internal helpers. Mesh compaction rebases
 vertices through one shared operation. Analysis separates surface support from
 edge topology, coincident-vertex checks, projected overlaps, and repair evidence.
 These stages retain their processing order and output contracts.

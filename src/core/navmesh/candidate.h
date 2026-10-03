@@ -119,22 +119,22 @@ namespace navmesh::core
     [[nodiscard]] CandidateNavMesh GenerateCandidate(const Scene &scene, const NavigationProfile &profile,
                                                      std::optional<AABB> cellBounds = std::nullopt,
                                                      std::vector<CandidateExit> exits = {});
-    /** Extend candidate boundary edges to matching neighboring NAVM edges on an exterior cell border.
-     * @param candidate Generated mesh and source evidence to extend in place.
+    /** Align candidate boundary edges with neighboring NAVM edges on an exterior cell border.
+     * @param candidate Generated mesh and complete source evidence to reshape in place.
      * @param cellBounds Selected exterior CELL in Skyrim world coordinates.
      * @param neighbors Existing NAVMs in adjacent cells of the same worldspace.
-     * @param removeUnlinkedRegions Remove regions without a matched portal or door.
-     * Disable for new navigation in uncovered cells, where authored portals may not exist.
      * @return Number of reciprocal border portals added.
-     * @warning Only near-coincident full edges at compatible heights are joined. Authored
+     * @warning Complete authored edges at compatible heights are joined; containing generated
+     * edges may be subdivided and compatible collinear generated subdivisions coalesced.
+     * Inward offsets trim boundary fans; outward extensions obey distance, step, slope, and welding limits. Authored
      * border drift within AuthoredBorderTolerance is preserved at matched portal endpoints.
-     * When requested, regions without a matched border portal or door are removed. This modifies candidate
-     * geometry, region membership, source joins, and topology.
+     * Valid unlinked regions are retained. Boundary preparation can retriangulate compatible
+     * fans even without a final match. Geometry, region membership, source joins, contour,
+     * door and portal indices, and topology are updated consistently; neighbors are unchanged.
      * @throws std::invalid_argument when polygon source evidence is incomplete.
      */
     [[nodiscard]] std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
-                                                     const std::vector<NavMesh> &neighbors,
-                                                     bool removeUnlinkedRegions = true);
+                                                     const std::vector<NavMesh> &neighbors);
     /// Check candidate polygon topology without modifying its geometry.
     [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh &candidate);
     /// Write the candidate and its source evidence as JSON; returns false on output failure.

@@ -1,5 +1,9 @@
 # NAVM / NVNM format study
 
+See the [glossary and cell-border explanation](glossary.md) for plain-language
+definitions of authored NAVMs, primary/secondary triangle numbering, portals,
+and reciprocal links, including why neighboring connection overrides are needed.
+
 ## Scope and evidence
 
 The reader was checked against the
@@ -63,16 +67,22 @@ are rebased into that table. It places generated world-space vertices and triang
 largest original NAVM and writes empty geometry into the other NAVM overrides.
 Generated geometry has matched external and door links, an empty cover section,
 and a rebuilt spatial grid. Adjacent NAVM overrides retain their geometry and
-authored sections while appending reciprocal external portals. An authored
-portal targeting a replaced secondary NAVM is redirected to the generated
-primary NAVM. Unrelated authored targets are rejected.
+authored sections while rebuilding external portals. Every authored NAVM with
+an incoming link to replaced geometry receives an override, even without a
+matched candidate border. Entries targeting replaced primary or secondary
+triangle spaces are removed, consuming edges are cleared, and retained external
+indices are remapped. Matched borders receive reciprocal links to generated
+triangles; unmatched edges remain open boundaries. Unrelated portals are retained,
+and an attempted match on an edge linked to unrelated geometry is rejected.
 Small authored border deviations are preserved at the matched portal endpoints,
 using the same border tolerance as candidate stitching; other candidate vertices
 must stay within the selected exterior CELL. The source plugin is never modified.
 The output is always an ESP; its ESL
 flag is set when newly allocated identities and the master table fit the light format,
 including when a dependency is a regular ESP. All NAVMs are
-read back and compared with the serialized geometry.
+read back and compared with the serialized geometry. Every consuming external
+edge is checked against its table, and emitted destinations must contain the
+referenced triangle.
 
 The generated candidate must be nonempty, topologically valid, and stay within
 the selected exterior cell when applicable, apart from bounded extensions at

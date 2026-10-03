@@ -22,6 +22,11 @@ this reference.
 - `navmesh::core::CandidateGenerator`: interchangeable scene-to-candidate
   interface. `RecastCandidateGenerator` is the application implementation and
   links against the Recast Navigation submodule under `lib/recastnavigation`.
+  It retains valid components and clips output after exterior-halo rasterization.
+- `navmesh::core::StitchCandidateBorders`: preserves unlinked regions and matches
+  authored border edges, coalescing compatible generated boundary subdivisions
+  and splitting containing edges with consistent region, source, contour, door,
+  and portal joins. Inward offsets trim the candidate; outward offsets extend it.
 - `navmesh::core::AuthoredBorderTolerance`: shared world-unit bound for authored
   portal drift from exterior CELL borders, used by stitching and the guarded writer.
 - `navmesh::skyrim::offline`: plugin/load-order reading, guarded NAVM override
@@ -54,6 +59,7 @@ The data flow and design constraints are described in
 [Architecture](architecture.md), [Coordinate system](coordinate-system.md),
 [Candidate surface algorithm](candidate-surface-algorithm.md),
 [Operator workflow](operator-workflow.md), and [Batch rebuilding](batch-rebuilding.md).
+The [glossary](glossary.md) explains border connections and NAVM terminology.
 The generated namespaces, classes, files, and functions are available from the
 navigation pane.
 

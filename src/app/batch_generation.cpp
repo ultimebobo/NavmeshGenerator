@@ -111,7 +111,7 @@ namespace navmesh::app::detail
                 : options.partitioningAlgorithm == core::RegionPartitioningAlgorithm::Layers ? "layers"
                                                                                              : "watershed";
             const auto key = CandidateFingerprint(input.geometry.scene, core::NavigationProfile{}, input.bounds,
-                                                  input.exits, input.adjacent, algorithm, !options.skipExistingNavmesh);
+                                                  input.exits, input.adjacent, algorithm);
             result.auditPath = key.empty() ? input.stagingDirectory / std::format("{:08X}.gz", result.cell->id)
                                            : input.cacheDirectory / "candidates" / (key + ".gz");
             core::Scene evidence;
@@ -124,8 +124,7 @@ namespace navmesh::app::detail
                     options.partitioningAlgorithm);
                 if (input.bounds)
                 {
-                    (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent,
-                                                       !options.skipExistingNavmesh);
+                    (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent);
                 }
                 result.generationSeconds =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();

@@ -14,7 +14,7 @@ namespace navmesh::app::detail
                                                    std::optional<core::AABB> bounds,
                                                    const std::vector<core::CandidateExit> &exits,
                                                    const std::vector<core::NavMesh> &neighbors,
-                                                   std::string_view partitioning, bool removeUnlinkedRegions);
+                                                   std::string_view partitioning);
 
     /// Store compact candidate evidence as private gzip data; atomic rename, false on failure.
     [[nodiscard]] bool StoreCandidate(const std::filesystem::path &path, const core::CandidateNavMesh &candidate,

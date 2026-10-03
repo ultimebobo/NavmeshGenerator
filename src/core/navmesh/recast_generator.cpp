@@ -85,8 +85,10 @@ namespace
                 const bool currentInside = keepGreater ? coordinate(current) >= limit : coordinate(current) <= limit;
                 if (previousInside != currentInside)
                 {
-                    const float t = (limit - coordinate(previous)) / (coordinate(current) - coordinate(previous));
-                    auto crossing = previous + (current - previous) * t;
+                    const auto low = coordinate(previous) < coordinate(current) ? previous : current;
+                    const auto high = coordinate(previous) < coordinate(current) ? current : previous;
+                    const float t = (limit - coordinate(low)) / (coordinate(high) - coordinate(low));
+                    auto crossing = low + (high - low) * t;
                     if (xAxis)
                     {
                         crossing.x = limit;
@@ -216,7 +218,7 @@ namespace
         std::vector<std::size_t> largeSources;
     };
 
-    /// Filter supported world-space triangles, clip to the target cell, and reverse winding for Recast Y-up.
+    /// Filter supported world-space triangles, clip to raster bounds, and reverse winding for Recast Y-up.
     [[nodiscard]] RecastInput PrepareRecastInput(const Scene &scene, const std::optional<AABB> &cellBounds,
                                                  CandidateStatistics &statistics)
     {
@@ -474,6 +476,45 @@ namespace
         return mesh;
     }
 
+    /** Clip generated world-space triangles after rasterization of the exterior halo.
+     * Shared crossing vertices are welded by exact coordinates so border cuts retain
+     * reciprocal adjacency. Exterior bounds constrain output, not walkability evidence.
+     */
+    void ClipGeneratedMesh(NavMesh &mesh, const AABB &bounds)
+    {
+        NavMesh clipped;
+        std::map<std::array<float, 3>, std::uint32_t> vertices;
+        const auto vertexIndex = [&](Vec3 point)
+        {
+            const auto [it, added] = vertices.try_emplace(std::array{point.x, point.y, point.z},
+                                                          static_cast<std::uint32_t>(clipped.vertices.size()));
+            if (added)
+            {
+                clipped.vertices.push_back(point);
+            }
+            return it->second;
+        };
+        for (const auto &face : mesh.polygons)
+        {
+            const auto polygon = ClipToCell(
+                {mesh.vertices[face.vertices[0]], mesh.vertices[face.vertices[1]], mesh.vertices[face.vertices[2]]},
+                bounds);
+            for (std::size_t corner = 1; corner + 1 < polygon.size(); ++corner)
+            {
+                if (Cross(polygon[0], polygon[corner], polygon[corner + 1]) <= 0.0001F)
+                {
+                    continue;
+                }
+                NavPolygon triangle;
+                triangle.vertices = {vertexIndex(polygon[0]), vertexIndex(polygon[corner]),
+                                     vertexIndex(polygon[corner + 1])};
+                triangle.neighbors.fill(NoNeighbor);
+                clipped.polygons.push_back(triangle);
+            }
+        }
+        mesh = std::move(clipped);
+    }
+
     /// Link reciprocal neighbors only where exactly two triangles share an undirected vertex-index edge.
     void BuildMeshAdjacency(NavMesh &mesh)
     {
@@ -598,76 +639,6 @@ namespace
         }
     }
 
-    /// Keep anchored components and rebase every polygon, region, vertex, and exit join consistently.
-    void RemoveUnreachableRegions(CandidateNavMesh &result)
-    {
-        // Keep whole connected components so the exported mesh and region evidence
-        // describe only navigation that can reach a door or the exterior boundary.
-        std::vector<std::uint32_t> polygonRemap(result.mesh.polygons.size(), NoNeighbor);
-        std::vector<NavPolygon> keptPolygons;
-        std::vector<std::size_t> keptSources;
-        std::vector<std::vector<std::size_t>> keptContributors;
-        std::vector<CandidateRegion> keptRegions;
-        std::vector<std::uint32_t> regionRemap(result.regions.size(), NoNeighbor);
-        for (auto &region : result.regions)
-        {
-            if (!region.reachesBorder && region.exitFormIds.empty())
-            {
-                result.statistics.rejectedUnreachable += region.polygons.size();
-                continue;
-            }
-            const auto oldRegionId = region.id;
-            region.id = static_cast<std::uint32_t>(keptRegions.size());
-            regionRemap[oldRegionId] = region.id;
-            for (auto &index : region.polygons)
-            {
-                const auto old = index;
-                index = static_cast<std::uint32_t>(keptPolygons.size());
-                polygonRemap[old] = index;
-                keptPolygons.push_back(result.mesh.polygons[old]);
-                keptSources.push_back(result.polygonSourceTriangles[old]);
-                keptContributors.push_back(std::move(result.polygonContributingTriangles[old]));
-            }
-            keptRegions.push_back(std::move(region));
-        }
-        for (auto &face : keptPolygons)
-        {
-            for (auto &neighbor : face.neighbors)
-            {
-                if (neighbor != NoNeighbor)
-                {
-                    neighbor = polygonRemap[neighbor];
-                }
-            }
-        }
-        result.mesh.polygons = std::move(keptPolygons);
-        result.polygonSourceTriangles = std::move(keptSources);
-        result.polygonContributingTriangles = std::move(keptContributors);
-        result.regions = std::move(keptRegions);
-        CompactMeshVertices(result.mesh);
-        for (auto &door : result.exits)
-        {
-            if (door.region)
-            {
-                door.region = regionRemap[*door.region] == NoNeighbor
-                                  ? std::nullopt
-                                  : std::optional<std::uint32_t>{regionRemap[*door.region]};
-                door.polygon = door.region && door.polygon && polygonRemap[*door.polygon] != NoNeighbor
-                                   ? std::optional<std::uint32_t>{polygonRemap[*door.polygon]}
-                                   : std::nullopt;
-            }
-        }
-        if (result.statistics.rejectedUnreachable)
-        {
-            result.warnings.push_back(
-                "Removed candidate polygons without a route to an entrance or exterior cell border.");
-        }
-        if (result.mesh.polygons.empty())
-        {
-            result.warnings.push_back("No candidate region reaches an entrance or exterior cell border.");
-        }
-    }
-
 } // namespace
 
 namespace navmesh::core
@@ -706,7 +677,21 @@ namespace navmesh::core
         result.statistics.inputTriangles = scene.mesh.triangles.size();
 
         // Prepare input evidence before allocating Recast resources.
-        const auto input = PrepareRecastInput(scene, cellBounds, result.statistics);
+        // Rasterize a supported halo so radius erosion does not treat the CELL seam
+        // as a cliff. Only the final mesh is clipped to the selected CELL.
+        auto rasterBounds = cellBounds;
+        if (rasterBounds)
+        {
+            const auto width = rasterBounds->max.x - rasterBounds->min.x;
+            const auto depth = rasterBounds->max.y - rasterBounds->min.y;
+            const auto voxelSize = std::max({4.0F, width / 2048.0F, depth / 2048.0F});
+            const auto halo = (std::ceil(profile.agentRadius / voxelSize) + 3.0F) * voxelSize;
+            rasterBounds->min.x -= halo;
+            rasterBounds->min.y -= halo;
+            rasterBounds->max.x += halo;
+            rasterBounds->max.y += halo;
+        }
+        const auto input = PrepareRecastInput(scene, rasterBounds, result.statistics);
         if (input.sources.empty())
         {
             result.warnings.push_back("No supported terrain or collision triangles were available for Recast.");
@@ -718,13 +703,16 @@ namespace navmesh::core
         // Voxelize, partition, and restore a neutral mesh before attaching evidence.
         const auto polyMesh = BuildRecastPolyMesh(input, config, partitioningAlgorithm, result.statistics);
         result.mesh = ConvertRecastMesh(*polyMesh);
+        if (cellBounds)
+        {
+            ClipGeneratedMesh(result.mesh, *cellBounds);
+        }
         BuildMeshAdjacency(result.mesh);
         AssignSourceProvenance(result, scene, sourceIndex, input.sources.front());
 
-        // Reachability operates on whole components; all joins are remapped together.
+        // Record connectivity and anchors without discarding walkable components.
         BuildCandidateRegions(result, scene, cellBounds, profile.agentRadius + config.cs * 2);
         MatchExits(result, profile.agentRadius * 4 + config.cs * 2, profile.stepHeight + config.ch * 2);
-        RemoveUnreachableRegions(result);
         result.statistics.polygonsBeforeSimplification = result.mesh.polygons.size();
         result.statistics.outputPolygons = result.mesh.polygons.size();
         result.warnings.push_back("Recast source-triangle provenance is matched by nearest surface after voxelization; "
@@ -733,8 +721,7 @@ namespace navmesh::core
                                   "polygon-generator settings and do not control Recast voxelization.");
         if (result.mesh.polygons.empty())
         {
-            result.warnings.push_back(
-                "No walkable polygons remain after Recast generation and reachability filtering.");
+            result.warnings.push_back("No walkable polygons remain after Recast generation.");
         }
         result.topology = ValidateCandidateTopology(result);
         return result;

@@ -90,7 +90,8 @@ namespace
         Field{"terrain", "Terrain only", "Skip reference-model geometry and export decoded exterior terrain only."},
         Field{"candidate", "Generate candidate NAVM",
               "Use Recast Navigation to rasterize terrain and supported collision, then export candidate JSON/OBJ and "
-              "show it in the scene GLB."},
+              "show it in the scene GLB. Valid regions are retained; compatible exterior edges connect to neighboring "
+              "NAVMs where supported geometry reaches the CELL border."},
         Field{"generate_plugin", "Write plugin",
               "Write an ESP, ESL-flagged when eligible, after its source plugins. Matched door and border portals are "
               "written; other authored links need validation. Requires a resolved load order. Cell, Plugin, and Load "

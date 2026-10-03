@@ -39,9 +39,9 @@ namespace navmesh::core
     class RecastCandidateGenerator final : public CandidateGenerator
     {
       public:
-        /** Rasterize authoritative Skyrim-world terrain and collision, then export only
-         * connected regions that reach a nearby door or the exterior cell bounds.
-         * An unanchored result has an empty mesh and a warning.
+        /** Rasterize authoritative Skyrim-world terrain and collision and retain valid
+         * walkable components, including components without a door or exterior portal.
+         * Door and border reachability is reported as evidence.
          * @param scene Geometry with complete triangle provenance in Skyrim world coordinates.
          * @param profile Agent dimensions and movement constraints in Skyrim world units.
          * @param cellBounds Optional exterior area in Skyrim world coordinates; absent for interiors.

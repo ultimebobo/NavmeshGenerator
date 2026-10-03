@@ -40,15 +40,15 @@ void TestPerformanceCaches()
     auto profile = core::NavigationProfile{};
     profile.agentRadius = 0;
     profile.minimumRegionArea = 0;
-    const auto key = app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", false);
+    const auto key = app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed");
     assert(!key.empty());
     const auto original = scene.mesh.vertices[0].z;
     scene.mesh.vertices[0].z += 1;
-    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", false) != key);
+    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed") != key);
     scene.mesh.vertices[0].z = original;
-    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "monotone", false) != key);
+    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "monotone") != key);
     auto neighbor = core::NavMesh{.id = 7, .vertices = {{0, 0, 0}}};
-    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {neighbor}, "watershed", false) != key);
+    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {neighbor}, "watershed") != key);
 
     auto candidate = core::GenerateCandidate(scene, profile);
     assert(candidate.topology.valid && candidate.mesh.polygons.size() == 2);

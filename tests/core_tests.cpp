@@ -290,7 +290,8 @@ namespace
                           (linkSecondary ? "navmesh-drift-transition-test" : "navmesh-transition-test");
         std::filesystem::remove_all(root);
         std::filesystem::create_directories(root);
-        const auto navm = [](std::array<Vec3, 3> vertices, std::int16_t cellX, std::uint32_t externalTarget = 0)
+        const auto navm = [](std::array<Vec3, 3> vertices, std::int16_t cellX, std::uint32_t externalTarget = 0,
+                             bool extraPortals = false)
         {
             std::vector<std::uint8_t> body;
             PutU32(body, 12);
@@ -313,16 +314,27 @@ namespace
             PutU16(body, externalTarget ? 0 : 0xffff);
             for (int i{}; i < 2; ++i)
             {
-                PutU16(body, 0xffff);
+                PutU16(body, extraPortals ? static_cast<std::uint16_t>(i + 1) : 0xffff);
             }
-            PutU16(body, externalTarget ? 1 : 0);
+            PutU16(body, extraPortals ? 7 : externalTarget ? 1 : 0);
             PutU16(body, 0);
-            PutU32(body, externalTarget ? 1 : 0);
+            PutU32(body, extraPortals ? 3 : externalTarget ? 1 : 0);
             if (externalTarget)
             {
                 PutU32(body, 0);
                 PutU32(body, externalTarget);
                 PutU16(body, 0);
+            }
+            if (extraPortals)
+            {
+                // The second edge targets regenerated primary geometry; the third
+                // targets untouched geometry and must survive table compaction.
+                for (const auto target : {0x200U, 0x204U})
+                {
+                    PutU32(body, 0);
+                    PutU32(body, target);
+                    PutU16(body, 0);
+                }
             }
             PutU32(body, 0);
             PutU32(body, 0);
@@ -347,7 +359,16 @@ namespace
             PutRecord(selectedNavm, "NAVM", 0x202, navm(selectedVertices, 12));
         }
         std::vector<std::uint8_t> neighborNavm;
-        PutRecord(neighborNavm, "NAVM", 0x201, navm(neighborVertices, 13, linkSecondary ? 0x202 : 0));
+        PutRecord(neighborNavm, "NAVM", 0x201, navm(neighborVertices, 13, linkSecondary ? 0x202 : 0, linkSecondary));
+        if (linkSecondary)
+        {
+            // This NAVM has no matched candidate border, but still needs an override
+            // to remove its incoming portal into an emptied secondary NAVM.
+            const auto isolatedVertices =
+                std::array<Vec3, 3>{{{53400, -15872, 0}, {53400, -16000, 0}, {53528, -15936, 0}}};
+            PutRecord(neighborNavm, "NAVM", 0x203, navm(isolatedVertices, 13, 0x202));
+            PutRecord(neighborNavm, "NAVM", 0x204, navm(isolatedVertices, 13));
+        }
         std::vector<std::uint8_t> selectedRefPayload, doorBase;
         PutU32(doorBase, 0x310);
         PutText(selectedRefPayload, "NAME", doorBase);
@@ -390,7 +411,8 @@ namespace
         const auto adjacent = std::find_if(resolved.cells.begin(), resolved.cells.end(),
                                            [](const auto &cell) { return cell.id == 0x101; });
         Require(selected != resolved.cells.end() && adjacent != resolved.cells.end());
-        Require(selected->navMeshes.size() == (linkSecondary ? 2 : 1) && adjacent->navMeshes.size() == 1);
+        Require(selected->navMeshes.size() == (linkSecondary ? 2 : 1) &&
+                adjacent->navMeshes.size() == (linkSecondary ? 3 : 1));
         CandidateNavMesh candidate;
         candidate.mesh.vertices.assign(selectedVertices.begin(), selectedVertices.end());
         NavPolygon triangle{.vertices = {0, 1, 2}, .neighbors = {0xffffffffU, 0xffffffffU, 0xffffffffU}};
@@ -408,15 +430,14 @@ namespace
         const auto *doorOnlyNavm = doorOnly.FindWinning(0x200);
         Require(doorOnlyNavm && doorOnlyNavm->navm && doorOnlyNavm->navm->triangleCount == 1);
         const AABB bounds{.min = {12 * 4096.0F, -4 * 4096.0F, -100}, .max = {13 * 4096.0F, -3 * 4096.0F, 100}};
+        auto unlinked = candidate;
         Require(StitchCandidateBorders(candidate, bounds, adjacent->navMeshes) == 1);
         Require(candidate.topology.valid && candidate.borderLinks[0].polygon == 2 &&
                 candidate.mesh.polygons.size() == 3);
-        auto unlinked = candidate;
         unlinked.borderLinks.clear();
         unlinked.exits.clear();
-        Require(!navmesh::skyrim::offline::WriteNavmeshOverride(root / "unlinked", {source}, resolved, *selected,
-                                                                unlinked, output, error));
-        Require(error.find("border-reaching") != std::string::npos);
+        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "unlinked", {source}, resolved, *selected,
+                                                               unlinked, output, error));
         const auto written = navmesh::skyrim::offline::WriteNavmeshOverride(root / "output", {source}, resolved,
                                                                             *selected, candidate, output, error);
         if (!written)
@@ -437,8 +458,16 @@ namespace
         Require(patched.cells.size() == 2);
         const auto patchedAdjacent =
             std::find_if(patched.cells.begin(), patched.cells.end(), [](const auto &cell) { return cell.id == 0x101; });
-        Require(patchedAdjacent != patched.cells.end() &&
-                patchedAdjacent->navMeshes.front().vertices[0].x == neighborVertices[0].x);
+        Require(patchedAdjacent != patched.cells.end());
+        const auto &preservedGeometry = patchedAdjacent->navMeshes.front();
+        Require(preservedGeometry.vertices.size() == neighborVertices.size());
+        for (std::size_t index{}; index < neighborVertices.size(); ++index)
+        {
+            const auto a = preservedGeometry.vertices[index];
+            const auto b = neighborVertices[index];
+            Require(a.x == b.x && a.y == b.y && a.z == b.z);
+        }
+        Require(preservedGeometry.polygons.front().vertices == std::array<std::uint32_t, 3>{0, 1, 2});
         const auto read32 = [](const auto &bytes, std::size_t offset)
         {
             return static_cast<std::uint32_t>(bytes[offset]) | static_cast<std::uint32_t>(bytes[offset + 1]) << 8 |
@@ -457,6 +486,17 @@ namespace
                 read32(neighborData, neighborTail + 8 + (externalCount - 1) * 10) == 0x200);
         if (linkSecondary)
         {
+            const auto &face = patchedAdjacent->navMeshes.front().polygons.front();
+            Require((face.flags & 7U) == 5U && face.neighbors[0] == 1 && face.neighbors[1] == 0xffffU &&
+                    face.neighbors[2] == 0);
+            Require(read32(neighborData, neighborTail + 8) == 0x204);
+            const auto *isolated = patched.FindWinning(0x203);
+            Require(isolated && isolated->winning.plugin == output.filename().string());
+            const auto &isolatedData = isolated->raw->decodedPayload;
+            Require(read32(isolatedData, isolated->navm->trailingData.offset) == 0);
+            const auto offset = static_cast<std::size_t>(isolated->navm->triangles.offset);
+            Require((isolatedData[offset + 12] & 7U) == 0 && isolatedData[offset + 6] == 0xff &&
+                    isolatedData[offset + 7] == 0xff);
             auto outside = candidate;
             outside.mesh.vertices[outside.mesh.polygons.front().vertices.front()].x = bounds.max.x + borderDrift;
             Require(!navmesh::skyrim::offline::WriteNavmeshOverride(root / "outside", {source}, resolved, *selected,
@@ -466,6 +506,7 @@ namespace
         CandidateNavMesh adjacentCandidate;
         adjacentCandidate.mesh = adjacent->navMeshes.front();
         adjacentCandidate.mesh.polygons.front().neighbors.fill(std::numeric_limits<std::uint32_t>::max());
+        adjacentCandidate.mesh.polygons.front().flags &= static_cast<std::uint16_t>(~7U);
         adjacentCandidate.borderLinks.push_back({0, 0, 0x200, 2, 1});
         const bool batchWritten = navmesh::skyrim::offline::WriteNavmeshOverrides(
             root / "batch", {source}, resolved, {{&*selected, &candidate}, {&*adjacent, &adjacentCandidate}}, output,
@@ -488,30 +529,25 @@ namespace
     {
         using namespace navmesh::core;
         CandidateNavMesh candidate;
-        candidate.mesh.vertices = {{4000,50,0},{4080,0,0},{4080,100,0},
-            {4000,150,0},{4080,200,0},{4000,350,0},{4080,300,0},{4080,400,0}};
-        candidate.mesh.polygons = {
-            {.vertices={0,1,2},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}},
-            {.vertices={3,2,4},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}},
-            {.vertices={5,6,7},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}}};
-        candidate.polygonSourceTriangles = {0,1,2};
-        candidate.polygonContributingTriangles = {{0},{1},{2}};
-        candidate.regions.push_back({.id=0,.polygons={0,1},.reachesBorder=true});
-        candidate.regions.push_back({.id=1,.polygons={2},.reachesBorder=true});
+        candidate.mesh.vertices = {{4000, 50, 0},  {4080, 0, 0},   {4080, 100, 0}, {4000, 150, 0},
+                                   {4080, 200, 0}, {4000, 350, 0}, {4080, 300, 0}, {4080, 400, 0}};
+        candidate.mesh.polygons = {{.vertices = {0, 1, 2}, .neighbors = {0xffffffffU, 0xffffffffU, 0xffffffffU}},
+                                   {.vertices = {3, 2, 4}, .neighbors = {0xffffffffU, 0xffffffffU, 0xffffffffU}},
+                                   {.vertices = {5, 6, 7}, .neighbors = {0xffffffffU, 0xffffffffU, 0xffffffffU}}};
+        candidate.polygonSourceTriangles = {0, 1, 2};
+        candidate.polygonContributingTriangles = {{0}, {1}, {2}};
+        candidate.regions.push_back({.id = 0, .polygons = {0, 1}, .reachesBorder = true});
+        candidate.regions.push_back({.id = 1, .polygons = {2}, .reachesBorder = true});
         NavMesh neighbor;
         neighbor.id = 0x201;
-        neighbor.vertices = {{4096,100,0},{4096,0,0},{4200,50,0},
-            {4096,200,0},{4200,150,0}};
-        neighbor.polygons = {
-            {.vertices={0,1,2},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}},
-            {.vertices={3,0,4},.neighbors={0xffffffffU,0xffffffffU,0xffffffffU}}};
-        const AABB bounds{.min={0,0,-100},.max={4096,4096,100}};
-        Require(StitchCandidateBorders(candidate,bounds,{neighbor}) == 2);
-        Require(candidate.topology.valid && candidate.borderLinks.size() == 2
-            && candidate.mesh.polygons.size() == 6 && candidate.regions.size() == 1
-            && candidate.statistics.rejectedUnreachable == 1);
-        Require(candidate.mesh.polygons[3].neighbors[2] == 4
-            && candidate.mesh.polygons[4].neighbors[0] == 3);
+        neighbor.vertices = {{4096, 100, 0}, {4096, 0, 0}, {4200, 50, 0}, {4096, 200, 0}, {4200, 150, 0}};
+        neighbor.polygons = {{.vertices = {0, 1, 2}, .neighbors = {0xffffffffU, 0xffffffffU, 0xffffffffU}},
+                             {.vertices = {3, 0, 4}, .neighbors = {0xffffffffU, 0xffffffffU, 0xffffffffU}}};
+        const AABB bounds{.min = {0, 0, -100}, .max = {4096, 4096, 100}};
+        Require(StitchCandidateBorders(candidate, bounds, {neighbor}) == 2);
+        Require(candidate.topology.valid && candidate.borderLinks.size() == 2 && candidate.mesh.polygons.size() == 7 &&
+                candidate.regions.size() == 2 && candidate.statistics.rejectedUnreachable == 0);
+        Require(candidate.mesh.polygons[4].neighbors[2] == 5 && candidate.mesh.polygons[5].neighbors[0] == 4);
     }
     void TestAuthoredBorderTolerance()
     {
@@ -546,9 +582,9 @@ namespace
                 }
                 const bool accepted = std::abs(drift) <= AuthoredBorderTolerance;
                 Require(StitchCandidateBorders(candidate, bounds, {neighbor}) == (accepted ? 1U : 0U));
-                Require(candidate.topology.valid && candidate.regions.size() == (accepted ? 1U : 0U));
-                Require(candidate.mesh.polygons.size() == (accepted ? 3U : 0U));
-                Require(candidate.statistics.rejectedUnreachable == (accepted ? 0U : 1U));
+                Require(candidate.topology.valid && candidate.regions.size() == 1);
+                Require(candidate.mesh.polygons.size() == (accepted ? 3U : 1U));
+                Require(candidate.statistics.rejectedUnreachable == 0);
                 if (accepted)
                 {
                     const auto &link = candidate.borderLinks.front();
@@ -558,6 +594,161 @@ namespace
                     Require(a.x == neighbor.vertices[1].x && a.y == neighbor.vertices[1].y &&
                             b.x == neighbor.vertices[0].x && b.y == neighbor.vertices[0].y);
                     Require(candidate.polygonSourceTriangles.size() == candidate.mesh.polygons.size());
+                }
+            }
+        }
+    }
+    void TestPartitionedBorderRetention()
+    {
+        using namespace navmesh::core;
+        const auto noNeighbor = std::numeric_limits<std::uint32_t>::max();
+        for (const auto [inset, drift] : std::array{std::pair{0.0F, 0.0F}, std::pair{16.0F, 0.0F},
+                                                    std::pair{0.0F, 0.002F}, std::pair{16.0F, 0.002F},
+                                                    std::pair{0.0F, -2.5F}})
+        {
+            CandidateNavMesh candidate;
+            candidate.mesh.vertices = {{4000, 200, 0},  {4096 - inset, 0, 0}, {4096 - inset, 400, 0},
+                                       {3000, 1000, 0}, {3100, 1000, 0},      {3000, 1100, 0}};
+            candidate.mesh.polygons = {{.vertices = {0, 1, 2}, .neighbors = {noNeighbor, noNeighbor, noNeighbor}},
+                                       {.vertices = {3, 4, 5}, .neighbors = {noNeighbor, noNeighbor, noNeighbor}}};
+            candidate.polygonSourceTriangles = {0, 1};
+            candidate.polygonContributingTriangles = {{0}, {1}};
+            candidate.regions = {{.id = 0, .polygons = {0}}, {.id = 1, .polygons = {1}}};
+            candidate.exits = {{.referenceId = 0x300, .position = {4050, 280, 0}, .region = 0, .polygon = 0}};
+            NavMesh neighbor;
+            neighbor.id = 0x201;
+            neighbor.vertices = {{4096, 100, 0}, {4096, 0, 0}, {4200, 50, 0}, {4096, 200, 0}, {4200, 150, 0}};
+            neighbor.polygons = {{.vertices = {0, 1, 2}, .neighbors = {noNeighbor, noNeighbor, noNeighbor}},
+                                 {.vertices = {3, 0, 4}, .neighbors = {noNeighbor, noNeighbor, noNeighbor}}};
+            if (drift)
+            {
+                neighbor.vertices[0].x += drift;
+                neighbor.vertices[0].z = 6;
+                neighbor.vertices[1].x += 1;
+            }
+            const AABB bounds{.min = {0, 0, -100}, .max = {4096, 4096, 100}};
+            const auto added = StitchCandidateBorders(candidate, bounds, {neighbor});
+            if (added != 2)
+            {
+                std::fprintf(stderr, "Partitioned border inset=%g added=%zu triangles=%zu\n", inset, added,
+                             candidate.mesh.polygons.size());
+            }
+            Require(added == 2);
+            for (const auto &finding : candidate.topology.findings)
+            {
+                std::fprintf(stderr, "Partitioned topology: %s\n", finding.c_str());
+            }
+            Require(candidate.topology.valid && candidate.regions.size() == 2 &&
+                    candidate.regions[1].polygons == std::vector<std::uint32_t>{1} &&
+                    candidate.statistics.rejectedUnreachable == 0);
+            Require(candidate.polygonSourceTriangles.size() == candidate.mesh.polygons.size() &&
+                    candidate.polygonContributingTriangles.size() == candidate.mesh.polygons.size());
+            Require(candidate.exits.front().polygon && *candidate.exits.front().polygon != 0);
+            for (const auto &link : candidate.borderLinks)
+            {
+                const auto &sourceFace = candidate.mesh.polygons[link.polygon];
+                const auto &targetFace = neighbor.polygons[link.neighborPolygon];
+                const auto start = candidate.mesh.vertices[sourceFace.vertices[link.edge]];
+                const auto end = candidate.mesh.vertices[sourceFace.vertices[(link.edge + 1) % 3]];
+                const auto targetStart = neighbor.vertices[targetFace.vertices[(link.neighborEdge + 1) % 3]];
+                const auto targetEnd = neighbor.vertices[targetFace.vertices[link.neighborEdge]];
+                Require(start.x == targetStart.x && start.y == targetStart.y && start.z == targetStart.z &&
+                        end.x == targetEnd.x && end.y == targetEnd.y && end.z == targetEnd.z);
+            }
+            auto elevated = neighbor;
+            for (auto &vertex : elevated.vertices)
+            {
+                vertex.z = candidate.profile.stepHeight + 1;
+            }
+            const auto count = candidate.mesh.polygons.size();
+            Require(StitchCandidateBorders(candidate, bounds, {elevated}) == 0 &&
+                    candidate.mesh.polygons.size() == count && candidate.topology.valid);
+        }
+    }
+    void TestGeneratedBorderPartitions()
+    {
+        using namespace navmesh::core;
+        const auto noNeighbor = std::numeric_limits<std::uint32_t>::max();
+        for (int rotation{}; rotation < 4; ++rotation)
+        {
+            for (const bool extendedFan : {false, true})
+            {
+                for (const auto drift : {0.0F, -2.5F, 2.5F})
+                {
+                    CandidateNavMesh candidate;
+                    candidate.mesh.vertices = {
+                        {4000, 200, 0}, {4096, 0, 0}, {4096, 100, 0}, {4096, 200, 0}, {4096, 400, 0}};
+                    candidate.mesh.polygons = {{.vertices = {0, 1, 2}, .neighbors = {noNeighbor, noNeighbor, 1}},
+                                               {.vertices = {0, 2, 3}, .neighbors = {0, noNeighbor, 2}},
+                                               {.vertices = {0, 3, 4}, .neighbors = {1, noNeighbor, noNeighbor}}};
+                    candidate.polygonSourceTriangles = {0, 1, 2};
+                    candidate.polygonContributingTriangles = {{0}, {1}, {2}};
+                    candidate.regions = {{.id = 0, .polygons = {0, 1, 2}}};
+                    candidate.exits = {{.referenceId = 0x300, .position = {4050, 280, 0}, .region = 0, .polygon = 2}};
+                    if (extendedFan)
+                    {
+                        candidate.mesh.vertices[0] = {4000, 50, 0};
+                        candidate.mesh.vertices.push_back({4000, 300, 0});
+                        candidate.mesh.vertices.push_back({3900, 200, 0});
+                        candidate.mesh.polygons = {{.vertices = {0, 1, 2}, .neighbors = {noNeighbor, noNeighbor, 1}},
+                                                   {.vertices = {0, 2, 5}, .neighbors = {0, 2, 4}},
+                                                   {.vertices = {5, 2, 3}, .neighbors = {1, noNeighbor, 3}},
+                                                   {.vertices = {5, 3, 4}, .neighbors = {2, noNeighbor, noNeighbor}},
+                                                   {.vertices = {0, 5, 6}, .neighbors = {1, noNeighbor, noNeighbor}}};
+                        candidate.polygonSourceTriangles = {0, 1, 2, 3, 4};
+                        candidate.polygonContributingTriangles = {{0}, {1}, {2}, {3}, {4}};
+                        candidate.regions.front().polygons = {0, 1, 2, 3, 4};
+                        candidate.exits.front().polygon = 3;
+                    }
+                    NavMesh neighbor;
+                    neighbor.id = 0x201;
+                    neighbor.vertices = {{4096 + drift, 300, 0}, {4096 + drift, 50, 0}, {4200, 200, 0}};
+                    neighbor.polygons = {{.vertices = {0, 1, 2}, .neighbors = {noNeighbor, noNeighbor, noNeighbor}}};
+                    for (int turn{}; turn < rotation; ++turn)
+                    {
+                        for (auto &point : candidate.mesh.vertices)
+                        {
+                            point = {4096 - point.y, point.x, point.z};
+                        }
+                        for (auto &point : neighbor.vertices)
+                        {
+                            point = {4096 - point.y, point.x, point.z};
+                        }
+                        auto &door = candidate.exits.front().position;
+                        door = {4096 - door.y, door.x, door.z};
+                    }
+                    const AABB bounds{.min = {0, 0, -100}, .max = {4096, 4096, 100}};
+                    auto elevated = neighbor;
+                    for (auto &point : elevated.vertices)
+                    {
+                        point.z = candidate.profile.stepHeight + 1;
+                    }
+                    auto unlinked = candidate;
+                    Require(StitchCandidateBorders(unlinked, bounds, {elevated}) == 0 && unlinked.topology.valid &&
+                            unlinked.mesh.polygons.size() == candidate.mesh.polygons.size());
+                    const auto added = StitchCandidateBorders(candidate, bounds, {neighbor});
+                    if (added != 1 || !candidate.topology.valid)
+                    {
+                        std::fprintf(stderr,
+                                     "Generated partitions rotation=%d extended=%d drift=%g links=%zu polygons=%zu\n",
+                                     rotation, extendedFan, drift, added, candidate.mesh.polygons.size());
+                        for (const auto &finding : candidate.topology.findings)
+                        {
+                            std::fprintf(stderr, "%s\n", finding.c_str());
+                        }
+                    }
+                    Require(added == 1);
+                    Require(candidate.topology.valid && candidate.regions.size() == 1);
+                    const auto &link = candidate.borderLinks.front();
+                    const auto &face = candidate.mesh.polygons[link.polygon];
+                    const auto a = candidate.mesh.vertices[face.vertices[link.edge]];
+                    const auto b = candidate.mesh.vertices[face.vertices[(link.edge + 1) % 3]];
+                    Require(a.x == neighbor.vertices[1].x && a.y == neighbor.vertices[1].y &&
+                            b.x == neighbor.vertices[0].x && b.y == neighbor.vertices[0].y);
+                    Require(candidate.polygonSourceTriangles.size() == candidate.mesh.polygons.size() &&
+                            candidate.polygonContributingTriangles.size() == candidate.mesh.polygons.size());
+                    Require(candidate.exits.front().polygon &&
+                            *candidate.exits.front().polygon < candidate.mesh.polygons.size());
                 }
             }
         }
@@ -1241,120 +1432,136 @@ namespace
         const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
         navmesh::core::SceneExportOptions visual{ .layers = { SceneLayer::CandidateNavmesh }, .candidateNavmesh = &flat.mesh };
         const auto visualPath = root / "candidate.glb";
-        const auto exported = WriteCombinedGlb(visualPath,scene,{}, {},metadata,visual);
+        const auto exported = WriteCombinedGlb(visualPath, scene, {}, {}, metadata, visual);
         Require(exported.triangles == 2);
-        std::ifstream visualGlb(visualPath,std::ios::binary); std::string visualBytes(std::istreambuf_iterator<char>(visualGlb),{});
+        std::ifstream visualGlb(visualPath, std::ios::binary);
+        std::string visualBytes(std::istreambuf_iterator<char>(visualGlb), {});
         Require(visualBytes.contains("Candidate NAVM"));
     }
     void TestRecastSceneGeneration()
     {
         using namespace navmesh::core;
         Scene scene;
-        scene.geometrySources.push_back({ .sourceType = GeometrySourceType::Terrain, .confidence = 1.0F,
-            .reference = { "Fixture.esm", 0x100, "LAND" } });
-        scene.mesh.vertices = {{0,0,0},{512,0,0},{512,512,0},{0,512,0}};
-        scene.mesh.triangles = {{{0,1,2}},{{0,2,3}}};
-        scene.triangleProvenance = {{0,0,{}},{0,1,{}}};
+        scene.geometrySources.push_back({.sourceType = GeometrySourceType::Terrain,
+                                         .confidence = 1.0F,
+                                         .reference = {"Fixture.esm", 0x100, "LAND"}});
+        scene.mesh.vertices = {{0, 0, 0}, {512, 0, 0}, {512, 512, 0}, {0, 512, 0}};
+        scene.mesh.triangles = {{{0, 1, 2}}, {{0, 2, 3}}};
+        scene.triangleProvenance = {{0, 0, {}}, {0, 1, {}}};
         const NavigationProfile profile{};
         Require(profile.name == "human" && profile.stepHeight == 28.0F);
-        const CandidateGenerator& generator = RecastCandidateGenerator{};
-        const AABB cellBounds{.min={0,0,-100},.max={1024,1024,100}};
-        const auto generated = generator.Generate(scene,profile,cellBounds,{});
+        const CandidateGenerator &generator = RecastCandidateGenerator{};
+        const AABB cellBounds{.min = {0, 0, -100}, .max = {1024, 1024, 100}};
+        const auto generated = generator.Generate(scene, profile, cellBounds, {});
         Require(generated.mesh.polygons.size() == 2);
         Require(generated.topology.valid);
         Require(generated.statistics.eligibleTriangles == 2);
         Scene crossing = scene;
-        crossing.mesh.vertices = {{-100,-100,0},{600,-100,0},{600,600,0},{-100,600,0}};
-        const AABB clipBounds{.min={0,0,-100},.max={512,512,100}};
-        const auto clipped = generator.Generate(crossing,profile,clipBounds,{});
+        crossing.mesh.vertices = {{-100, -100, 0}, {600, -100, 0}, {600, 600, 0}, {-100, 600, 0}};
+        const AABB clipBounds{.min = {0, 0, -100}, .max = {512, 512, 100}};
+        const auto clipped = generator.Generate(crossing, profile, clipBounds, {});
         Require(clipped.topology.valid && !clipped.mesh.polygons.empty());
         for (const auto vertex : clipped.mesh.vertices)
-            Require(vertex.x >= clipBounds.min.x && vertex.x <= clipBounds.max.x
-                && vertex.y >= clipBounds.min.y && vertex.y <= clipBounds.max.y);
+        {
+            Require(vertex.x >= clipBounds.min.x && vertex.x <= clipBounds.max.x && vertex.y >= clipBounds.min.y &&
+                    vertex.y <= clipBounds.max.y);
+        }
+        Require(std::any_of(clipped.mesh.vertices.begin(), clipped.mesh.vertices.end(),
+                            [&](const auto vertex) { return vertex.x == clipBounds.max.x; }));
+        Require(std::any_of(clipped.mesh.vertices.begin(), clipped.mesh.vertices.end(),
+                            [&](const auto vertex) { return vertex.y == clipBounds.min.y; }));
         Scene withIsland = scene;
         withIsland.mesh.vertices.insert(withIsland.mesh.vertices.end(),
-            {{768,200,0},{832,200,0},{832,264,0},{768,264,0}});
-        withIsland.mesh.triangles.push_back({{4,5,6}});
-        withIsland.mesh.triangles.push_back({{4,6,7}});
-        withIsland.triangleProvenance.push_back({0,2,{}});
-        withIsland.triangleProvenance.push_back({0,3,{}});
+                                        {{768, 200, 0}, {832, 200, 0}, {832, 264, 0}, {768, 264, 0}});
+        withIsland.mesh.triangles.push_back({{4, 5, 6}});
+        withIsland.mesh.triangles.push_back({{4, 6, 7}});
+        withIsland.triangleProvenance.push_back({0, 2, {}});
+        withIsland.triangleProvenance.push_back({0, 3, {}});
         NavigationProfile permissive = profile;
         permissive.minimumRegionArea = 64.0F;
-        const auto withOrphan = generator.Generate(withIsland,permissive,cellBounds,{});
-        const auto withoutIsland = generator.Generate(withIsland,profile,cellBounds,{});
-        Require(withOrphan.topology.valid && withOrphan.regions.size() == 1);
-        Require(withOrphan.mesh.polygons.size() == generated.mesh.polygons.size());
-        Require(withOrphan.statistics.rejectedUnreachable > 0);
+        const auto withOrphan = generator.Generate(withIsland, permissive, cellBounds, {});
+        const auto withoutIsland = generator.Generate(withIsland, profile, cellBounds, {});
+        Require(withOrphan.topology.valid && withOrphan.regions.size() == 2);
+        Require(withOrphan.mesh.polygons.size() > generated.mesh.polygons.size());
+        Require(withOrphan.statistics.rejectedUnreachable == 0);
         Require(withoutIsland.topology.valid && withoutIsland.regions.size() == 1);
         Require(withoutIsland.mesh.polygons.size() == generated.mesh.polygons.size());
-        const auto doorLinked = generator.Generate(withIsland,permissive,cellBounds,
-            {{.referenceId=0x200,.position={800,232,0}}});
+        const auto doorLinked =
+            generator.Generate(withIsland, permissive, cellBounds, {{.referenceId = 0x200, .position = {800, 232, 0}}});
         Require(doorLinked.topology.valid && doorLinked.regions.size() == 2);
         Require(doorLinked.exits[0].region && !doorLinked.regions[*doorLinked.exits[0].region].reachesBorder);
         Require(doorLinked.mesh.polygons.size() > generated.mesh.polygons.size());
-        const auto noAnchor = generator.Generate(scene,profile,std::nullopt,{});
-        Require(noAnchor.mesh.polygons.empty() && noAnchor.regions.empty()
-            && noAnchor.statistics.rejectedUnreachable > 0 && noAnchor.topology.valid);
+        const auto noAnchor = generator.Generate(scene, profile, std::nullopt, {});
+        Require(!noAnchor.mesh.polygons.empty() && noAnchor.regions.size() == 1 &&
+                noAnchor.statistics.rejectedUnreachable == 0 && noAnchor.topology.valid);
         const auto root = std::filesystem::temp_directory_path() / "navmesh-recast-scene-test";
         std::filesystem::create_directories(root);
-        Require(WriteCandidateJson(root / "candidate.json",generated,scene,"{}"));
-        std::ifstream candidateJson(root / "candidate.json",std::ios::binary);
-        const std::string candidateBytes(std::istreambuf_iterator<char>(candidateJson),{});
+        Require(WriteCandidateJson(root / "candidate.json", generated, scene, "{}"));
+        std::ifstream candidateJson(root / "candidate.json", std::ios::binary);
+        const std::string candidateBytes(std::istreambuf_iterator<char>(candidateJson), {});
         Require(candidateBytes.contains("\"profile\": {\"name\":\"human\",\"agent_radius\":"));
-        SceneExportOptions options{ .layers = {SceneLayer::CandidateNavmesh},
-            .candidateNavmesh = &doorLinked.mesh, .candidateEntrances = &doorLinked.exits };
-        Cell cell{ .id = 0x100, .editorId = "Fixture" };
-        const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
-        const auto exported = WriteCombinedGlb(root / "scene.glb",scene,{}, {},metadata,options);
-        Require(exported.triangles == doorLinked.mesh.polygons.size()+4);
-        std::ifstream entranceGlb(root / "scene.glb",std::ios::binary);
-        const std::string entranceBytes(std::istreambuf_iterator<char>(entranceGlb),{});
+        SceneExportOptions options{.layers = {SceneLayer::CandidateNavmesh},
+                                   .candidateNavmesh = &doorLinked.mesh,
+                                   .candidateEntrances = &doorLinked.exits};
+        Cell cell{.id = 0x100, .editorId = "Fixture"};
+        const navmesh::reproducibility::ExportMetadata metadata{.selectedCell = &cell};
+        const auto exported = WriteCombinedGlb(root / "scene.glb", scene, {}, {}, metadata, options);
+        Require(exported.triangles == doorLinked.mesh.polygons.size() + 4);
+        std::ifstream entranceGlb(root / "scene.glb", std::ios::binary);
+        const std::string entranceBytes(std::istreambuf_iterator<char>(entranceGlb), {});
         Require(entranceBytes.contains("Entrance (orange)") && entranceBytes.contains("Entrance 00000200"));
 
         Scene stairs;
         stairs.geometrySources = scene.geometrySources;
-        for (std::uint32_t step = 0; step < 16; ++step) {
+        for (std::uint32_t step = 0; step < 16; ++step)
+        {
             const auto base = static_cast<std::uint32_t>(stairs.mesh.vertices.size());
             const float x = static_cast<float>(step) * 12.0F;
             const float z = static_cast<float>(step) * 24.0F;
             stairs.mesh.vertices.insert(stairs.mesh.vertices.end(),
-                {{x,0,z},{x+12,0,z},{x+12,96,z},{x,96,z}});
-            stairs.mesh.triangles.push_back({{base,base+1,base+2}});
-            stairs.mesh.triangles.push_back({{base,base+2,base+3}});
-            stairs.triangleProvenance.push_back({0,stairs.triangleProvenance.size(),{}});
-            stairs.triangleProvenance.push_back({0,stairs.triangleProvenance.size(),{}});
+                                        {{x, 0, z}, {x + 12, 0, z}, {x + 12, 96, z}, {x, 96, z}});
+            stairs.mesh.triangles.push_back({{base, base + 1, base + 2}});
+            stairs.mesh.triangles.push_back({{base, base + 2, base + 3}});
+            stairs.triangleProvenance.push_back({0, stairs.triangleProvenance.size(), {}});
+            stairs.triangleProvenance.push_back({0, stairs.triangleProvenance.size(), {}});
         }
-        const auto stepped = generator.Generate(stairs,profile,std::nullopt,
-            {{.referenceId=0x201,.position={12,48,0}}});
+        const auto stepped =
+            generator.Generate(stairs, profile, std::nullopt, {{.referenceId = 0x201, .position = {12, 48, 0}}});
         Require(stepped.topology.valid && stepped.regions.size() == 1);
         Require(stepped.mesh.polygons.size() == 2);
-        const auto [low,high] = std::minmax_element(stepped.mesh.vertices.begin(),stepped.mesh.vertices.end(),
-            [](Vec3 a, Vec3 b){ return a.z < b.z; });
-        Require(high->z-low->z > 200.0F);
+        const auto [low, high] = std::minmax_element(stepped.mesh.vertices.begin(), stepped.mesh.vertices.end(),
+                                                     [](Vec3 a, Vec3 b) { return a.z < b.z; });
+        Require(high->z - low->z > 200.0F);
 
         Scene winding;
         winding.geometrySources = scene.geometrySources;
-        for (std::uint32_t segment = 0; segment < 48; ++segment) {
+        for (std::uint32_t segment = 0; segment < 48; ++segment)
+        {
             const auto x = static_cast<float>(segment) * 32.0F;
             const auto y = static_cast<float>((segment * 13) % 7) * 8.0F;
             const auto nextY = static_cast<float>(((segment + 1) * 13) % 7) * 8.0F;
             const auto base = static_cast<std::uint32_t>(winding.mesh.vertices.size());
             winding.mesh.vertices.insert(winding.mesh.vertices.end(),
-                {{x,y,0},{x+32,nextY,0},{x+32,nextY+128,0},{x,y+128,0}});
-            winding.mesh.triangles.push_back({{base,base+1,base+2}});
-            winding.mesh.triangles.push_back({{base,base+2,base+3}});
-            winding.triangleProvenance.push_back({0,winding.triangleProvenance.size(),{}});
-            winding.triangleProvenance.push_back({0,winding.triangleProvenance.size(),{}});
+                                         {{x, y, 0}, {x + 32, nextY, 0}, {x + 32, nextY + 128, 0}, {x, y + 128, 0}});
+            winding.mesh.triangles.push_back({{base, base + 1, base + 2}});
+            winding.mesh.triangles.push_back({{base, base + 2, base + 3}});
+            winding.triangleProvenance.push_back({0, winding.triangleProvenance.size(), {}});
+            winding.triangleProvenance.push_back({0, winding.triangleProvenance.size(), {}});
         }
-        const auto ribbon = generator.Generate(winding,profile,std::nullopt,
-            {{.referenceId=0x202,.position={16,64,0}}});
+        const auto ribbon =
+            generator.Generate(winding, profile, std::nullopt, {{.referenceId = 0x202, .position = {16, 64, 0}}});
         float worstQuality = 1.0F;
-        for (const auto& face : ribbon.mesh.polygons) {
+        for (const auto &face : ribbon.mesh.polygons)
+        {
             const auto a = ribbon.mesh.vertices[face.vertices[0]];
             const auto b = ribbon.mesh.vertices[face.vertices[1]];
             const auto c = ribbon.mesh.vertices[face.vertices[2]];
-            const auto sq = [](Vec3 p,Vec3 q){ const auto dx=p.x-q.x,dy=p.y-q.y; return dx*dx+dy*dy; };
-            const auto cross = std::abs((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x));
+            const auto sq = [](Vec3 p, Vec3 q)
+            {
+                const auto dx = p.x - q.x, dy = p.y - q.y;
+                return dx * dx + dy * dy;
+            };
+            const auto cross = std::abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
             worstQuality = std::min(worstQuality,cross*3.464F/(sq(a,b)+sq(b,c)+sq(c,a)));
         }
         Require(ribbon.topology.valid && ribbon.regions.size() == 1);
@@ -1439,6 +1646,8 @@ int main(int argc, char** argv)
     if (argc > 1 && std::string_view(argv[1]) == "--border-only")
     {
         TestAuthoredBorderTolerance();
+        TestPartitionedBorderRetention();
+        TestGeneratedBorderPartitions();
         TestAdjacentBorderBridges();
         TestReciprocalCellTransitions();
         TestReciprocalCellTransitions(2.5F, true);
@@ -1467,6 +1676,8 @@ int main(int argc, char** argv)
     TestReciprocalCellTransitions();
     TestAdjacentBorderBridges();
     TestAuthoredBorderTolerance();
+    TestPartitionedBorderRetention();
+    TestGeneratedBorderPartitions();
     TestReciprocalCellTransitions(2.5F,true);
     TestExteriorLandTerrain();
     TestExportMetadata();

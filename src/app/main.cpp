@@ -769,8 +769,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                         adjacent.insert(adjacent.end(), other.navMeshes.begin(), other.navMeshes.end());
                     }
                 }
-                const auto links = navmesh::core::StitchCandidateBorders(*candidate, *analysisConfig.cellBounds,
-                                                                         adjacent, !options.skipExistingNavmesh);
+                const auto links =
+                    navmesh::core::StitchCandidateBorders(*candidate, *analysisConfig.cellBounds, adjacent);
                 if (!links && std::any_of(candidate->regions.begin(), candidate->regions.end(),
                                           [](const auto &region) { return region.reachesBorder; }))
                 {
