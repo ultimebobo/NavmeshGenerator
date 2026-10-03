@@ -4,6 +4,8 @@
 
 #include <NifFile.hpp>
 #include <bhk.hpp>
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <format>
@@ -18,6 +20,19 @@
 
 namespace
 {
+    /// Recognize the landscape rock asset directory, independent of placement, path case and separators.
+    [[nodiscard]] bool IsLandscapeRock(std::string modelPath)
+    {
+        std::replace(modelPath.begin(), modelPath.end(), '\\', '/');
+        std::transform(modelPath.begin(), modelPath.end(), modelPath.begin(),
+                       [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+        if (modelPath.starts_with("meshes/"))
+        {
+            modelPath.erase(0, std::string_view("meshes/").size());
+        }
+        return modelPath.starts_with("landscape/rocks/");
+    }
+
     [[nodiscard]] std::string EscapeJson(std::string value)
     {
         std::string escaped;
@@ -758,7 +773,8 @@ namespace navmesh::skyrim
             core::GeometrySource source{
                 .modelPath = reference.modelPath,
                 .reference = {reference.sourcePlugin, reference.id, reference.recordType},
-                .baseObject = {reference.basePlugin, reference.baseObjectId, reference.baseRecordType}};
+                .baseObject = {reference.basePlugin, reference.baseObjectId, reference.baseRecordType},
+                .navigationObstacle = IsLandscapeRock(reference.modelPath)};
             if (reference.deleted || reference.initiallyDisabled)
             {
                 report.failure = reference.deleted ? "winning reference record is deleted"
@@ -1055,12 +1071,14 @@ namespace navmesh::skyrim
             output << std::format(
                 "    "
                 "{{\"triangle\":{},\"sourceTriangle\":{},\"sourceType\":\"{}\",\"collisionType\":\"{}\",\"confidence\":"
-                "{},\"model\":\"{}\",\"reference\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}},"
+                "{},\"model\":\"{}\",\"navigationObstacle\":{},\"reference\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\","
+                "\"recordType\":\"{}\"}},"
                 "\"baseObject\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}}{}}}{}\n",
                 index, provenance.sourceTriangle, SourceTypeName(source.sourceType), EscapeJson(source.collisionType),
-                source.confidence, EscapeJson(source.modelPath), EscapeJson(source.reference.plugin),
-                source.reference.formId, EscapeJson(source.reference.recordType), EscapeJson(source.baseObject.plugin),
-                source.baseObject.formId, EscapeJson(source.baseObject.recordType), terrain,
+                source.confidence, EscapeJson(source.modelPath), source.navigationObstacle ? "true" : "false",
+                EscapeJson(source.reference.plugin), source.reference.formId, EscapeJson(source.reference.recordType),
+                EscapeJson(source.baseObject.plugin), source.baseObject.formId,
+                EscapeJson(source.baseObject.recordType), terrain,
                 index + 1 == geometry.scene.triangleProvenance.size() ? "" : ",");
         }
         output << "  ]\n}\n";

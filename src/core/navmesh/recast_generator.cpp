@@ -1,6 +1,7 @@
 #include "core/navmesh/generator.h"
 
 #include <Recast.h>
+#include <RecastAlloc.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -185,6 +186,8 @@ namespace
         std::vector<float> vertices;
         std::vector<int> triangles;
         std::vector<std::size_t> sources;
+        /// One obstacle-only tag per raster triangle, parallel to sources after clipping.
+        std::vector<bool> obstacles;
         AABB bounds;
     };
 
@@ -253,6 +256,7 @@ namespace
                 }
                 triangles.insert(triangles.end(), {base, base + 2, base + 1});
                 sources.push_back(i);
+                input.obstacles.push_back(scene.geometrySources[provenance.geometrySource].navigationObstacle);
             }
         }
         statistics.eligibleTriangles = sources.size();
@@ -267,6 +271,10 @@ namespace
         auto &largeSources = result.largeSources;
         for (const auto index : sources)
         {
+            if (scene.geometrySources[scene.triangleProvenance[index].geometrySource].navigationObstacle)
+            {
+                continue;
+            }
             const auto &triangle = scene.mesh.triangles[index];
             const auto a = scene.mesh.vertices[triangle.vertices[0]], b = scene.mesh.vertices[triangle.vertices[1]],
                        c = scene.mesh.vertices[triangle.vertices[2]];
@@ -313,9 +321,15 @@ namespace
         // Scale the merge threshold with the profile's physical minimum area.
         config.mergeRegionArea =
             static_cast<int>(std::ceil(settings.mergeRegionAreaMultiplier * (profile.minimumRegionArea / voxelArea)));
-        config.maxVertsPerPoly = 3;
+        // Merge convex contour triangles before detail sampling. Larger patches
+        // avoid forcing sample vertices along artificial diagonals on a straight flight.
+        // The neutral/exported mesh is still triangulated by the detail builder.
+        config.maxVertsPerPoly = 6;
         config.detailSampleDist = cs * 6;
-        config.detailSampleMaxError = ch;
+        // Surface approximation is bounded by movement resolution, rather than
+        // tracing voxel-height noise and individual stair risers. Raster filters
+        // still enforce actual climb and headroom before any height simplification.
+        config.detailSampleMaxError = std::max(ch, profile.stepHeight);
         config.bmin[0] = bounds.min.x - cs * 2;
         config.bmin[1] = bounds.min.z - ch * 2;
         config.bmin[2] = bounds.min.y - cs * 2;
@@ -324,6 +338,112 @@ namespace
         config.bmax[2] = bounds.max.y + cs * 2;
         rcCalcGridSize(config.bmin, config.bmax, config.cs, &config.width, &config.height);
         return config;
+    }
+
+    /// Require a contour for every surviving voxel region; coarse simplification can collapse small islands.
+    [[nodiscard]] bool HasAllRegionContours(const rcCompactHeightfield &compact, const rcContourSet &contours)
+    {
+        std::vector<bool> represented(static_cast<std::size_t>(compact.maxRegions) + 1);
+        for (int contour{}; contour < contours.nconts; ++contour)
+        {
+            const auto &boundary = contours.conts[contour];
+            if (boundary.nverts >= 3 && boundary.reg < represented.size())
+            {
+                represented[boundary.reg] = true;
+            }
+        }
+        for (int span{}; span < compact.spanCount; ++span)
+        {
+            const auto region = compact.spans[span].reg;
+            if (compact.areas[span] != RC_NULL_AREA && region && !(region & RC_BORDER_REG) && !represented[region])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Transfer only absent regions from a finer contour set, preserving existing coarse boundaries.
+     * Recast owns each contour's vertex buffers independently. Moving those pointers into
+     * the enlarged target array requires clearing the donor before either owner is released.
+     */
+    void AppendMissingRegionContours(rcContourSet &target, rcContourSet &refined)
+    {
+        std::vector<bool> represented(static_cast<std::size_t>(std::numeric_limits<unsigned short>::max()) + 1);
+        for (int index{}; index < target.nconts; ++index)
+        {
+            if (target.conts[index].nverts >= 3)
+            {
+                represented[target.conts[index].reg] = true;
+            }
+        }
+        std::vector<int> missing;
+        for (int index{}; index < refined.nconts; ++index)
+        {
+            const auto &contour = refined.conts[index];
+            if (contour.nverts >= 3 && !represented[contour.reg])
+            {
+                missing.push_back(index);
+            }
+        }
+        if (missing.empty())
+        {
+            return;
+        }
+        const auto count = static_cast<std::size_t>(target.nconts) + missing.size();
+        auto *combined = static_cast<rcContour *>(rcAlloc(count * sizeof(rcContour), RC_ALLOC_PERM));
+        if (!combined)
+        {
+            throw std::runtime_error("Recast contour refinement allocation failed");
+        }
+        std::copy_n(target.conts, target.nconts, combined);
+        auto destination = target.nconts;
+        for (const auto index : missing)
+        {
+            auto &contour = refined.conts[index];
+            combined[destination++] = contour;
+            contour.verts = nullptr;
+            contour.rverts = nullptr;
+            contour.nverts = 0;
+            contour.nrverts = 0;
+        }
+        rcFree(target.conts);
+        target.conts = combined;
+        target.nconts = destination;
+    }
+
+    /// Refine contour tolerance until every retained voxel region survives, never exceeding the requested error.
+    [[nodiscard]] RecastOwner<rcContourSet, rcFreeContourSet> BuildRegionContours(rcContext &context,
+                                                                                  rcCompactHeightfield &compact,
+                                                                                  const rcConfig &config)
+    {
+        auto error = config.maxSimplificationError;
+        RecastOwner<rcContourSet, rcFreeContourSet> contours(nullptr, rcFreeContourSet);
+        while (true)
+        {
+            RecastOwner<rcContourSet, rcFreeContourSet> refined(rcAllocContourSet(), rcFreeContourSet);
+            if (!refined || !rcBuildContours(&context, compact, error, config.maxEdgeLen, *refined))
+            {
+                throw std::runtime_error("Recast contour construction failed");
+            }
+            if (!contours)
+            {
+                contours = std::move(refined);
+            }
+            else
+            {
+                AppendMissingRegionContours(*contours, *refined);
+            }
+            if (HasAllRegionContours(compact, *contours))
+            {
+                return contours;
+            }
+            if (error == 0)
+            {
+                throw std::runtime_error("Recast contour construction lost a retained walkable region");
+            }
+            error = error > 1 ? error * 0.5F : 0;
+        }
     }
 
     /// Own all Recast intermediates; retain height samples in a detail mesh or throw a stage-specific error.
@@ -345,11 +465,25 @@ namespace
         rcMarkWalkableTriangles(&context, config.walkableSlopeAngle, vertices.data(),
                                 static_cast<int>(vertices.size() / 3), triangles.data(),
                                 static_cast<int>(sources.size()), areas.data());
-        for (const auto area : areas)
+        // Reserve the highest raster area for obstacle-only solids. Recast merges
+        // coincident spans using the highest area, so a rock cannot become a floor
+        // through overlap with terrain or low-hanging-obstacle promotion.
+        constexpr unsigned char floorArea = 1;
+        constexpr unsigned char obstacleArea = RC_WALKABLE_AREA;
+        for (std::size_t triangle{}; triangle < areas.size(); ++triangle)
         {
-            if (area == RC_NULL_AREA)
+            if (input.obstacles[triangle])
+            {
+                areas[triangle] = obstacleArea;
+                ++statistics.rejectedObstruction;
+            }
+            else if (areas[triangle] == RC_NULL_AREA)
             {
                 ++statistics.rejectedSlope;
+            }
+            else
+            {
+                areas[triangle] = floorArea;
             }
         }
         if (!rcRasterizeTriangles(&context, vertices.data(), static_cast<int>(vertices.size() / 3), triangles.data(),
@@ -359,6 +493,18 @@ namespace
         }
         // Remove spans that violate climb or vertical clearance before radius erosion.
         rcFilterLowHangingWalkableObstacles(&context, config.walkableClimb, *heightfield);
+        // Clear tagged solids after promotion, retaining their raw spans so
+        // ledge and clearance filtering still see the obstacle volume.
+        for (int column{}; column < heightfield->width * heightfield->height; ++column)
+        {
+            for (auto *span = heightfield->spans[column]; span; span = span->next)
+            {
+                if (span->area == obstacleArea)
+                {
+                    span->area = RC_NULL_AREA;
+                }
+            }
+        }
         rcFilterLedgeSpans(&context, config.walkableHeight, config.walkableClimb, *heightfield);
         rcFilterWalkableLowHeightSpans(&context, config.walkableHeight, *heightfield);
         RecastOwner<rcCompactHeightfield, rcFreeCompactHeightfield> compact(rcAllocCompactHeightfield(),
@@ -392,12 +538,7 @@ namespace
         {
             throw std::runtime_error("Recast region partition failed");
         }
-        RecastOwner<rcContourSet, rcFreeContourSet> contours(rcAllocContourSet(), rcFreeContourSet);
-        if (!contours ||
-            !rcBuildContours(&context, *compact, config.maxSimplificationError, config.maxEdgeLen, *contours))
-        {
-            throw std::runtime_error("Recast contour construction failed");
-        }
+        const auto contours = BuildRegionContours(context, *compact, config);
         RecastOwner<rcPolyMesh, rcFreePolyMesh> polyMesh(rcAllocPolyMesh(), rcFreePolyMesh);
         if (!polyMesh || !rcBuildPolyMesh(&context, *contours, config.maxVertsPerPoly, *polyMesh))
         {
@@ -826,6 +967,14 @@ namespace navmesh::core
             result.warnings.push_back("No supported terrain or collision triangles were available for Recast.");
             return result;
         }
+        const auto floorSource = std::find(input.obstacles.begin(), input.obstacles.end(), false);
+        if (floorSource == input.obstacles.end())
+        {
+            result.statistics.rejectedObstruction = input.sources.size();
+            result.warnings.push_back("Only obstacle collision was available; no walkable floor sources remain.");
+            return result;
+        }
+        const auto fallbackSource = input.sources[static_cast<std::size_t>(floorSource - input.obstacles.begin())];
         const auto sourceIndex = BuildSourceIndex(scene, input.sources);
         const auto config = MakeRecastConfig(input.bounds, profile, settings);
         if (config.cs > settings.cellSize)
@@ -852,7 +1001,7 @@ namespace navmesh::core
             ClipGeneratedMesh(result.mesh, *cellBounds);
         }
         BuildMeshAdjacency(result.mesh);
-        AssignSourceProvenance(result, scene, sourceIndex, input.sources.front());
+        AssignSourceProvenance(result, scene, sourceIndex, fallbackSource);
 
         // Anchor connectivity after CELL clipping: paths outside the selected
         // bounds cannot keep a disconnected interior component alive.

@@ -55,7 +55,12 @@ to Recast Y-up coordinates, rasterizes a supported exterior halo around the targ
 filters walkable spans, erodes them by
 agent radius, then builds regions, contours, a polygon mesh and floor-height
 detail triangles. Authoritative vertical collision faces remain rasterization
-input as obstructions. Height detail samples the surviving compact heightfield;
+input as obstructions. Skyrim extraction tags landscape rock assets as obstacle-only
+sources; the neutral rasterizer retains their solids but excludes their tops even
+when low-obstacle promotion or terrain overlap could make them walkable. Height
+detail samples the surviving compact heightfield with movement-bounded error;
+convex contour polygons merge before sampling. Contour construction refines the
+requested error when a retained voxel region would collapse. Final output remains triangles;
 shared detail-patch vertices are joined before neutral adjacency is built.
 Detail triangles are clipped to the target CELL in the project's neutral model for JSON, OBJ, and the
 `Candidate NAVM` GLB layer. Eligible generated geometry can enter the guarded

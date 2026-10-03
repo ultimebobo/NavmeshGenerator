@@ -45,6 +45,9 @@ void TestPerformanceCaches()
     profile.minimumRegionArea = 0;
     const auto key = app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed");
     assert(!key.empty());
+    scene.geometrySources[0].navigationObstacle = true;
+    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed") != key);
+    scene.geometrySources[0].navigationObstacle = false;
     const auto original = scene.mesh.vertices[0].z;
     scene.mesh.vertices[0].z += 1;
     assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed") != key);
@@ -68,6 +71,14 @@ void TestPerformanceCaches()
     assert(core::WriteCandidateJson(before, candidate, scene, "{}"));
     assert(core::WriteCandidateJson(after, loaded, evidence, "{}"));
     assert(before.str() == after.str());
+    evidence.geometrySources[0].navigationObstacle = true;
+    const auto obstaclePath = root / "obstacle.gz";
+    std::filesystem::remove(obstaclePath, error);
+    assert(app::detail::StoreCandidate(obstaclePath, loaded, evidence));
+    core::Scene obstacleEvidence;
+    assert(app::detail::LoadCandidate(obstaclePath, loaded, obstacleEvidence));
+    assert(obstacleEvidence.geometrySources[0].navigationObstacle);
+    assert(app::detail::LoadCandidate(path, loaded, evidence));
     assert(app::detail::WriteCompressedCandidateJson(root / "inspection.json.gz", loaded, evidence, "{}"));
 #ifdef _WIN32
     auto gzip = gzopen_w((root / "inspection.json.gz").c_str(), "rb");

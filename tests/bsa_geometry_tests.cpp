@@ -121,4 +121,20 @@ void TestNativeBsaGeometry()
     changed.insert("sentinel");
     assert(!skyrim::ChangedArchiveModels(root, assets, snapshot, {assets.archives[0]}, changed));
     assert(changed == std::set<std::string>{"sentinel"});
+
+    // Asset classification belongs to Skyrim extraction; the neutral generator consumes only the tag.
+    const auto rockDirectory = root / "meshes/Landscape/Rocks";
+    std::filesystem::create_directories(rockDirectory);
+    std::ofstream(rockDirectory / "fixture.nif", std::ios::binary) << model.str();
+    for (const auto *logicalPath : {"Landscape\\Rocks\\fixture.nif", "MESHES/LANDSCAPE/ROCKS/fixture.nif"})
+    {
+        cell.references[0].modelPath = logicalPath;
+        const auto rock = skyrim::ExtractGeometry(root, cell, snapshot);
+        assert(rock.modelsLoaded == 1 && rock.scene.geometrySources[0].navigationObstacle);
+    }
+    std::filesystem::create_directories(root / "meshes/Architecture");
+    std::ofstream(root / "meshes/Architecture/RockStairs.nif", std::ios::binary) << model.str();
+    cell.references[0].modelPath = "Architecture/RockStairs.nif";
+    const auto architecture = skyrim::ExtractGeometry(root, cell, snapshot);
+    assert(architecture.modelsLoaded == 1 && !architecture.scene.geometrySources[0].navigationObstacle);
 }

@@ -48,6 +48,14 @@ For larger Plugin or Load order runs, use the estimation option to check the
 expected workload. **Advanced settings** contains generation and performance
 controls; start with the defaults unless you need to adjust them.
 
+Generation uses simplified contours and movement-bounded height detail to keep
+triangle counts closer to authored navigation. Straight stair flights can become
+compact ramps while landings, turns and obstructions retain the detail they need.
+Landscape rock collision blocks movement without creating walkable rock tops.
+Use **Reset** in Advanced settings to adopt current numerical defaults if your
+desktop configuration already has saved values. Smaller contour error follows
+obstacle outlines more closely and can increase the triangle count.
+
 ## Review and use the results
 
 The output folder contains the files for your chosen operation. Cell inspection

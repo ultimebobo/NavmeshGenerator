@@ -145,7 +145,9 @@ namespace
                          "step height is rounded down to whole voxels.",
                          &recast.cellHeight},
             NumericField{"recast_simplification_error", "Contour simplification error",
-                         "Maximum contour deviation in horizontal voxels.", &recast.maxSimplificationError},
+                         "Maximum contour deviation in horizontal voxels. Larger values reduce triangles; "
+                         "smaller values follow obstacle outlines more closely. Collapsed regions trigger refinement.",
+                         &recast.maxSimplificationError},
             NumericField{"recast_max_edge_length", "Maximum contour edge length",
                          "Edge subdivision limit in Skyrim units. Zero disables subdivision.", &recast.maxEdgeLength},
             NumericField{"recast_merge_area_multiplier", "Region merge multiplier",

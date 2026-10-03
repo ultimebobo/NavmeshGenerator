@@ -33,7 +33,10 @@ this reference.
   It clips output after exterior-halo rasterization and retains only shared-edge
   components reaching a matched door or an exterior boundary edge. Vertical
   collision faces contribute obstruction evidence; height-detail triangles
-  follow the compact heightfield instead of interpolating only contour corners.
+  follow the compact heightfield with movement-bounded error. Convex contour
+  patches merge before sampling; collapsed regions trigger contour refinement.
+  `GeometrySource::navigationObstacle` excludes tagged solids from walkable floors
+  while retaining obstruction evidence. Skyrim extraction tags landscape rock assets.
   Candidate warnings identify adaptive voxel width and climb quantization.
 - `navmesh::core::StitchCandidateBorders`: preserves unlinked regions and matches
   authored border edges, coalescing compatible generated boundary subdivisions

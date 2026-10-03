@@ -277,7 +277,8 @@ namespace
             const bool correct = probe.covered ? region && region == candidate.exits[probe.entrance].region : !region;
             if (!correct)
             {
-                std::cerr << "Navigation fixture failed: " << probe.name << '\n';
+                std::cerr << "Navigation fixture failed (" << candidate.partitioningAlgorithm << "): " << probe.name
+                          << '\n';
                 std::exit(EXIT_FAILURE);
             }
         }
@@ -289,6 +290,61 @@ namespace
             assert(candidate.exits[first].region != candidate.exits[second].region);
         }
     }
+
+    void CheckCompactStraightFlight(RegionPartitioningAlgorithm partitioning)
+    {
+        ObstacleFixture flight;
+        const auto source = AddSource(flight, "straight flight");
+        constexpr int count = 16;
+        constexpr float tread = 32;
+        constexpr float rise = 24;
+        for (int step{}; step < count; ++step)
+        {
+            const float x = step * tread;
+            const float height = (step + 1) * rise;
+            AddBox(flight, source, {}, {x, 0, -32}, {x + tread, 128, height});
+            const auto probeX = step == 0 ? x + 24 : step + 1 == count ? x + 8 : x + tread / 2;
+            flight.probes.push_back({"straight flight tread " + std::to_string(step), {probeX, 64, height}, 0});
+        }
+        AddEntrance(flight, {tread / 2, 64, rise});
+        const auto candidate =
+            RecastCandidateGenerator{}.Generate(flight.scene, {}, std::nullopt, flight.entrances, partitioning);
+        CheckObstacleFixture(flight, candidate);
+        assert(candidate.mesh.polygons.size() == 2);
+    }
+
+    void CheckObstacleOnlyCollision(RegionPartitioningAlgorithm partitioning)
+    {
+        ObstacleFixture fixture;
+        const auto floor = AddSource(fixture, "floor around solid");
+        AddBox(fixture, floor, {}, {-512, -256, -32}, {512, 256, 0});
+        const auto rock = AddSource(fixture, "low solid");
+        // Its top is within climb reach and large enough to survive region filtering.
+        // Obstacle tagging must prevent navigation even when the floor is connected.
+        fixture.scene.geometrySources[rock].navigationObstacle = true;
+        AddBox(fixture, rock, {}, {-96, -96, -32}, {96, 96, 24});
+        AddEntrance(fixture, {-384, 0, 0});
+        fixture.probes = {{"solid top excluded", {0, 0, 24}, 0, false},
+                          {"solid footprint blocked", {0, 0, 0}, 0, false},
+                          {"route beside solid", {0, 192, 0}, 0},
+                          {"far floor connected", {384, 0, 0}, 0}};
+        const RecastCandidateGenerator generator;
+        const auto candidate = generator.Generate(fixture.scene, {}, std::nullopt, fixture.entrances, partitioning);
+        CheckObstacleFixture(fixture, candidate);
+        assert(candidate.statistics.rejectedObstruction > 0);
+        for (const auto source : candidate.polygonSourceTriangles)
+        {
+            assert(fixture.scene.triangleProvenance[source].geometrySource == floor);
+        }
+        // Untagged low collision remains eligible; the policy cannot remove arbitrary steps.
+        fixture.scene.geometrySources[rock].navigationObstacle = false;
+        const auto walkable = generator.Generate(fixture.scene, {}, std::nullopt, fixture.entrances, partitioning);
+        assert(SurfaceRegion(walkable, {0, 0, 24}) == walkable.exits[0].region);
+        fixture.scene.geometrySources[floor].navigationObstacle = true;
+        fixture.scene.geometrySources[rock].navigationObstacle = true;
+        const auto allObstacles = generator.Generate(fixture.scene, {}, std::nullopt, fixture.entrances, partitioning);
+        assert(allObstacles.mesh.polygons.empty() && !allObstacles.exits[0].polygon);
+    }
 } // namespace
 
 void TestNavigationObstacleFixture()
@@ -298,6 +354,8 @@ void TestNavigationObstacleFixture()
     for (const auto partitioning : {RegionPartitioningAlgorithm::Watershed, RegionPartitioningAlgorithm::Monotone,
                                     RegionPartitioningAlgorithm::Layers})
     {
+        CheckCompactStraightFlight(partitioning);
+        CheckObstacleOnlyCollision(partitioning);
         const auto candidate = generator.Generate(fixture.scene, {}, std::nullopt, fixture.entrances, partitioning);
         CheckObstacleFixture(fixture, candidate);
     }

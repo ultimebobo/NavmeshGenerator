@@ -379,11 +379,12 @@ namespace navmesh::core
                     const auto name =
                         std::format("{}: {:08X} {}", LayerName(layer), source.reference.formId,
                                     source.modelPath.empty() ? source.reference.recordType : source.modelPath);
-                    const auto provenanceJson = std::format(
-                        "{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\",\"model\":\"{}\","
-                        "\"sourceType\":\"{}\",\"confidence\":{}}}",
-                        Escape(source.reference.plugin), source.reference.formId, Escape(source.reference.recordType),
-                        Escape(source.modelPath), LayerName(layer), source.confidence);
+                    const auto provenanceJson =
+                        std::format("{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\",\"model\":\"{}\","
+                                    "\"sourceType\":\"{}\",\"confidence\":{},\"navigationObstacle\":{}}}",
+                                    Escape(source.reference.plugin), source.reference.formId,
+                                    Escape(source.reference.recordType), Escape(source.modelPath), LayerName(layer),
+                                    source.confidence, source.navigationObstacle ? "true" : "false");
                     objects.push_back({layer, name, provenanceJson});
                 }
                 auto &object = objects[where->second];

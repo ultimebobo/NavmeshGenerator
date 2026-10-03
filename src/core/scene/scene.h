@@ -60,6 +60,7 @@ namespace navmesh::core
         std::uint32_t formId{};
         std::string recordType;
     };
+    /// Record and model evidence for scene triangles, including their eligibility as navigation floors.
     struct GeometrySource
     {
         std::string modelPath;
@@ -69,6 +70,9 @@ namespace navmesh::core
         float confidence{0.5F};
         RecordProvenance reference;
         RecordProvenance baseObject;
+        /// Collision that blocks navigation but cannot supply a walkable floor, such as a landscape rock.
+        /// Rasterization retains its volume and headroom effects even on upward-facing triangles.
+        bool navigationObstacle{};
     };
     /// Identifies the lower-left LAND grid sample of a triangle's terrain quad.
     struct TerrainTriangleProvenance

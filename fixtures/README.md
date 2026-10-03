@@ -14,7 +14,11 @@ license, and contains no game assets. The ordinary C++ suite checks tread and
 landing coverage, shared-edge reachability, separate stacked levels, pier
 obstructions, insufficient headroom, a corner descent with uneven risers leading
 under a bridge, and oversized risers with each supported
-region partitioning strategy. It uses the current navigation defaults.
+region partitioning strategy. It uses the current navigation defaults. Additional
+regressions check minimal straight-flight triangulation, obstacle-only solids
+within climb reach, a connected route around their blocked footprint, and the
+same solids remaining walkable when their obstacle tag is absent. Extraction
+checks rock-directory classification without treating stone stairs as rocks.
 
 Build the assertion-enabled test executable as described in the
 [development guide](../docs/development.md), then export the visual fixture:

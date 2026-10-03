@@ -104,7 +104,14 @@ The default movement profile accommodates taller and slightly uneven stair
 risers while retaining normal standing clearance and agent-radius erosion.
 
 The generator samples height detail after building contours so landings and
-stairs follow the surviving walkable floor. This cannot recover geometry that
+stairs follow the surviving walkable floor with movement-bounded approximation.
+Straight flights can form compact ramps. Convex patch merging and contour
+simplification reduce triangle density; smaller **Contour simplification error**
+values retain closer obstacle outlines, and larger values reduce boundary detail.
+The generator automatically refines contours that would erase a retained voxel
+region. Use **Reset** to adopt current defaults in an existing saved configuration.
+Landscape rock collision contributes obstacles without walkable tops; architectural
+stone and terrain remain eligible. This cannot recover geometry that
 was lost during voxelization, lacks supported collision, or fails clearance.
 The redistributable [obstacle fixture](../fixtures/README.md#stairs-and-overpasses)
 provides repeatable coverage and connectivity checks plus a visual scene.

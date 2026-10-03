@@ -48,7 +48,8 @@ namespace navmesh::core
         /// Vertical voxel size in Skyrim units; must be finite and positive. Quantizes floor heights and climb.
         float cellHeight{2.0F};
         /// Maximum contour deviation in horizontal voxels; finite and nonnegative.
-        float maxSimplificationError{2.0F};
+        /// Larger values reduce boundary triangles; collapsed voxel regions trigger a finer tolerance.
+        float maxSimplificationError{6.0F};
         /// Maximum contour edge length in Skyrim units; zero disables subdivision.
         float maxEdgeLength{};
         /// Merge area relative to the profile's minimum region area; ignored by layer partitioning.

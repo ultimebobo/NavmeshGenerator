@@ -111,6 +111,7 @@ namespace navmesh::skyrim
     /// @param modelCache Optional run-scoped model and placement cache, shared safely by workers.
     /// @param navigationOnly Materialize supported collision and coverage without render display meshes.
     /// @return Extracted geometry with per-reference failures; navigationOnly excludes render-only support.
+    /// Landscape rock assets are tagged as navigation obstacles while retaining their collision geometry.
     [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path &dataDirectory, const core::Cell &cell,
                                                      const std::filesystem::path &cacheDirectory = {},
                                                      const GeometryProgressCallback &progress = {},

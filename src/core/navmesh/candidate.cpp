@@ -2923,14 +2923,14 @@ namespace navmesh::core
             const auto &source = scene.geometrySources[i];
             out << (i ? "," : "")
                 << std::format("{{\"plugin\":\"{}\",\"form_id\":\"{:08X}\",\"record_type\":\"{}\",\"model\":\"{}\","
-                               "\"type\":\"{}\",\"confidence\":{}}}",
+                               "\"type\":\"{}\",\"confidence\":{},\"navigation_obstacle\":{}}}",
                                reproducibility::EscapeJson(source.reference.plugin), source.reference.formId,
                                reproducibility::EscapeJson(source.reference.recordType),
                                reproducibility::EscapeJson(source.modelPath),
                                source.sourceType == GeometrySourceType::Terrain     ? "terrain"
                                : source.sourceType == GeometrySourceType::Collision ? "collision"
                                                                                     : "render_fallback",
-                               source.confidence);
+                               source.confidence, source.navigationObstacle ? "true" : "false");
         }
         out << "],\n  \"source_triangles\": [";
         std::set<std::size_t> usedSources;

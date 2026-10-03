@@ -10,7 +10,17 @@ selected exterior CELL, converts Skyrim world Z-up to Recast Y-up, and runs Reca
 filters, radius erosion, configurable region partitioning, contour construction,
 polygon mesh construction, and floor-height detail sampling. Vertical collision
 faces remain rasterization input as obstructions, even though their horizontal
-projection has no area. Region partitioning defaults to watershed; the
+projection has no area.
+The Skyrim extraction layer tags assets in the landscape rock directory as
+obstacle-only collision, normalizing case, separators and the optional meshes
+prefix. The neutral generator consumes this tag without interpreting model
+names. Every tagged face contributes a solid raster span but cannot become
+a walkable floor, including through coincident terrain or low-obstacle promotion.
+The policy leaves architectural stone and terrain eligible for navigation.
+Candidate source evidence records the obstacle tag, and obstacle triangles are
+counted in `rejected_obstruction`.
+
+Region partitioning defaults to watershed; the
 CLI and Windows UI also expose monotone and layer partitioning. The selected
 strategy is recorded in `candidate-navm.json`. It exports Recast height-detail triangles for the neutral
 candidate JSON/OBJ and combined GLB. Horizontal voxel size grows with the
@@ -18,15 +28,22 @@ extracted area to limit grid dimensions. Finer voxels resolve narrow stair tread
 while larger extracted areas can lose them. The navigation profile supplies
 traversable climb and other movement limits. The shared CLI/UI advanced settings
 configure requested horizontal and vertical voxel sizes, contour simplification
-error, optional maximum edge length and merge-area multiplier. Recast emits
-triangles directly for the neutral mesh. Disconnected
+error, optional maximum edge length and merge-area multiplier. Contour error is
+an upper bound: if simplification collapses a surviving voxel region, construction
+retries at finer tolerance until every retained region has a contour. Recast
+merges convex contour polygons before height sampling and triangulates the
+result for the neutral mesh. Disconnected
 regions below the profile's minimum area are removed. Watershed and monotone
 partitioning can merge small adjacent regions; layer partitioning does not use
 the merge threshold. Recast converts the area thresholds to horizontal voxel
 cells. This filters small orphan surfaces before polygon construction.
 The compact heightfield stays alive through detail construction. Sampling
-spacing scales with horizontal voxel size and height error with vertical voxel
-size. Detail vertices use world coordinates and patch-local triangle indices;
+spacing scales with horizontal voxel size. Height approximation error is bounded
+by the larger of the movement profile's climb and the vertical voxel size.
+This lets straight stairs form compact ramp surfaces without reproducing every
+riser; the voxel filters enforce climb, clearance and obstacle exclusion before
+simplification. Turns, landings and nonplanar terrain add height samples where
+needed. Detail vertices use world coordinates and patch-local triangle indices;
 conversion restores Skyrim axes, removes Recast's additional height offset, and joins shared
 patch vertices before adjacency and reachability filtering. Landings and stair
 interiors therefore retain floor evidence beyond the contour corners. Long

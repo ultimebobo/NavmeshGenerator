@@ -52,7 +52,10 @@ namespace navmesh::core
     {
       public:
         /** Rasterize authoritative Skyrim-world terrain and collision, including vertical
-         * obstruction faces, and sample floor heights into detail triangles. Retain only
+         * and obstacle-only solids, and sample floor heights into detail triangles.
+         * Convex patches share height detail with approximation error bounded by the larger
+         * of climb and vertical voxel size. Contour error is refined if a retained voxel
+         * region would collapse. Obstacle-only sources cannot supply walkable floors. Retain only
          * walkable components with a shared-edge path to a matched door or exterior
          * boundary edge. Border anchors do not require an authored neighboring portal.
          * @param scene Geometry with complete triangle provenance in Skyrim world coordinates.
