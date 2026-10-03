@@ -402,7 +402,7 @@ namespace navmesh::cli
 
     void WriteDiagnosticHtml(const std::filesystem::path &outputPath, const navmesh::core::Cell &cell,
                              const navmesh::core::NavMesh &mesh, const navmesh::core::Mesh &geometry,
-                             const navmesh::skyrim::offline::GeometryExtraction &extraction,
+                             const navmesh::skyrim::GeometryExtraction &extraction,
                              const navmesh::analysis::AnalysisReport &report)
     {
         std::ofstream stream(outputPath, std::ios::trunc);
@@ -561,8 +561,7 @@ namespace navmesh::cli
                                  analysis.slopeStats.median, analysis.slopeStats.p95);
     }
 
-    void WriteLoadOrderJson(const std::filesystem::path &path,
-                            const navmesh::skyrim::offline::ResolvedLoadOrder &loadOrder)
+    void WriteLoadOrderJson(const std::filesystem::path &path, const navmesh::skyrim::ResolvedLoadOrder &loadOrder)
     {
         std::ofstream stream(path, std::ios::trunc);
         if (!stream)

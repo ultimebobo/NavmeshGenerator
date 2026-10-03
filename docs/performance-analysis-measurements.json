@@ -382,7 +382,7 @@
     "output/performance-analysis/inventory.json"
   ],
   "validation": {
-    "desktop_build": "xmake build navmesh-offline: passed",
+    "desktop_build": "xmake build NavmeshGenerator: passed",
     "probe_load_order_diagnostics": 0,
     "documentation": "doxygen Doxyfile: passed without warnings"
   }

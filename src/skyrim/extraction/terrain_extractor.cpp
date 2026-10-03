@@ -7,7 +7,7 @@
 
 namespace
 {
-    [[nodiscard]] std::optional<std::vector<float>> DecodeVhgt(const navmesh::skyrim::offline::ResolvedRecord &record,
+    [[nodiscard]] std::optional<std::vector<float>> DecodeVhgt(const navmesh::skyrim::ResolvedRecord &record,
                                                                std::string &error)
     {
         if (!record.raw)
@@ -49,7 +49,7 @@ namespace
     }
 } // namespace
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     TerrainExtraction ExtractTerrain(const ResolvedLoadOrder &loadOrder, const core::Cell &cell)
     {
@@ -126,4 +126,4 @@ namespace navmesh::skyrim::offline
         }
         return result;
     }
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

@@ -28,8 +28,8 @@ Run an estimate using the same inputs and generation settings as the intended
 rebuild, then run generation into a fresh output directory:
 
 ```powershell
-navmesh-offline.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --generate-plugin --estimate-only --output "<estimate folder>"
-navmesh-offline.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --generate-plugin --output "<new output folder>"
+NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --generate-plugin --estimate-only --output "<estimate folder>"
+NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --generate-plugin --output "<new output folder>"
 ```
 
 The estimate samples interior cells, exterior cells with authored neighbors, and

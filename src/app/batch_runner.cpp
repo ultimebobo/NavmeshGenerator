@@ -98,15 +98,15 @@ namespace navmesh::app::detail
 {
     /// Extract in target order and admit independent generation tasks within an estimated byte budget.
     /// Full scene meshes are owned only by extraction caches and in-flight tasks.
-    int RunBatch(const navmesh::app::Options &options, const navmesh::skyrim::offline::ResolvedLoadOrder &resolved,
-                 const navmesh::skyrim::offline::ModelAssetSources *assets,
-                 const std::vector<std::filesystem::path> &paths, const navmesh::app::ProgressCallback &progress,
-                 const navmesh::app::CancellationCallback &cancelled, double inputPreparationSeconds)
+    int RunBatch(const navmesh::app::Options &options, const navmesh::skyrim::ResolvedLoadOrder &resolved,
+                 const navmesh::skyrim::ModelAssetSources *assets, const std::vector<std::filesystem::path> &paths,
+                 const navmesh::app::ProgressCallback &progress, const navmesh::app::CancellationCallback &cancelled,
+                 double inputPreparationSeconds)
     {
         using namespace navmesh;
         const auto stop = [&] { return cancelled && cancelled(); };
         const auto started = std::chrono::steady_clock::now();
-        const auto assetCache = skyrim::offline::ModelAssetCacheDirectory(options.data, assets, options.assetCache);
+        const auto assetCache = skyrim::ModelAssetCacheDirectory(options.data, assets, options.assetCache);
         struct CacheRetention
         {
             std::filesystem::path snapshot;
@@ -115,7 +115,7 @@ namespace navmesh::app::detail
             {
                 try
                 {
-                    skyrim::offline::TrimModelAssetCache(snapshot, budget);
+                    skyrim::TrimModelAssetCache(snapshot, budget);
                 }
                 catch (const std::exception &error)
                 {
@@ -124,10 +124,10 @@ namespace navmesh::app::detail
             }
         } retention{assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL};
         const auto initialArchiveCounters = ReadArchiveCounters(assetCache);
-        skyrim::offline::ModelGeometryCache modelCache(options.workingMemoryMiB * 1024ULL * 1024ULL / 2);
-        skyrim::offline::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL);
-        const skyrim::offline::CellImpactIndex index(resolved);
-        const auto existingNavmeshCells = skyrim::offline::CellsWithExistingNavmesh(resolved);
+        skyrim::ModelGeometryCache modelCache(options.workingMemoryMiB * 1024ULL * 1024ULL / 2);
+        skyrim::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL);
+        const skyrim::CellImpactIndex index(resolved);
+        const auto existingNavmeshCells = skyrim::CellsWithExistingNavmesh(resolved);
         // Associate asset winners with the rebuild scope before selecting conservative affected targets.
         std::set<std::string> changedModels;
         bool archiveModelsChanged{};
@@ -195,10 +195,10 @@ namespace navmesh::app::detail
                     changedArchives.insert(archive);
                 }
             }
-            archiveModelsChanged = !skyrim::offline::ChangedArchiveModels(options.data, *assets, assetCache,
-                                                                          changedArchives, changedModels);
+            archiveModelsChanged =
+                !skyrim::ChangedArchiveModels(options.data, *assets, assetCache, changedArchives, changedModels);
         }
-        skyrim::offline::ImpactSelectionStatistics selectionStatistics;
+        skyrim::ImpactSelectionStatistics selectionStatistics;
         auto targets = index.AffectedCells(
             options.rebuildScope == app::RebuildScope::Plugin ? options.affectedPlugin : "",
             options.neighboringCellRadius, changedModels, archiveModelsChanged, &selectionStatistics);
@@ -256,7 +256,7 @@ namespace navmesh::app::detail
         {
             results.push_back({.cell = target, .status = "pending"});
         }
-        std::map<std::uint32_t, skyrim::offline::GeometryExtraction> cache;
+        std::map<std::uint32_t, skyrim::GeometryExtraction> cache;
         std::deque<std::uint32_t> cacheOrder;
         std::size_t cacheTriangles{}, cacheHits{}, extractedCells{}, originalPolygons{}, generatedPolygons{},
             completedCells{}, eligibleCells{}, candidateHits{};
@@ -499,7 +499,7 @@ namespace navmesh::app::detail
             generatedPolygons += result.candidate.mesh.polygons.size();
             extractionSeconds += result.extractionSeconds;
             generationSeconds += result.generationSeconds;
-            skyrim::offline::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL, true);
+            skyrim::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL, true);
             if (!summary("running"))
             {
                 return fail("Cannot checkpoint batch progress");
@@ -559,7 +559,7 @@ namespace navmesh::app::detail
                                     .max = {(static_cast<float>(x) + 1) * 4096.0F,
                                             (static_cast<float>(y) + 1) * 4096.0F, std::numeric_limits<float>::max()}};
             }
-            skyrim::offline::GeometryExtraction geometry;
+            skyrim::GeometryExtraction geometry;
             const auto localNeighbors = index.Neighbors(cell, std::max(1, options.neighboringCellRadius));
             std::set<std::uint32_t> terrainCells;
             for (const auto *neighbor : localNeighbors)
@@ -583,8 +583,8 @@ namespace navmesh::app::detail
                 }
                 auto extracted =
                     options.terrainOnly
-                        ? skyrim::offline::GeometryExtraction{}
-                        : skyrim::offline::ExtractGeometry(
+                        ? skyrim::GeometryExtraction{}
+                        : skyrim::ExtractGeometry(
                               options.data, geometryCell, assetCache, [&](std::size_t done, std::size_t total)
                               { update(std::format("Geometry {:08X}: reference {}/{}", neighbor->id, done, total)); },
                               stop, assets, &modelCache, true);
@@ -600,8 +600,8 @@ namespace navmesh::app::detail
                     auto found = cache.find(neighbor->id);
                     if (found == cache.end())
                     {
-                        auto terrain = skyrim::offline::ExtractTerrain(resolved, *neighbor);
-                        skyrim::offline::GeometryExtraction terrainGeometry;
+                        auto terrain = skyrim::ExtractTerrain(resolved, *neighbor);
+                        skyrim::GeometryExtraction terrainGeometry;
                         terrainGeometry.scene = std::move(terrain.scene);
                         terrainGeometry.terrainSupported = terrain.landRecordsDecoded != 0;
                         terrainGeometry.terrainLandRecords = terrain.landRecordsFound;
@@ -705,7 +705,7 @@ namespace navmesh::app::detail
             {
                 return fail("Cannot write cost sample exports");
             }
-            skyrim::offline::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL);
+            skyrim::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL);
             if (!summary("estimated"))
             {
                 return fail("Cannot finalize cost estimate");
@@ -785,7 +785,7 @@ namespace navmesh::app::detail
         // Write one combined override only after all generated border targets and exports are ready.
         if (options.generatePlugin && !generatedByCell.empty())
         {
-            std::vector<skyrim::offline::NavmeshReplacement> replacements;
+            std::vector<skyrim::NavmeshReplacement> replacements;
             for (const auto &result : results)
             {
                 if (result.status == "generated")
@@ -800,15 +800,15 @@ namespace navmesh::app::detail
                 progress(92,
                          options.copyPlugin ? "Writing selected plugin copy" : "Writing batch NAVM override plugin");
             }
-            if (!skyrim::offline::WriteNavmeshOverrides(options.output, paths, resolved, replacements, written, error,
-                                                        options.copyPlugin ? options.affectedPlugin : ""))
+            if (!skyrim::WriteNavmeshOverrides(options.output, paths, resolved, replacements, written, error,
+                                               options.copyPlugin ? options.affectedPlugin : ""))
             {
                 return fail(error);
             }
             std::cout << (options.copyPlugin ? "Generated plugin copy: " : "Generated batch NAVM override plugin: ")
                       << written.string() << '\n';
         }
-        skyrim::offline::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL);
+        skyrim::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL);
         if (!summary("complete"))
         {
             return fail("Cannot finalize batch-report.json");

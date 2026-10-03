@@ -1,10 +1,10 @@
-# Task: Build the first offline POC for Skyrim Navmesh Automation
+# Task: Build the first POC for Skyrim Navmesh Automation
 
 We are developing a tool to investigate whether Skyrim navmesh generation/repair can be meaningfully automated.
 
 ## Critical clarification
 
-This is an **offline modding/data-processing tool**.
+This is a **modding/data-processing tool**.
 
 Do NOT build an SKSE runtime plugin.
 Do NOT inspect the navmesh from inside a running Skyrim process.
@@ -73,7 +73,7 @@ produce a report and geometry export describing:
 
 The success criterion is:
 
-> We can point the tool at a real Skyrim cell and obtain a useful offline representation of the existing navigation and surrounding geometry.
+> We can point the tool at a real Skyrim cell and obtain a useful representation of the existing navigation and surrounding geometry.
 
 Do not attempt automatic navmesh generation yet.
 
@@ -127,7 +127,7 @@ The `model` layer must NOT depend on CommonLibSSE-NG or Skyrim runtime types.
 
 # Technology choice
 
-Use the most appropriate existing offline Skyrim plugin parsing library rather than forcing CommonLibSSE-NG into the problem.
+Use the most appropriate existing Skyrim plugin parsing library rather than forcing CommonLibSSE-NG into the problem.
 
 Investigate existing options first.
 
@@ -135,7 +135,7 @@ In particular evaluate:
 
 * xEdit/libxEdit ecosystem
 * zlib/ESP/ESM parsing implementations
-* CommonLibSSE-NG only if it is genuinely useful offline
+* CommonLibSSE-NG only if it is genuinely useful for reading plugin files
 * existing open-source Skyrim record parsers
 
 The tool must ultimately be capable of reading ESM/ESP/ESL files directly.
@@ -402,7 +402,7 @@ Update README.md with:
 
 ## What this is
 
-Offline experimental Skyrim navmesh analysis/generation tooling.
+Experimental Skyrim navmesh analysis/generation tooling.
 
 ## What it currently does
 
@@ -490,7 +490,7 @@ Work directly in the repository.
 
 First inspect the existing code and repository structure.
 
-Then inspect available/open-source Skyrim parsing approaches and determine the most appropriate offline approach.
+Then inspect available/open-source Skyrim parsing approaches and determine the most appropriate approach.
 
 Implement the smallest end-to-end vertical slice that satisfies the definition of done.
 

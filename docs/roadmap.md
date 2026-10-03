@@ -1,6 +1,6 @@
 # Skyrim Navmesh Generator Roadmap
 
-This is the durable implementation plan for an **offline** Skyrim SE/AE navmesh tool. It covers both intended products:
+This is the durable implementation plan for a Skyrim SE/AE navmesh tool. It covers both intended products:
 
 1. create navmeshes for new/large world projects, such as Beyond Skyrim and Skyblivion;
 2. diagnose and repair navigation broken by an installed mod load order.
@@ -55,7 +55,7 @@ Its limitations are decisive for later work:
 
 Every implementation step must:
 
-- keep the offline binary buildable and tests passing;
+- keep the binary buildable and tests passing;
 - add unit tests for new neutral logic and a fixture/integration test when possible;
 - report unsupported or incomplete data explicitly instead of silently approximating it;
 - preserve source provenance (plugin, FormID, record type, and geometry source) in machine-readable output;
@@ -92,7 +92,7 @@ Implement:
 - TES4 master parsing, file identity, full/light FormID resolution, and winning-override resolution;
 - cell/worldspace indexing that preserves persistent, temporary, and exterior-cell groups;
 - diagnostics for missing masters, cycles, duplicate files, unresolved FormIDs, and unsupported record variants;
-- a parser-library evaluation spike with written findings. Retain the direct parser only if its verified coverage and licensing fit the required records; otherwise isolate and adopt a mature offline parser behind a reader interface.
+- a parser-library evaluation spike with written findings. Retain the direct parser only if its verified coverage and licensing fit the required records; otherwise isolate and adopt a mature parser behind a reader interface.
 
 Accept when: `--mo2` and `--profile` import a real existing profile without manual files; a small fixture load order resolves a base cell, a reference override, and a NAVM override exactly as expected; outputs name the winning record, origin chain, and physical file selected through MO2's virtual-file rules.
 

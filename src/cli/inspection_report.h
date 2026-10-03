@@ -24,15 +24,14 @@ namespace navmesh::cli
     /// Overwrite an HTML support report with world-space projections; return silently if opening fails.
     void WriteDiagnosticHtml(const std::filesystem::path &outputPath, const navmesh::core::Cell &cell,
                              const navmesh::core::NavMesh &mesh, const navmesh::core::Mesh &geometry,
-                             const navmesh::skyrim::offline::GeometryExtraction &extraction,
+                             const navmesh::skyrim::GeometryExtraction &extraction,
                              const navmesh::analysis::AnalysisReport &report);
 
     /// Print support classifications and evidence statistics to standard output.
     void PrintAnalysisSummary(const navmesh::analysis::AnalysisReport &analysis);
 
     /// Overwrite winning-record and origin-chain JSON; return silently if opening fails.
-    void WriteLoadOrderJson(const std::filesystem::path &path,
-                            const navmesh::skyrim::offline::ResolvedLoadOrder &loadOrder);
+    void WriteLoadOrderJson(const std::filesystem::path &path, const navmesh::skyrim::ResolvedLoadOrder &loadOrder);
 
     /// Overwrite cell-list JSON, preserving input order; return silently if opening fails.
     void WriteCellsJson(const std::filesystem::path &path, const std::vector<navmesh::core::Cell> &cells);

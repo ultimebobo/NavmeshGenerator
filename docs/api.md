@@ -11,14 +11,14 @@ this reference.
 - `navmesh::core::WriteCombinedGlb`: ordered scene groups, separate selected-cell
   originals, door-linked face materials, exit markers, and authored/generated
   connection bars along recorded portal edges. Selection omits bars without both displayed endpoint triangles.
-- `navmesh::skyrim::offline::DecodeNavmeshConnections`: bounded inspection decoding
+- `navmesh::skyrim::DecodeNavmeshConnections`: bounded inspection decoding
   of consumed external entries and door associations, retaining raw plugin bytes.
 - `navmesh::core::SharedBytes`: immutable shared byte ownership and bounded slices
   for parser payload/subrecord data without repeated copies.
 - `navmesh::core::ContentHash`: incremental SHA-256 identities for cache dependencies.
-- `navmesh::skyrim::offline::ModelGeometryCache`: byte-budgeted model-local and
+- `navmesh::skyrim::ModelGeometryCache`: byte-budgeted model-local and
   transformed-placement reuse with extraction-policy/provider revision keys.
-- `navmesh::skyrim::offline` asset-cache helpers: shared archive snapshot identity,
+- `navmesh::skyrim` asset-cache helpers: shared archive snapshot identity,
   winning changed-model lookup, and eviction confined to generated files.
 - `navmesh::app::detail::BuildBatchCandidate`: isolated generation/reuse,
   validation, evidence compaction, and audit spooling.
@@ -35,7 +35,7 @@ this reference.
   and portal joins. Inward offsets trim the candidate; outward offsets extend it.
 - `navmesh::core::AuthoredBorderTolerance`: shared world-unit bound for authored
   portal drift from exterior CELL borders, used by stitching and the guarded writer.
-- `navmesh::skyrim::offline`: plugin/load-order reading, guarded NAVM override
+- `navmesh::skyrim`: plugin/load-order reading, guarded NAVM override
   writing, Mod Organizer 2 input, and terrain/model extraction.
 - `navmesh::analysis`: spatial queries and navmesh discrepancy analysis.
 - `navmesh::validation`: cell validation findings.
@@ -53,19 +53,23 @@ this reference.
   provenance joins.
 - `navmesh::cli` inspection-report functions: inspection OBJ/JSON/HTML exports,
   cell and load-order listings, and console analysis summaries.
-- `navmesh::skyrim::offline::CellImpactIndex`: affected-cell discovery, historical
+- `navmesh::skyrim::CellImpactIndex`: affected-cell discovery, historical
   reference footprints, worldspace coordinate indexing and geometry suppliers.
-- `navmesh::skyrim::offline::WriteNavmeshOverrides`: combined batch serialization
+- `navmesh::skyrim::WriteNavmeshOverrides`: combined batch serialization
   of existing overrides and new plugin-owned NAVMs, with generated-to-generated
   and authored-neighbor reciprocal portal checks.
-- `navmesh::skyrim::offline::detail::PluginCopy`, `PreparePluginCopy`, and
+- `navmesh::skyrim::detail::PluginCopy`, `PreparePluginCopy`, and
   `MergePluginCopy`: complete raw-envelope validation, identity allocation limits,
   and NAVM insertion into a byte-preserving source copy. `WriteNavmeshOverrides`
   accepts an optional active filename for this authoring export and verifies
   modified NAVMs against the source's unchanged master table and full/light flags.
-- `navmesh::skyrim::offline::CellsWithExistingNavmesh`: winning NAVM ownership for
+- `navmesh::skyrim::CellsWithExistingNavmesh`: winning NAVM ownership for
   the shared runner's optional uncovered-cell generation policy, independent of
   whether polygon geometry can be decoded.
+
+Build, dependency setup, formatting, and regression commands are in the
+[development guide](development.md). Current CLI inputs and exports are in the
+[command-line reference](command-line.md).
 
 The data flow and design constraints are described in
 [Architecture](architecture.md), [Coordinate system](coordinate-system.md),

@@ -15,7 +15,8 @@
 #include <vector>
 #include <unordered_map>
 
-namespace navmesh::skyrim::offline
+/// Skyrim plugin input, asset extraction, and guarded navigation export.
+namespace navmesh::skyrim
 {
     /** Decode the external and door tables from supported NVNM trailing bytes for inspection.
      * @param trailing Bytes immediately after the owning mesh's triangle array.
@@ -207,4 +208,4 @@ namespace navmesh::skyrim::offline
                                                      const std::optional<std::int32_t> &cellY = std::nullopt,
                                                      const std::optional<std::uint32_t> &cellFormId = std::nullopt,
                                                      const std::string &targetEditorId = {});
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

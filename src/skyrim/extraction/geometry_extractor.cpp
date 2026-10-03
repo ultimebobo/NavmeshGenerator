@@ -505,7 +505,7 @@ namespace
     }
 
     void ExtractBsaModels(const std::filesystem::path &dataDirectory, const std::filesystem::path &cacheDirectory,
-                          const navmesh::core::Cell &cell, const navmesh::skyrim::offline::ModelAssetSources *assets,
+                          const navmesh::core::Cell &cell, const navmesh::skyrim::ModelAssetSources *assets,
                           const std::function<bool(const std::filesystem::path &)> &alreadyDecoded)
     {
         if (cacheDirectory.empty())
@@ -580,7 +580,7 @@ namespace
         {
             return;
         }
-        using namespace navmesh::skyrim::offline;
+        using namespace navmesh::skyrim;
         const auto archiveManifest = cacheDirectory / "archives.txt";
         if (!std::filesystem::exists(archiveManifest))
         {
@@ -618,7 +618,7 @@ namespace
     }
 } // namespace
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     namespace
     {
@@ -1116,4 +1116,4 @@ namespace navmesh::skyrim::offline
         output << "  ]\n}\n";
         return true;
     }
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

@@ -11,7 +11,7 @@
 
 namespace
 {
-    using namespace navmesh::skyrim::offline;
+    using namespace navmesh::skyrim;
     constexpr std::size_t kMaxDecodedRecordSize = 256ULL * 1024ULL * 1024ULL;
     bool Has(std::span<const std::uint8_t> b, std::size_t p, std::size_t n)
     {
@@ -322,13 +322,13 @@ namespace
         const auto size = static_cast<std::size_t>(layout.trailingData.size);
         if (Has(payload, trailing, size))
         {
-            (void)navmesh::skyrim::offline::DecodeNavmeshConnections({payload.data() + trailing, size}, mesh);
+            (void)navmesh::skyrim::DecodeNavmeshConnections({payload.data() + trailing, size}, mesh);
         }
         return mesh;
     }
 } // namespace
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     bool DecodeNavmeshConnections(std::span<const std::uint8_t> trailing, core::NavMesh &mesh)
     {
@@ -1022,4 +1022,4 @@ namespace navmesh::skyrim::offline
         const auto it = std::find_if(records.begin(), records.end(), [=](const auto &r) { return r.formId == formId; });
         return it == records.end() ? nullptr : &*it;
     }
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

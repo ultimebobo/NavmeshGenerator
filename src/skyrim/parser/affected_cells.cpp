@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     namespace
     {
@@ -403,4 +403,4 @@ namespace navmesh::skyrim::offline
         }
         return result;
     }
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

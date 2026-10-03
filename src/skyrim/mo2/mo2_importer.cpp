@@ -13,7 +13,7 @@
 
 namespace
 {
-    using namespace navmesh::skyrim::offline;
+    using namespace navmesh::skyrim;
     std::string Trim(std::string text)
     {
         const auto isTrim = [](const unsigned char c) { return std::isspace(c) != 0 || c == '\0'; };
@@ -384,7 +384,7 @@ namespace
     }
 } // namespace
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     bool ProfileSnapshotMatches(const Mo2ProfileInput &input)
     {
@@ -776,4 +776,4 @@ namespace navmesh::skyrim::offline
         WriteJson(json, input);
         return json.str();
     }
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

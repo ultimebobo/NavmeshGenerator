@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     /// One cell and its generated Skyrim world-space NAVM, borrowed for a batch write.
     struct NavmeshReplacement
@@ -65,4 +65,4 @@ namespace navmesh::skyrim::offline
                                             const ResolvedLoadOrder &resolved, const core::Cell &cell,
                                             const core::CandidateNavMesh &candidate, std::filesystem::path &writtenPath,
                                             std::string &error);
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

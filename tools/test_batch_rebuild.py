@@ -8,7 +8,7 @@ import tempfile
 import unittest
 import zlib
 
-EXE = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 else Path("build/windows/x64/releasedbg/navmesh-offline.exe").resolve()
+EXE = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 else Path("build/windows/x64/releasedbg/NavmeshGenerator.exe").resolve()
 
 
 def sub(kind, data):

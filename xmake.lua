@@ -1,7 +1,7 @@
 includes("lib/nifly")
 
 -- set project constants
-set_project("navmesh-generator")
+set_project("NavmeshGenerator")
 set_version("0.1.0")
 set_license("GPL-3.0-or-later")
 set_languages("c++23")
@@ -41,7 +41,7 @@ target("navmesh-ui-framework")
     add_includedirs("lib/recastnavigation/RecastDemo/Contrib/imgui", "third_party/imgui_backends", {public = true})
     add_syslinks("d3d11", "dxgi", "d3dcompiler", "dwmapi", "imm32", {public = true})
 
-target("navmesh-offline")
+target("NavmeshGenerator")
     set_kind("binary")
     set_default(true)
     add_deps("navmesh-core")

@@ -28,7 +28,7 @@ namespace navmesh::app::detail
     struct BatchGenerationInput
     {
         BatchCellResult result;
-        skyrim::offline::GeometryExtraction geometry;
+        skyrim::GeometryExtraction geometry;
         /// Optional target exterior bounds in Skyrim world coordinates; interior extent comes from support geometry.
         std::optional<core::AABB> bounds;
         /// Enabled target doors in Skyrim world coordinates.

@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     using GeometryProgressCallback = std::function<void(std::size_t completedReferences, std::size_t totalReferences)>;
     using GeometryCancellationCallback = std::function<bool()>;
@@ -121,4 +121,4 @@ namespace navmesh::skyrim::offline
     [[nodiscard]] bool WriteGeometryJson(const std::filesystem::path &outputPath, const core::Cell &cell,
                                          const GeometryExtraction &geometry,
                                          const reproducibility::ExportMetadata &metadata);
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

@@ -6,10 +6,10 @@ Milestone 1 retains the repository's direct, read-only parser behind the small `
 
 ## Options evaluated
 
-| Option | Fit for an offline C++ tool | Decision |
+| Option | Fit for a C++ tool | Decision |
 | --- | --- | --- |
 | xEdit/libxEdit | The most mature record-aware ecosystem, but it is a Delphi-oriented toolchain and would introduce a heavyweight external-process/integration boundary for this C++ binary. | Do not embed for this milestone; retain as an independent validation tool before any writer milestone. |
-| CommonLibSSE-NG | Excellent runtime/game type definitions, but it is not an offline ESM/ESP/ESL reader and would couple the offline path to runtime assumptions. | Not suitable. |
+| CommonLibSSE-NG | Excellent runtime/game type definitions, but it is not an ESM/ESP/ESL file reader and would couple the path to runtime assumptions. | Not suitable. |
 | Existing lightweight C++ parsers | Most are partial, obsolete, or carry uncertain coverage/licensing for SE/AE compressed records and light plugins. | No dependency adopted without a maintained, license-compatible candidate and fixture proof. |
 | Direct parser | Already in-tree, GPL-compatible with this project, deterministic, and sufficient for a narrow, fixture-tested identity/index spike. | Retained behind `IPluginReader`. |
 

@@ -332,8 +332,7 @@ namespace
     }
 } // namespace
 
-bool navmesh::skyrim::offline::detail::PreparePluginCopy(std::vector<std::uint8_t> bytes, PluginCopy &copy,
-                                                         std::string &error)
+bool navmesh::skyrim::detail::PreparePluginCopy(std::vector<std::uint8_t> bytes, PluginCopy &copy, std::string &error)
 {
     std::vector<Node> nodes;
     std::size_t hedrOffset{};
@@ -359,10 +358,9 @@ bool navmesh::skyrim::offline::detail::PreparePluginCopy(std::vector<std::uint8_
     return true;
 }
 
-bool navmesh::skyrim::offline::detail::MergePluginCopy(const PluginCopy &copy,
-                                                       const std::vector<std::uint8_t> &navigation,
-                                                       std::uint32_t nextObjectId, std::vector<std::uint8_t> &output,
-                                                       std::string &error)
+bool navmesh::skyrim::detail::MergePluginCopy(const PluginCopy &copy, const std::vector<std::uint8_t> &navigation,
+                                              std::uint32_t nextObjectId, std::vector<std::uint8_t> &output,
+                                              std::string &error)
 {
     std::vector<Node> sourceNodes, generatedNodes;
     std::set<std::uint32_t> ids;

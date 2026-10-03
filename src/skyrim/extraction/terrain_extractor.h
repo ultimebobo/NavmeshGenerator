@@ -4,7 +4,7 @@
 #include "core/world/types.h"
 #include "skyrim/parser/plugin_parser.h"
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     inline constexpr std::size_t kLandHeightSamplesPerSide = 33;
     inline constexpr float kLandSampleSpacing = 128.0F;
@@ -22,4 +22,4 @@ namespace navmesh::skyrim::offline
     /// A valid VHGT has a float base height and 1088 signed delta samples;
     /// missing or malformed data produces warnings rather than substitute terrain.
     [[nodiscard]] TerrainExtraction ExtractTerrain(const ResolvedLoadOrder &loadOrder, const core::Cell &cell);
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

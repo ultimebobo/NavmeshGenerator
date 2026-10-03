@@ -6,7 +6,7 @@
 #include <set>
 #include <tuple>
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     /// Selection diagnostics count records and placed uses; categories can overlap in their resulting CELLs.
     struct ImpactSelectionStatistics
@@ -76,4 +76,4 @@ namespace navmesh::skyrim::offline
         [[nodiscard]] const core::Cell *PhysicalCell(const RecordOrigin &origin) const;
         [[nodiscard]] std::vector<const core::Cell *> Footprint(const RecordOrigin &origin, int radius) const;
     };
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

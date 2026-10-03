@@ -33,12 +33,12 @@ format. Source plugins and existing output files are never overwritten. Every
 generated or modified NAVM is read back before the copy is finalized.
 
 ```powershell
-navmesh-offline.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --copy-plugin --output "<new output folder>"
+NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --copy-plugin --output "<new output folder>"
 ```
 
 ```powershell
-navmesh-offline.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --generate-plugin --output "<new output folder>"
-navmesh-offline.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-load-order --generate-plugin --output "<new output folder>"
+NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --generate-plugin --output "<new output folder>"
+NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-load-order --generate-plugin --output "<new output folder>"
 ```
 
 `--rebuild-plugin` accepts an active ESP, ESM, or ESL filename, case insensitive.
@@ -158,9 +158,12 @@ sampled candidates can be reused by a later generation run.
 Run the core tests and the synthetic CLI integration tests after building:
 
 ```powershell
-xmake build navmesh-offline navmesh-tests
-./build/windows/x64/releasedbg/navmesh-tests.exe
-python tools/test_batch_rebuild.py ./build/windows/x64/releasedbg/navmesh-offline.exe
+xmake f -m debug
+xmake build navmesh-tests
+xmake run navmesh-tests
+xmake f -m releasedbg
+xmake build NavmeshGenerator
+python tools/test_batch_rebuild.py ./build/windows/x64/releasedbg/NavmeshGenerator.exe
 ```
 
 Fixtures exercise LAND edits without CELL overrides, plugin and load-order

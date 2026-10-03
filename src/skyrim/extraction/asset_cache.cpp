@@ -7,7 +7,7 @@
 #include <fstream>
 #include <iostream>
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     std::string QuoteAssetPath(const std::filesystem::path &path)
     {
@@ -252,4 +252,4 @@ namespace navmesh::skyrim::offline
             error.clear();
         }
     }
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

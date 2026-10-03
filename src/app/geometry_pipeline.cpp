@@ -6,7 +6,7 @@
 namespace navmesh::app::detail
 {
     void AnnotateSupportSources(navmesh::analysis::AnalysisReport &report,
-                                const navmesh::skyrim::offline::GeometryExtraction &geometry)
+                                const navmesh::skyrim::GeometryExtraction &geometry)
     {
         for (auto &polygon : report.polygons)
         {
@@ -55,7 +55,7 @@ namespace navmesh::app::detail
     }
 
     [[nodiscard]] std::vector<navmesh::analysis::TriangleSource> BuildTriangleSources(
-        const navmesh::skyrim::offline::GeometryExtraction &geometry)
+        const navmesh::skyrim::GeometryExtraction &geometry)
     {
         std::vector<navmesh::analysis::TriangleSource> result(geometry.scene.mesh.triangles.size());
         for (std::size_t index{}; index < result.size() && index < geometry.scene.triangleProvenance.size(); ++index)
@@ -77,8 +77,8 @@ namespace navmesh::app::detail
         return result;
     }
 
-    void AppendGeometry(navmesh::skyrim::offline::GeometryExtraction &destination,
-                        const navmesh::skyrim::offline::GeometryExtraction &source)
+    void AppendGeometry(navmesh::skyrim::GeometryExtraction &destination,
+                        const navmesh::skyrim::GeometryExtraction &source)
     {
         const auto sourceOffset = destination.scene.geometrySources.size();
         const auto vertexOffset = static_cast<std::uint32_t>(destination.scene.mesh.vertices.size());
@@ -161,7 +161,7 @@ namespace navmesh::app::detail
             destination.collisionGeometrySupported || source.collisionGeometrySupported;
     }
 
-    void CullGeometryToBounds(navmesh::skyrim::offline::GeometryExtraction &geometry, const navmesh::core::AABB &bounds)
+    void CullGeometryToBounds(navmesh::skyrim::GeometryExtraction &geometry, const navmesh::core::AABB &bounds)
     {
         navmesh::core::Mesh selected;
         std::vector<navmesh::core::TriangleProvenance> provenance;

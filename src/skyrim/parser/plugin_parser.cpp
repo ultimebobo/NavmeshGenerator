@@ -237,14 +237,14 @@ namespace
         if (ReadU32LE(payload, bodyStart) == 12)
         {
             const auto trailingStart = trianglesStart + static_cast<std::size_t>(polygonCount) * 16;
-            (void)navmesh::skyrim::offline::DecodeNavmeshConnections(
-                {payload.data() + trailingStart, bodyEnd - trailingStart}, mesh);
+            (void)navmesh::skyrim::DecodeNavmeshConnections({payload.data() + trailingStart, bodyEnd - trailingStart},
+                                                            mesh);
         }
         return mesh;
     }
 } // namespace
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     std::vector<core::Cell> ListCells(const std::filesystem::path &pluginPath)
     {
@@ -458,4 +458,4 @@ namespace navmesh::skyrim::offline
         }
         return std::nullopt;
     }
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

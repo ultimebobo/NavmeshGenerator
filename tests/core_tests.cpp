@@ -90,7 +90,7 @@ namespace
         WritePlugin(root / "Records.esp", {}, false, { { "CELL", 0x100, Compressed(cell) }, { "NAVM", 0x101, NavmPayload() }, { "STAT", 0x102, base } });
         // Mark the first non-TES4 record compressed in-place; this keeps the fixture builder intentionally small.
         std::fstream compressedFile(root / "Records.esp", std::ios::in | std::ios::out | std::ios::binary); compressedFile.seekp(24 + 8); const std::uint32_t compressedFlag = 0x40000; compressedFile.write(reinterpret_cast<const char*>(&compressedFlag), sizeof(compressedFlag)); compressedFile.close();
-        const auto parsed = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Records.esp" } });
+        const auto parsed = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {"Records.esp"}});
         const auto* compressedCell = parsed.FindWinning(0x100); Require(compressedCell && compressedCell->editorId == "CompressedCell" && compressedCell->raw && compressedCell->raw->compressed);
         const auto* navm = parsed.FindWinning(0x101); Require(navm && navm->navm && navm->navm->supported && navm->navm->vertexCount == 1 && navm->navm->triangleCount == 1);
         const auto unknown = std::find_if(navm->raw->subrecords.begin(), navm->raw->subrecords.end(), [](const auto& sub) { return sub.type == "ZZZZ"; }); Require(unknown != navm->raw->subrecords.end() && unknown->data == std::vector<std::uint8_t>({ 0xA1, 0xB2, 0xC3 }));
@@ -98,14 +98,18 @@ namespace
 
         Require(baseRecord->origins.front().modelRadius == 5.0F && baseRecord->origins.front().hasModel);
         WritePlugin(root / "Bad.esp", {}, false, { { "NAVM", 0x200, { 'N', 'V', 'N', 'M', 0x40, 0x00 } }, { "CELL", 0x201, { 'E', 'D', 'I', 'D', 0x08, 0x00, 'x' } }, { "NAVM", 0x202, NavmPayload(99) } });
-        const auto malformed = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Bad.esp" } });
-        Require(std::any_of(malformed.diagnostics.begin(), malformed.diagnostics.end(), [](const auto& d) { return d.kind == navmesh::skyrim::offline::DiagnosticKind::MalformedInput; }));
-        Require(std::any_of(malformed.diagnostics.begin(), malformed.diagnostics.end(), [](const auto& d) { return d.kind == navmesh::skyrim::offline::DiagnosticKind::UnsupportedVersion; }));
+        const auto malformed = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {"Bad.esp"}});
+        Require(std::any_of(malformed.diagnostics.begin(), malformed.diagnostics.end(),
+                            [](const auto &d) { return d.kind == navmesh::skyrim::DiagnosticKind::MalformedInput; }));
+        Require(std::any_of(malformed.diagnostics.begin(), malformed.diagnostics.end(), [](const auto &d)
+                            { return d.kind == navmesh::skyrim::DiagnosticKind::UnsupportedVersion; }));
 
         WritePlugin(root / "BadCompression.esp", {}, false, { { "CELL", 0x203, { 0, 0, 0, 0 } } });
         std::fstream badCompressedFile(root / "BadCompression.esp", std::ios::in | std::ios::out | std::ios::binary); badCompressedFile.seekp(24 + 8); badCompressedFile.write(reinterpret_cast<const char*>(&compressedFlag), sizeof(compressedFlag)); badCompressedFile.close();
-        const auto badCompression = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "BadCompression.esp" } });
-        Require(std::any_of(badCompression.diagnostics.begin(), badCompression.diagnostics.end(), [](const auto& d) { return d.kind == navmesh::skyrim::offline::DiagnosticKind::DecompressionFailure; }));
+        const auto badCompression =
+            navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {"BadCompression.esp"}});
+        Require(std::any_of(badCompression.diagnostics.begin(), badCompression.diagnostics.end(), [](const auto &d)
+                            { return d.kind == navmesh::skyrim::DiagnosticKind::DecompressionFailure; }));
     }
     void TestNavmeshOverrideWriter()
     {
@@ -132,7 +136,7 @@ namespace
         std::vector<std::uint8_t> plugin; PutRecord(plugin, "TES4", 0, {}, 1); PutGroup(plugin, 0x4c4c4543, 0, cells);
         const auto sourcePath = root / "Source.esm";
         { std::ofstream file(sourcePath, std::ios::binary); file.write(reinterpret_cast<const char*>(plugin.data()), static_cast<std::streamsize>(plugin.size())); }
-        const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { sourcePath } });
+        const auto resolved = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {sourcePath}});
         Require(resolved.cells.size() == 1 && resolved.cells.front().navMeshes.size() == 2);
         navmesh::core::CandidateNavMesh candidate;
         candidate.mesh.vertices = { { 0, 0, 0 }, { 128, 0, 0 }, { 0, 128, 0 } };
@@ -147,31 +151,37 @@ namespace
         };
         std::filesystem::path target;
         std::string error;
-        const bool written = navmesh::skyrim::offline::WriteNavmeshOverride(root / "master-output", { sourcePath }, resolved, resolved.cells.front(), candidate, target, error);
+        const bool written = navmesh::skyrim::WriteNavmeshOverride(root / "master-output", {sourcePath}, resolved,
+                                                                   resolved.cells.front(), candidate, target, error);
         if (!written) std::fprintf(stderr, "Writer rejected fixture: %s\n", error.c_str());
         Require(written && target.extension() == ".esp" && eslFlagged(target) && std::filesystem::exists(target));
-        const auto patched = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { sourcePath, target } });
+        const auto patched =
+            navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {sourcePath, target}});
         Require(patched.cells.size() == 1 && patched.cells.front().navMeshes.size() == 2);
         const auto& active = patched.cells.front().navMeshes;
         Require(std::count_if(active.begin(), active.end(), [](const auto& mesh) { return mesh.vertices.size() == 3 && mesh.polygons.size() == 1 && mesh.vertices[1].x == 128; }) == 1);
         Require(std::count_if(active.begin(), active.end(), [](const auto& mesh) { return mesh.vertices.empty() && mesh.polygons.empty(); }) == 1);
         const auto* parent = patched.FindWinning(0x100);
         Require(parent && parent->editorId == "WriterCell" && parent->winning.plugin == "Source.esm");
-        Require(!navmesh::skyrim::offline::WriteNavmeshOverride(root / "master-output", { sourcePath }, resolved, resolved.cells.front(), candidate, target, error));
+        Require(!navmesh::skyrim::WriteNavmeshOverride(root / "master-output", {sourcePath}, resolved,
+                                                       resolved.cells.front(), candidate, target, error));
         std::ifstream unchanged(sourcePath, std::ios::binary); const std::vector<std::uint8_t> sourceBytes((std::istreambuf_iterator<char>(unchanged)), {});
         Require(sourceBytes == plugin);
         auto localized = plugin; localized[8] |= 0x80;
         const auto localizedPath = root / "Localized.esm";
         { std::ofstream file(localizedPath, std::ios::binary); file.write(reinterpret_cast<const char*>(localized.data()), static_cast<std::streamsize>(localized.size())); }
-        const auto localizedOrder = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { localizedPath } });
-        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "localized-output", { localizedPath }, localizedOrder,
-            localizedOrder.cells.front(), candidate, target, error) && target.extension() == ".esp" && eslFlagged(target));
+        const auto localizedOrder =
+            navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {localizedPath}});
+        Require(navmesh::skyrim::WriteNavmeshOverride(root / "localized-output", {localizedPath}, localizedOrder,
+                                                      localizedOrder.cells.front(), candidate, target, error) &&
+                target.extension() == ".esp" && eslFlagged(target));
         auto regular = plugin; regular[8] = 0;
         const auto regularPath = root / "Regular.esp";
         { std::ofstream file(regularPath, std::ios::binary); file.write(reinterpret_cast<const char*>(regular.data()), static_cast<std::streamsize>(regular.size())); }
-        const auto regularOrder = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { regularPath } });
-        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "regular-output", { regularPath }, regularOrder,
-            regularOrder.cells.front(), candidate, target, error) && target.extension() == ".esp" && eslFlagged(target));
+        const auto regularOrder = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {regularPath}});
+        Require(navmesh::skyrim::WriteNavmeshOverride(root / "regular-output", {regularPath}, regularOrder,
+                                                      regularOrder.cells.front(), candidate, target, error) &&
+                target.extension() == ".esp" && eslFlagged(target));
 
         std::vector<std::uint8_t> patchHeader;
         PutText(patchHeader, "MAST", { 'S', 'o', 'u', 'r', 'c', 'e', '.', 'e', 's', 'm', 0 });
@@ -182,25 +192,32 @@ namespace
         PutGroup(patchPlugin, 0x4c4c4543, 0, patchCells);
         const auto patchPath = root / "Addition.esp";
         { std::ofstream file(patchPath, std::ios::binary); file.write(reinterpret_cast<const char*>(patchPlugin.data()), static_cast<std::streamsize>(patchPlugin.size())); }
-        const auto mixedOrder = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { sourcePath, patchPath } });
+        const auto mixedOrder =
+            navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {sourcePath, patchPath}});
         Require(mixedOrder.cells.size() == 1 && mixedOrder.cells.front().navMeshes.size() == 3);
-        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "mixed-output", { sourcePath, patchPath }, mixedOrder,
-            mixedOrder.cells.front(), candidate, target, error) && target.extension() == ".esp" && eslFlagged(target));
-        const auto mixedPatched = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { sourcePath, patchPath, target } });
+        Require(navmesh::skyrim::WriteNavmeshOverride(root / "mixed-output", {sourcePath, patchPath}, mixedOrder,
+                                                      mixedOrder.cells.front(), candidate, target, error) &&
+                target.extension() == ".esp" && eslFlagged(target));
+        const auto mixedPatched =
+            navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {sourcePath, patchPath, target}});
         Require(mixedPatched.cells.size() == 1 && mixedPatched.cells.front().navMeshes.size() == 3);
         Require(mixedPatched.FindWinning(0x01000300) && mixedPatched.FindWinning(0x01000300)->winning.plugin == "generated-navmesh.esp");
 
-        const auto batchOrder = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory=root, .plugins={sourcePath,regularPath} });
+        const auto batchOrder =
+            navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {sourcePath, regularPath}});
         Require(batchOrder.cells.size() == 2);
         auto secondCandidate = candidate; secondCandidate.mesh.vertices[1].x = 256;
-        Require(navmesh::skyrim::offline::WriteNavmeshOverrides(root / "batch-output",{sourcePath,regularPath},batchOrder,
-            {{&batchOrder.cells[0],&candidate},{&batchOrder.cells[1],&secondCandidate}},target,error));
-        const auto batchPatched = navmesh::skyrim::offline::ResolveLoadOrder({.dataDirectory=root,.plugins={sourcePath,regularPath,target}});
+        Require(navmesh::skyrim::WriteNavmeshOverrides(
+            root / "batch-output", {sourcePath, regularPath}, batchOrder,
+            {{&batchOrder.cells[0], &candidate}, {&batchOrder.cells[1], &secondCandidate}}, target, error));
+        const auto batchPatched =
+            navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {sourcePath, regularPath, target}});
         Require(batchPatched.cells.size() == 2 && batchPatched.FindWinning(0x200)->winning.plugin == "generated-navmesh.esp"
             && batchPatched.FindWinning(0x01000200)->winning.plugin == "generated-navmesh.esp");
         Require(batchPatched.cells[1].navMeshes[0].vertices[1].x == 256);
-        Require(!navmesh::skyrim::offline::WriteNavmeshOverrides(root / "duplicate-batch",{sourcePath},resolved,
-            {{&resolved.cells[0],&candidate},{&resolved.cells[0],&candidate}},target,error));
+        Require(!navmesh::skyrim::WriteNavmeshOverrides(
+            root / "duplicate-batch", {sourcePath}, resolved,
+            {{&resolved.cells[0], &candidate}, {&resolved.cells[0], &candidate}}, target, error));
 
         std::vector<std::string> manyMasters;
         std::vector<std::filesystem::path> manyPaths;
@@ -222,14 +239,15 @@ namespace
         const auto manyPath = root / "ManyMasters.esp";
         { std::ofstream file(manyPath, std::ios::binary); file.write(reinterpret_cast<const char*>(manyPlugin.data()), static_cast<std::streamsize>(manyPlugin.size())); }
         manyPaths.push_back(manyPath);
-        const auto manyOrder = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = manyPaths });
+        const auto manyOrder = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = manyPaths});
         Require(manyOrder.cells.size() == 1 && manyOrder.cells.front().navMeshes.size() == 1);
-        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "full-slot-output", manyPaths, manyOrder,
-            manyOrder.cells.front(), candidate, target, error) && target.extension() == ".esp" && !eslFlagged(target));
+        Require(navmesh::skyrim::WriteNavmeshOverride(root / "full-slot-output", manyPaths, manyOrder,
+                                                      manyOrder.cells.front(), candidate, target, error) &&
+                target.extension() == ".esp" && !eslFlagged(target));
     }
     void TestNewNavmeshRecords()
     {
-        using namespace navmesh::skyrim::offline;
+        using namespace navmesh::skyrim;
         const auto root = std::filesystem::temp_directory_path() / "navmesh-new-records-test";
         std::filesystem::remove_all(root);
         std::filesystem::create_directories(root);
@@ -405,7 +423,7 @@ namespace
             std::ofstream file(source, std::ios::binary);
             file.write(reinterpret_cast<const char *>(plugin.data()), static_cast<std::streamsize>(plugin.size()));
         }
-        const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({.dataDirectory = root, .plugins = {source}});
+        const auto resolved = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source}});
         const auto selected = std::find_if(resolved.cells.begin(), resolved.cells.end(),
                                            [](const auto &cell) { return cell.id == 0x100; });
         const auto adjacent = std::find_if(resolved.cells.begin(), resolved.cells.end(),
@@ -423,10 +441,9 @@ namespace
         candidate.exits.push_back({.referenceId = 0x300, .position = {53180, -15936, 0}, .region = 0, .polygon = 0});
         std::filesystem::path output;
         std::string error;
-        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "door-only", {source}, resolved, *selected,
-                                                               candidate, output, error));
-        const auto doorOnly =
-            navmesh::skyrim::offline::ResolveLoadOrder({.dataDirectory = root, .plugins = {source, output}});
+        Require(navmesh::skyrim::WriteNavmeshOverride(root / "door-only", {source}, resolved, *selected, candidate,
+                                                      output, error));
+        const auto doorOnly = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source, output}});
         const auto *doorOnlyNavm = doorOnly.FindWinning(0x200);
         Require(doorOnlyNavm && doorOnlyNavm->navm && doorOnlyNavm->navm->triangleCount == 1);
         const AABB bounds{.min = {12 * 4096.0F, -4 * 4096.0F, -100}, .max = {13 * 4096.0F, -3 * 4096.0F, 100}};
@@ -436,17 +453,16 @@ namespace
                 candidate.mesh.polygons.size() == 3);
         unlinked.borderLinks.clear();
         unlinked.exits.clear();
-        Require(navmesh::skyrim::offline::WriteNavmeshOverride(root / "unlinked", {source}, resolved, *selected,
-                                                               unlinked, output, error));
-        const auto written = navmesh::skyrim::offline::WriteNavmeshOverride(root / "output", {source}, resolved,
-                                                                            *selected, candidate, output, error);
+        Require(navmesh::skyrim::WriteNavmeshOverride(root / "unlinked", {source}, resolved, *selected, unlinked,
+                                                      output, error));
+        const auto written = navmesh::skyrim::WriteNavmeshOverride(root / "output", {source}, resolved, *selected,
+                                                                   candidate, output, error);
         if (!written)
         {
             std::fprintf(stderr, "Transition writer rejected fixture: %s\n", error.c_str());
         }
         Require(written);
-        const auto patched =
-            navmesh::skyrim::offline::ResolveLoadOrder({.dataDirectory = root, .plugins = {source, output}});
+        const auto patched = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source, output}});
         const auto *selectedNavmRecord = patched.FindWinning(0x200);
         const auto *adjacentNavmRecord = patched.FindWinning(0x201);
         Require(selectedNavmRecord && adjacentNavmRecord && selectedNavmRecord->navm && adjacentNavmRecord->navm);
@@ -499,8 +515,8 @@ namespace
                     isolatedData[offset + 7] == 0xff);
             auto outside = candidate;
             outside.mesh.vertices[outside.mesh.polygons.front().vertices.front()].x = bounds.max.x + borderDrift;
-            Require(!navmesh::skyrim::offline::WriteNavmeshOverride(root / "outside", {source}, resolved, *selected,
-                                                                    outside, output, error));
+            Require(!navmesh::skyrim::WriteNavmeshOverride(root / "outside", {source}, resolved, *selected, outside,
+                                                           output, error));
             Require(error.find("outside") != std::string::npos);
         }
         CandidateNavMesh adjacentCandidate;
@@ -508,7 +524,7 @@ namespace
         adjacentCandidate.mesh.polygons.front().neighbors.fill(std::numeric_limits<std::uint32_t>::max());
         adjacentCandidate.mesh.polygons.front().flags &= static_cast<std::uint16_t>(~7U);
         adjacentCandidate.borderLinks.push_back({0, 0, 0x200, 2, 1});
-        const bool batchWritten = navmesh::skyrim::offline::WriteNavmeshOverrides(
+        const bool batchWritten = navmesh::skyrim::WriteNavmeshOverrides(
             root / "batch", {source}, resolved, {{&*selected, &candidate}, {&*adjacent, &adjacentCandidate}}, output,
             error);
         if (!batchWritten)
@@ -516,14 +532,13 @@ namespace
             std::fprintf(stderr, "Batch transition rejected: %s\n", error.c_str());
         }
         Require(batchWritten);
-        const auto batch =
-            navmesh::skyrim::offline::ResolveLoadOrder({.dataDirectory = root, .plugins = {source, output}});
+        const auto batch = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source, output}});
         Require(batch.FindWinning(0x200)->navm->triangleCount == 3 &&
                 batch.FindWinning(0x201)->navm->triangleCount == 1);
         adjacentCandidate.borderLinks.clear();
-        Require(!navmesh::skyrim::offline::WriteNavmeshOverrides(
-            root / "missing-reciprocal", {source}, resolved,
-            {{&*selected, &candidate}, {&*adjacent, &adjacentCandidate}}, output, error));
+        Require(!navmesh::skyrim::WriteNavmeshOverrides(root / "missing-reciprocal", {source}, resolved,
+                                                        {{&*selected, &candidate}, {&*adjacent, &adjacentCandidate}},
+                                                        output, error));
     }
     void TestAdjacentBorderBridges()
     {
@@ -756,7 +771,7 @@ namespace
     void TestGeometryNeighborhoodCulling()
     {
         using namespace navmesh::core;
-        navmesh::skyrim::offline::GeometryExtraction geometry;
+        navmesh::skyrim::GeometryExtraction geometry;
         // Include an outside triangle, a triangle crossing the boundary from a
         // distant placement, an inside triangle, and an invalid index.
         geometry.scene.mesh = {.vertices = {{20, 20, 0},
@@ -800,7 +815,7 @@ namespace
 
     void TestAffectedCells()
     {
-        using namespace navmesh::skyrim::offline;
+        using namespace navmesh::skyrim;
         using navmesh::core::Cell;
         ResolvedLoadOrder order;
         order.plugins = { "Baseline.esm", "Move.esp", "Models.esm", "Later.esp" };
@@ -868,21 +883,23 @@ namespace
         WritePlugin(root / "Base.esm", {}, false, { { "CELL", 0x123, CellPayload("BaseCell", true, 0x10) }, { "NAVM", 0x456, {} }, { "LAND", 0x789, LandPayload(42.0F) } });
         WritePlugin(root / "Light.esl", {}, true, { { "CELL", 0x800, CellPayload("LightCell") } });
         WritePlugin(root / "Patch.esp", { "Base.esm", "Light.esl" }, false, { { "CELL", 0x00000123, CellPayload("PatchedCell", true, 0x10) }, { "NAVM", 0x00000456, {} }, { "LAND", 0x00000789, {} }, { "REFR", 0x02000800, {} } });
-        const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Base.esm", "Light.esl", "Patch.esp" } });
+        const auto resolved = navmesh::skyrim::ResolveLoadOrder(
+            {.dataDirectory = root, .plugins = {"Base.esm", "Light.esl", "Patch.esp"}});
         assert(resolved.diagnostics.empty());
         const auto* cell = resolved.FindWinning(0x123); assert(cell && cell->editorId == "PatchedCell" && cell->origins.size() == 2 && cell->winning.plugin == "Patch.esp");
         const auto* navm = resolved.FindWinning(0x456); assert(navm && navm->origins.size() == 2 && navm->winning.plugin == "Patch.esp");
         const auto* inheritedLand = resolved.FindWinning(0x789); Require(inheritedLand && inheritedLand->winning.plugin == "Patch.esp" && inheritedLand->raw && std::any_of(inheritedLand->raw->subrecords.begin(), inheritedLand->raw->subrecords.end(), [](const auto& sub) { return sub.type == "VHGT"; }));
         Require(resolved.FindWinning(0x01000800) != nullptr); Require(!resolved.cells.front().isInterior && resolved.cells.front().exteriorCoordinates->at(0) == 12);
         WritePlugin(root / "Broken.esp", { "Absent.esm" }, false, {});
-        const auto broken = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Broken.esp" } });
-        assert(std::any_of(broken.diagnostics.begin(), broken.diagnostics.end(), [](const auto& d) { return d.kind == navmesh::skyrim::offline::DiagnosticKind::MissingMaster; }));
+        const auto broken = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {"Broken.esp"}});
+        assert(std::any_of(broken.diagnostics.begin(), broken.diagnostics.end(),
+                           [](const auto &d) { return d.kind == navmesh::skyrim::DiagnosticKind::MissingMaster; }));
 
         std::vector<std::uint8_t> persistent; PutRecord(persistent, "REFR", 0x401, {}); std::vector<std::uint8_t> temporary; PutRecord(temporary, "NAVM", 0x402, {}); std::vector<std::uint8_t> navmeshGroup; PutRecord(navmeshGroup, "NAVM", 0x403, NavmPayload());
         std::vector<std::uint8_t> world; std::vector<std::uint8_t> indexedCell; PutRecord(indexedCell, "CELL", 0x400, CellPayload("IndexedCell")); PutGroup(indexedCell, 0x400, 8, persistent); PutGroup(indexedCell, 0x400, 9, temporary); PutGroup(indexedCell, 0x400, 10, navmeshGroup); PutGroup(world, 0x300, 1, indexedCell);
         std::vector<std::uint8_t> grouped = { 'T', 'E', 'S', '4' }; PutU32(grouped, 0); PutU32(grouped, 0); grouped.insert(grouped.end(), 12, 0); grouped.insert(grouped.end(), world.begin(), world.end());
         std::ofstream groupedFile(root / "Grouped.esm", std::ios::binary); groupedFile.write(reinterpret_cast<const char*>(grouped.data()), static_cast<std::streamsize>(grouped.size())); groupedFile.close();
-        const auto indexed = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Grouped.esm" } });
+        const auto indexed = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {"Grouped.esm"}});
         const auto* persistentRecord = indexed.FindWinning(0x401); const auto* temporaryRecord = indexed.FindWinning(0x402);
         assert(persistentRecord && persistentRecord->cellFormId == 0x400 && persistentRecord->worldspaceFormId == 0x300 && persistentRecord->persistent);
         assert(temporaryRecord && temporaryRecord->cellFormId == 0x400 && temporaryRecord->worldspaceFormId == 0x300 && temporaryRecord->temporary);
@@ -922,7 +939,8 @@ namespace
         std::ofstream output(root / "FixturePatch.esp", std::ios::binary);
         output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())); output.close();
 
-        const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Base.esm", "FixturePatch.esp" } });
+        const auto resolved =
+            navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {"Base.esm", "FixturePatch.esp"}});
         Require(resolved.diagnostics.empty());
         const auto* winner = resolved.FindWinning(0x123);
         Require(winner && winner->winning.plugin == "FixturePatch.esp" && winner->origins.size() == 2);
@@ -936,9 +954,13 @@ namespace
         Require(findReference(0x401).initiallyDisabled && !findReference(0x401).deleted);
         Require(resolved.FindWinning(0x401)->origins.size() == 2);
         Require(!findReference(0x01000402).initiallyDisabled && findReference(0x01000402).deleted);
-        const auto extracted = navmesh::skyrim::offline::ExtractGeometry(root, resolved.cells.front(), {});
+        const auto extracted = navmesh::skyrim::ExtractGeometry(root, resolved.cells.front(), {});
         Require(extracted.modelsExcluded == 2 && extracted.modelsMissing == 1 && extracted.scene.coverage.size() == 3);
-        const auto findReport = [&](std::uint32_t id) -> const navmesh::skyrim::offline::GeometryReferenceReport& { return *std::find_if(extracted.references.begin(), extracted.references.end(), [=](const auto& report) { return report.formId == id; }); };
+        const auto findReport = [&](std::uint32_t id) -> const navmesh::skyrim::GeometryReferenceReport &
+        {
+            return *std::find_if(extracted.references.begin(), extracted.references.end(),
+                                 [=](const auto &report) { return report.formId == id; });
+        };
         Require(findReport(0x401).failure == "winning reference record is initially disabled");
         Require(findReport(0x01000402).failure == "winning reference record is deleted");
     }
@@ -949,8 +971,9 @@ namespace
         std::vector<std::uint8_t> land; PutRecord(land, "LAND", 0x701, LandPayload(100.0F, 2, 3, 5)); PutGroup(grouped, 0x700, 6, land);
         std::vector<std::uint8_t> file = { 'T', 'E', 'S', '4' }; PutU32(file, 0); PutU32(file, 0); file.insert(file.end(), 12, 0); file.insert(file.end(), grouped.begin(), grouped.end());
         std::ofstream output(root / "Terrain.esm", std::ios::binary); output.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size())); output.close();
-        const auto resolved = navmesh::skyrim::offline::ResolveLoadOrder({ .dataDirectory = root, .plugins = { "Terrain.esm" } }); Require(resolved.diagnostics.empty());
-        const auto terrain = navmesh::skyrim::offline::ExtractTerrain(resolved, resolved.cells.front());
+        const auto resolved = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {"Terrain.esm"}});
+        Require(resolved.diagnostics.empty());
+        const auto terrain = navmesh::skyrim::ExtractTerrain(resolved, resolved.cells.front());
         Require(terrain.landRecordsDecoded == 1 && terrain.scene.mesh.vertices.size() == 1089 &&
                 terrain.scene.mesh.triangles.size() == 2048);
         // The stored row-major LAND grid matches the world-space X/Y basis.
@@ -967,7 +990,7 @@ namespace
         Require(terrain.scene.HasCompleteTriangleProvenance()); const auto& provenance = terrain.scene.triangleProvenance.front(); Require(provenance.terrain && provenance.terrain->landFormId == 0x701 && provenance.terrain->sampleX == 0 && provenance.terrain->sampleY == 0);
         navmesh::core::Cell missing = resolved.cells.front();
         missing.id = 0x799;
-        const auto none = navmesh::skyrim::offline::ExtractTerrain(resolved, missing);
+        const auto none = navmesh::skyrim::ExtractTerrain(resolved, missing);
         Require(none.scene.mesh.triangles.empty() && none.landRecordsMissing == 1);
     }
     void WriteTextFile(const std::filesystem::path& path, const std::string& text) { std::ofstream output(path, std::ios::binary); output << text; }
@@ -980,27 +1003,27 @@ namespace
         WriteTextFile(root / "profiles" / "Default" / "modlist.txt", "+Patch\n"); WriteTextFile(root / "profiles" / "Default" / "plugins.txt", "*Base.esm\n*Patch.esp\n"); WriteTextFile(root / "profiles" / "Default" / "loadorder.txt", "Base.esm\nPatch.esp\n");
         WriteTextFile(root / "Game" / "Data" / "meshes.txt", "base"); WriteTextFile(root / "overwrite" / "meshes" / "marker.nif", "winner");
         WriteTextFile(root / "mods" / "Patch" / "Patch - Meshes.bsa", "archive fixture path");
-        const auto imported = navmesh::skyrim::offline::ImportMo2Profile(root, "Default");
+        const auto imported = navmesh::skyrim::ImportMo2Profile(root, "Default");
         assert(imported.diagnostics.empty()); assert(imported.pluginPaths.size() == 2u && imported.pluginPaths[1].filename() == "Patch.esp"); assert(imported.enabledMods.size() == 1u && imported.enabledMods.front().priority == 0u); assert(!imported.snapshotHash.empty());
         assert(std::any_of(imported.looseAssetWinners.begin(), imported.looseAssetWinners.end(), [](const auto& file) { return file.logicalPath == "meshes/marker.nif" && file.source == "Overwrite"; }));
         Require(imported.archivePaths.size() == 1 && imported.archivePaths.front().filename() == "Patch - Meshes.bsa");
-        const auto overridden = navmesh::skyrim::offline::ImportMo2Profile(root, "Default", root / "mods");
+        const auto overridden = navmesh::skyrim::ImportMo2Profile(root, "Default", root / "mods");
         Require(overridden.diagnostics.empty() && overridden.modsDirectory == root / "mods" && overridden.pluginPaths.size() == 2u);
         WriteTextFile(root / "profiles" / "Default" / "plugins.txt", "*Patch.esp\n"); WriteTextFile(root / "profiles" / "Default" / "loadorder.txt", "Patch.esp\n");
-        const auto implicitMasters = navmesh::skyrim::offline::ImportMo2Profile(root, "Default");
+        const auto implicitMasters = navmesh::skyrim::ImportMo2Profile(root, "Default");
         Require(implicitMasters.diagnostics.empty() && implicitMasters.pluginPaths.size() == 2u && implicitMasters.pluginPaths.front().filename() == "Base.esm");
 
         const auto splitRoot = root / "SplitInstance"; const auto mo2 = splitRoot / "MO2"; const auto storage = splitRoot / "MODS"; std::filesystem::create_directories(mo2); std::filesystem::create_directories(storage / "profiles" / "Nolvus Awakening"); std::filesystem::create_directories(storage / "mods" / "Patch"); std::filesystem::create_directories(splitRoot / "STOCK GAME" / "Data");
         WriteTextFile(mo2 / "ModOrganizer.ini", "base_directory=@ByteArray(../MODS)\ngamePath=@ByteArray(../STOCK GAME)\nprofiles_directory=profiles\nmods_directory=mods\n");
         WritePlugin(splitRoot / "STOCK GAME" / "Data" / "Base.esm", {}, false, {}); WritePlugin(storage / "mods" / "Patch" / "Patch.esp", { "Base.esm" }, false, {});
         WriteTextFile(storage / "profiles" / "Nolvus Awakening" / "modlist.txt", "+Patch\n"); WriteTextFile(storage / "profiles" / "Nolvus Awakening" / "plugins.txt", "*Base.esm\n*Patch.esp\n"); WriteTextFile(storage / "profiles" / "Nolvus Awakening" / "loadorder.txt", "Base.esm\nPatch.esp\n");
-        const auto split = navmesh::skyrim::offline::ImportMo2Profile(mo2, "Nolvus Awakening");
+        const auto split = navmesh::skyrim::ImportMo2Profile(mo2, "Nolvus Awakening");
         assert(split.diagnostics.empty() && split.profileDirectory == storage / "profiles" / "Nolvus Awakening" && split.gameData == splitRoot / "STOCK GAME" / "Data");
 
         const auto qtRoot = root / "QtPathInstance"; std::filesystem::create_directories(qtRoot / "profiles" / "Default");
         WriteTextFile(qtRoot / "ModOrganizer.ini", "gamePath=@ByteArray(D:\\\\SteamLibrary\\\\steamapps\\\\common\\\\Skyrim Special Edition)\nprofiles_directory=profiles\nmods_directory=mods\n");
         WriteTextFile(qtRoot / "profiles" / "Default" / "modlist.txt", ""); WriteTextFile(qtRoot / "profiles" / "Default" / "plugins.txt", ""); WriteTextFile(qtRoot / "profiles" / "Default" / "loadorder.txt", "");
-        const auto qtPaths = navmesh::skyrim::offline::ImportMo2Profile(qtRoot, "Default");
+        const auto qtPaths = navmesh::skyrim::ImportMo2Profile(qtRoot, "Default");
         const auto expectedGame = std::filesystem::path("D:/SteamLibrary/steamapps/common/Skyrim Special Edition");
         const auto expectedData = std::filesystem::is_directory(expectedGame / "Data") ? expectedGame / "Data" : expectedGame;
         Require(qtPaths.gameData == expectedData);
@@ -1010,7 +1033,7 @@ namespace
         std::vector<std::uint8_t> utf16Bytes{ 0xFF, 0xFE }; for (const auto character : utf16Ini) { utf16Bytes.push_back(static_cast<std::uint8_t>(character)); utf16Bytes.push_back(0); }
         std::ofstream utf16Output(utf16Root / "ModOrganizer.ini", std::ios::binary); utf16Output.write(reinterpret_cast<const char*>(utf16Bytes.data()), static_cast<std::streamsize>(utf16Bytes.size())); utf16Output.close();
         WriteTextFile(utf16Root / "profiles" / "Default" / "modlist.txt", ""); WriteTextFile(utf16Root / "profiles" / "Default" / "plugins.txt", ""); WriteTextFile(utf16Root / "profiles" / "Default" / "loadorder.txt", "");
-        const auto utf16Paths = navmesh::skyrim::offline::ImportMo2Profile(utf16Root, "Default");
+        const auto utf16Paths = navmesh::skyrim::ImportMo2Profile(utf16Root, "Default");
         Require(utf16Paths.gameData == expectedData);
     }
 }
@@ -1036,7 +1059,7 @@ namespace
         const auto plugin = std::filesystem::path(configuredData) / "Skyrim.esm";
         std::free(configuredData);
         if (!std::filesystem::is_regular_file(plugin)) return;
-        const auto cells = navmesh::skyrim::offline::ListCells(plugin);
+        const auto cells = navmesh::skyrim::ListCells(plugin);
         assert(!cells.empty());
     }
 
@@ -1057,7 +1080,7 @@ namespace
         navmesh::core::Cell cell;
         cell.references.push_back({ .id = 1, .baseObjectId = 2, .recordType = "REFR", .modelPath = "MarkerX.nif", .position = { 10.0F, 20.0F, 30.0F }, .scale = 1.0F, .sourcePlugin = "Patch.esp", .basePlugin = "Base.esm", .baseRecordType = "STAT" });
 
-        const auto geometry = navmesh::skyrim::offline::ExtractGeometry(tempRoot, cell, tempRoot);
+        const auto geometry = navmesh::skyrim::ExtractGeometry(tempRoot, cell, tempRoot);
         assert(geometry.modelsLoaded == 1u);
         assert(geometry.scene.mesh.vertices.size() == 3u);
         assert(geometry.scene.mesh.triangles.size() == 1u);
@@ -1071,15 +1094,15 @@ namespace
         // still load the placed model, including its render geometry.
         const auto emptyData = tempRoot / "empty-data";
         std::filesystem::create_directories(emptyData);
-        navmesh::skyrim::offline::ModelAssetSources assets;
+        navmesh::skyrim::ModelAssetSources assets;
         assets.looseModels.emplace("meshes/markerx.nif", modelPath);
-        const auto fromMo2 = navmesh::skyrim::offline::ExtractGeometry(emptyData, cell, {}, {}, {}, &assets);
+        const auto fromMo2 = navmesh::skyrim::ExtractGeometry(emptyData, cell, {}, {}, {}, &assets);
         Require(fromMo2.modelsLoaded == 1 && fromMo2.scene.mesh.triangles.size() == 1 && fromMo2.modelsMissing == 0);
 
         // Placed DATA angles use the game's matrix convention. A positive Z
         // angle moves local +X toward world -Y, including render fallbacks.
         cell.references.front().rotation.z = 1.57079632679F;
-        const auto rotatedGeometry = navmesh::skyrim::offline::ExtractGeometry(tempRoot, cell, tempRoot);
+        const auto rotatedGeometry = navmesh::skyrim::ExtractGeometry(tempRoot, cell, tempRoot);
         Require(std::abs(rotatedGeometry.scene.mesh.vertices[1].x - 10.0F) < 1.0e-4F);
         Require(std::abs(rotatedGeometry.scene.mesh.vertices[1].y - 19.0F) < 1.0e-4F);
     }
@@ -1109,7 +1132,7 @@ namespace
         Require(nif.Save(modelPath) == 0);
 
         navmesh::core::Cell cell; cell.references.push_back({ .id = 3, .baseObjectId = 4, .recordType = "REFR", .modelPath = "CollisionWins.nif", .sourcePlugin = "Fixture.esp", .basePlugin = "Fixture.esm", .baseRecordType = "STAT" });
-        const auto geometry = navmesh::skyrim::offline::ExtractGeometry(root, cell, root);
+        const auto geometry = navmesh::skyrim::ExtractGeometry(root, cell, root);
         Require(geometry.collisionModelsLoaded == 1 && geometry.renderFallbackModels == 1 &&
                 geometry.scene.mesh.triangles.size() == 1 && geometry.scene.renderFallbackMesh.triangles.size() == 1);
         constexpr float skyrimUnitsPerHavokUnit = 69.99125F;
@@ -1126,25 +1149,24 @@ namespace
         std::ifstream glb(output, std::ios::binary); glb.seekg(12); std::uint32_t jsonLength{}; glb.read(reinterpret_cast<char*>(&jsonLength), sizeof(jsonLength)); glb.seekg(4, std::ios::cur); std::string gltf(jsonLength, '\0'); glb.read(gltf.data(), jsonLength);
         Require(gltf.contains("Collision:") && gltf.contains("Render fallback:"));
 
-        navmesh::skyrim::offline::ModelGeometryCache cache(1024 * 1024);
-        const auto cached = navmesh::skyrim::offline::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache);
-        const auto repeated = navmesh::skyrim::offline::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache);
+        navmesh::skyrim::ModelGeometryCache cache(1024 * 1024);
+        const auto cached = navmesh::skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache);
+        const auto repeated = navmesh::skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache);
         Require(cache.Statistics().modelsDecoded == 1 && cache.Statistics().modelHits == 1);
         Require(cache.Statistics().placementsBuilt == 2 && cache.Statistics().placementHits == 2);
         Require(cache.Statistics().retainedBytes <= 1024 * 1024);
         Require(cached.scene.mesh.vertices.size() == repeated.scene.mesh.vertices.size());
         Require(std::memcmp(cached.scene.mesh.vertices.data(), repeated.scene.mesh.vertices.data(),
                             cached.scene.mesh.vertices.size() * sizeof(navmesh::core::Vec3)) == 0);
-        const auto navigation =
-            navmesh::skyrim::offline::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
+        const auto navigation = navmesh::skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
         Require(navigation.scene.renderFallbackMesh.triangles.empty() && navigation.scene.mesh.triangles.size() == 1);
         Require(cache.Statistics().modelsDecoded == 2);
         std::filesystem::last_write_time(modelPath,
                                          std::filesystem::last_write_time(modelPath) + std::chrono::seconds(1));
-        (void)navmesh::skyrim::offline::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
+        (void)navmesh::skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
         Require(cache.Statistics().modelsDecoded == 3);
         cell.references.front().rotation.z = 1.57079632679F;
-        const auto rotated = navmesh::skyrim::offline::ExtractGeometry(root, cell, root);
+        const auto rotated = navmesh::skyrim::ExtractGeometry(root, cell, root);
         Require(std::abs(rotated.scene.mesh.vertices[1].x) < 0.01F);
         Require(std::abs(rotated.scene.mesh.vertices[1].y + skyrimUnitsPerHavokUnit) < 0.01F);
         Require(std::abs(rotated.scene.renderFallbackMesh.vertices[1].x) < 1.0e-4F);
@@ -1176,7 +1198,7 @@ namespace
     void TestAuthoredNavmeshConnections()
     {
         using namespace navmesh::core;
-        using navmesh::skyrim::offline::DecodeNavmeshConnections;
+        using navmesh::skyrim::DecodeNavmeshConnections;
         NavMesh mesh{.polygons = {{.neighbors = {0, 0, 0}, .flags = 2}}};
         std::vector<std::uint8_t> trailing;
         PutU32(trailing, 1);

@@ -754,7 +754,7 @@ namespace
         ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
         ImGui::Begin("Workspace", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-        ImGui::TextColored(ImVec4(0.38F, 0.67F, 1, 1), "SKYRIM  /  OFFLINE WORKSPACE");
+        ImGui::TextColored(ImVec4(0.38F, 0.67F, 1, 1), "SKYRIM  /  NAVMESH WORKSPACE");
         ImGui::PushFont(nullptr, 28);
         ImGui::TextUnformatted("Navmesh Generator");
         ImGui::PopFont();

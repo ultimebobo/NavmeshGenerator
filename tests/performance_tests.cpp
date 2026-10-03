@@ -83,7 +83,7 @@ void TestPerformanceCaches()
     std::ofstream(path, std::ios::binary | std::ios::trunc) << "corrupt";
     assert(!app::detail::LoadCandidate(path, loaded, evidence));
 
-    skyrim::offline::ResolvedLoadOrder resolved;
+    skyrim::ResolvedLoadOrder resolved;
     resolved.cells.push_back({.id = 1, .isInterior = true});
     resolved.records.push_back(
         {.type = "STAT", .formId = 10, .winning = {.modelRadius = 128.0F}, .modelPath = "bounded.nif"});
@@ -93,7 +93,7 @@ void TestPerformanceCaches()
         {.id = 22, .baseObjectId = 11, .modelPath = "unknown.nif", .position = {8192, 8192, 0}},
         {.id = 23, .baseObjectId = 10, .modelPath = "different.nif", .position = {8192, 8192, 0}},
         {.id = 24, .baseObjectId = 10, .modelPath = "bounded.nif", .scale = std::numeric_limits<float>::infinity()}};
-    const skyrim::offline::CellImpactIndex index(resolved);
+    const skyrim::CellImpactIndex index(resolved);
     const auto filtered =
         index.GeometryCell(resolved.cells[0], core::AABB{.min = {0, 0, -1000}, .max = {256, 256, 1000}});
     assert(filtered.references.size() == 4);

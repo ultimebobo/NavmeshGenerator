@@ -69,7 +69,7 @@ are omitted from collision and render geometry. They remain in `geometry.json`
 coverage as `excluded`, with the reason and winning reference provenance. This
 uses the winning record's flags, so a later plugin can enable or disable an
 earlier placement without a height-based scene filter. An initially disabled
-reference that a quest enables at runtime is outside the default offline scene.
+reference that a quest enables at runtime is outside the default scene.
 
 When a model has supported collision and a render mesh, collision remains the
 only geometry used for navmesh analysis. Its render mesh is additionally placed
@@ -96,7 +96,7 @@ files the viewer needs to load.
 For a large exterior scene, limit work before export:
 
 ```powershell
-navmesh-offline.exe ... --neighboring-cell-radius 1 `
+NavmeshGenerator.exe ... --neighboring-cell-radius 1 `
   --scene-bounds 40960 -20480 49152 -12288 `
   --geometry-layers navmesh,terrain,collision,diagnostics `
   --output-detail summary

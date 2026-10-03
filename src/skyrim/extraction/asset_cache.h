@@ -6,7 +6,7 @@
 #include <set>
 #include <string>
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     /** Resolve a shared extracted-asset snapshot without modifying game inputs.
      * @param dataDirectory Game Data root; its archive set is used without MO2 assets.
@@ -42,4 +42,4 @@ namespace navmesh::skyrim::offline
 
     /// Quote a filesystem path for the platform shell used by the asset helper.
     [[nodiscard]] std::string QuoteAssetPath(const std::filesystem::path &path);
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

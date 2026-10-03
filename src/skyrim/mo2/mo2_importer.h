@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace navmesh::skyrim::offline
+namespace navmesh::skyrim
 {
     struct VirtualFile
     {
@@ -52,4 +52,4 @@ namespace navmesh::skyrim::offline
     [[nodiscard]] bool WriteInputReport(const std::filesystem::path &outputPath, const Mo2ProfileInput &input,
                                         bool includeAssetWinners = true);
     [[nodiscard]] std::string ToJson(const Mo2ProfileInput &input);
-} // namespace navmesh::skyrim::offline
+} // namespace navmesh::skyrim

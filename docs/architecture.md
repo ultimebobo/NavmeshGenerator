@@ -1,8 +1,8 @@
 # Architecture
 
-This project is intentionally split into offline processing stages so the analysis logic stays independent from Skyrim runtime code.
+This project is intentionally split into processing stages so the analysis logic stays independent from Skyrim runtime code.
 
-The build targets the offline Windows application, neutral core, and tests. Runtime game APIs are outside the processing pipeline.
+The build targets the Windows application, neutral core, and tests. Runtime game APIs are outside the processing pipeline.
 
 ## 1. Plugin parsing
 
@@ -116,7 +116,7 @@ subject to the writer's existing limitations.
 The critical architecture boundary is:
 
 Skyrim plugin data
-  -> offline extraction
+  -> extraction
   -> neutral model
   -> analysis and replaceable candidate generator (currently Recast)
   -> guarded NAVM override serialization

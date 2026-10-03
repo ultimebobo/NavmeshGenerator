@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace navmesh::skyrim::offline::detail
+namespace navmesh::skyrim::detail
 {
     /// Validated source bytes and identity limits for a byte-preserving plugin export.
     struct PluginCopy
@@ -40,4 +40,4 @@ namespace navmesh::skyrim::offline::detail
     [[nodiscard]] bool MergePluginCopy(const PluginCopy &copy, const std::vector<std::uint8_t> &navigation,
                                        std::uint32_t nextObjectId, std::vector<std::uint8_t> &output,
                                        std::string &error);
-} // namespace navmesh::skyrim::offline::detail
+} // namespace navmesh::skyrim::detail

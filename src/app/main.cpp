@@ -129,7 +129,7 @@ namespace
         if (options.mo2.empty() && options.plugin.empty() && options.loadOrder.empty())
         {
             std::cerr
-                << "Usage: navmesh-offline --mo2 <instance-or-portable-root> --profile <existing-profile> "
+                << "Usage: NavmeshGenerator --mo2 <instance-or-portable-root> --profile <existing-profile> "
                    "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --rebuild-plugin <active "
                    "filename> | --rebuild-load-order] [--generate-plugin] [--copy-plugin] [--skip-existing-navmesh] "
                    "[--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
@@ -262,9 +262,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
 
     const auto inputStarted = std::chrono::steady_clock::now();
     // Resolve one coherent input snapshot shared by listing, single-cell, and batch processing.
-    std::optional<navmesh::skyrim::offline::ResolvedLoadOrder> resolved;
-    std::optional<navmesh::skyrim::offline::Mo2ProfileInput> mo2Input;
-    navmesh::skyrim::offline::ModelAssetSources modelAssets;
+    std::optional<navmesh::skyrim::ResolvedLoadOrder> resolved;
+    std::optional<navmesh::skyrim::Mo2ProfileInput> mo2Input;
+    navmesh::skyrim::ModelAssetSources modelAssets;
     const auto sharedCacheRoot = options.assetCache.empty()
                                      ? std::filesystem::temp_directory_path() / "NavmeshGenerator" / "assets"
                                      : options.assetCache;
@@ -279,21 +279,20 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         try
         {
-            mo2Input = navmesh::skyrim::offline::ImportMo2Profile(
+            mo2Input = navmesh::skyrim::ImportMo2Profile(
                 options.mo2, options.profile,
                 options.modsDirectory.empty() ? std::nullopt : std::optional(options.modsDirectory),
                 sharedCacheRoot / ".mo2");
         }
         catch (const std::exception &error)
         {
-            mo2Input =
-                navmesh::skyrim::offline::Mo2ProfileInput{.instanceRoot = options.mo2, .profile = options.profile};
-            mo2Input->diagnostics.push_back({navmesh::skyrim::offline::DiagnosticKind::InvalidPlugin,
-                                             options.mo2.string(), std::string("MO2 import failed: ") + error.what()});
+            mo2Input = navmesh::skyrim::Mo2ProfileInput{.instanceRoot = options.mo2, .profile = options.profile};
+            mo2Input->diagnostics.push_back({navmesh::skyrim::DiagnosticKind::InvalidPlugin, options.mo2.string(),
+                                             std::string("MO2 import failed: ") + error.what()});
         }
-        if (!navmesh::skyrim::offline::WriteInputReport(
-                options.output / "input-report.json", *mo2Input,
-                options.listCells || options.rebuildScope == RebuildScope::Cell || options.batchOutput == "full"))
+        if (!navmesh::skyrim::WriteInputReport(options.output / "input-report.json", *mo2Input,
+                                               options.listCells || options.rebuildScope == RebuildScope::Cell ||
+                                                   options.batchOutput == "full"))
         {
             std::cerr << "Failed to write input-report.json.\n";
         }
@@ -328,7 +327,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                   << " active plugins...\n";
         try
         {
-            resolved = navmesh::skyrim::offline::ResolveLoadOrder(
+            resolved = navmesh::skyrim::ResolveLoadOrder(
                 {.dataDirectory = options.data,
                  .plugins = mo2Input->pluginPaths,
                  .indexReferencesAndNavmeshes = !options.listCells,
@@ -351,10 +350,10 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     {
         try
         {
-            resolved = navmesh::skyrim::offline::ResolveLoadOrder(
-                {.dataDirectory = options.data,
-                 .plugins = navmesh::skyrim::offline::ReadLoadOrderManifest(options.loadOrder),
-                 .indexReferencesAndNavmeshes = !options.listCells});
+            resolved =
+                navmesh::skyrim::ResolveLoadOrder({.dataDirectory = options.data,
+                                                   .plugins = navmesh::skyrim::ReadLoadOrderManifest(options.loadOrder),
+                                                   .indexReferencesAndNavmeshes = !options.listCells});
         }
         catch (const std::exception &error)
         {
@@ -367,7 +366,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         std::size_t unsupported{};
         for (const auto &diagnostic : resolved->diagnostics)
         {
-            if (diagnostic.kind == navmesh::skyrim::offline::DiagnosticKind::UnsupportedRecord)
+            if (diagnostic.kind == navmesh::skyrim::DiagnosticKind::UnsupportedRecord)
             {
                 ++unsupported;
                 continue;
@@ -383,14 +382,14 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     if (resolved && std::any_of(resolved->diagnostics.begin(), resolved->diagnostics.end(),
                                 [](const auto &d)
                                 {
-                                    return d.kind == navmesh::skyrim::offline::DiagnosticKind::MissingMaster ||
-                                           d.kind == navmesh::skyrim::offline::DiagnosticKind::Cycle ||
-                                           d.kind == navmesh::skyrim::offline::DiagnosticKind::InvalidPlugin;
+                                    return d.kind == navmesh::skyrim::DiagnosticKind::MissingMaster ||
+                                           d.kind == navmesh::skyrim::DiagnosticKind::Cycle ||
+                                           d.kind == navmesh::skyrim::DiagnosticKind::InvalidPlugin;
                                 }))
     {
         return 2;
     }
-    if (mo2Input && !navmesh::skyrim::offline::ProfileSnapshotMatches(*mo2Input))
+    if (mo2Input && !navmesh::skyrim::ProfileSnapshotMatches(*mo2Input))
     {
         std::cerr << "MO2 profile inputs changed while resolving the load order; rerun so the snapshot is coherent.\n";
         return 2;
@@ -409,7 +408,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             std::filesystem::create_directories(options.output);
             navmesh::cli::WriteLoadOrderJson(options.output / "load-order.json", *resolved);
         }
-        const auto cells = resolved ? resolved->cells : navmesh::skyrim::offline::ListCells(options.plugin);
+        const auto cells = resolved ? resolved->cells : navmesh::skyrim::ListCells(options.plugin);
         if (!options.output.empty())
         {
             std::filesystem::create_directories(options.output);
@@ -438,7 +437,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         else
         {
-            for (auto path : navmesh::skyrim::offline::ReadLoadOrderManifest(options.loadOrder))
+            for (auto path : navmesh::skyrim::ReadLoadOrderManifest(options.loadOrder))
             {
                 paths.push_back(path.is_absolute() ? path : options.data / path);
             }
@@ -446,10 +445,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         return detail::RunBatch(options, *resolved, mo2Input ? &modelAssets : nullptr, paths, progress, cancelled,
                                 std::chrono::duration<double>(std::chrono::steady_clock::now() - inputStarted).count());
     }
-    auto cell =
-        resolved ? std::optional<navmesh::core::Cell>{}
-                 : navmesh::skyrim::offline::LoadCell(options.plugin, options.cell, options.worldspace, options.cellX,
-                                                      options.cellY, options.cellFormId, options.editorId);
+    auto cell = resolved ? std::optional<navmesh::core::Cell>{}
+                         : navmesh::skyrim::LoadCell(options.plugin, options.cell, options.worldspace, options.cellX,
+                                                     options.cellY, options.cellFormId, options.editorId);
     if (resolved)
     {
         for (const auto &candidate : resolved->cells)
@@ -498,7 +496,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     {
         return 3;
     }
-    if (options.skipExistingNavmesh && navmesh::skyrim::offline::CellsWithExistingNavmesh(*resolved).contains(cell->id))
+    if (options.skipExistingNavmesh && navmesh::skyrim::CellsWithExistingNavmesh(*resolved).contains(cell->id))
     {
         const auto status = std::format("Skipped CELL {:08X}: existing NAVM records preserved.", cell->id);
         std::ofstream report(options.output / "generation-report.json", std::ios::trunc);
@@ -535,7 +533,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     std::optional<navmesh::core::AABB> neighborhoodBounds;
     if (resolved)
     {
-        const navmesh::skyrim::offline::CellImpactIndex index(*resolved);
+        const navmesh::skyrim::CellImpactIndex index(*resolved);
         const auto radius =
             options.generateCandidate ? std::max(1, options.neighboringCellRadius) : options.neighboringCellRadius;
         const auto neighbors = index.Neighbors(*cell, radius);
@@ -567,16 +565,16 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             sceneCells.push_back(std::move(geometryCell));
         }
     }
-    navmesh::skyrim::offline::GeometryExtraction geometry;
-    const auto assetCacheDirectory = navmesh::skyrim::offline::ModelAssetCacheDirectory(
+    navmesh::skyrim::GeometryExtraction geometry;
+    const auto assetCacheDirectory = navmesh::skyrim::ModelAssetCacheDirectory(
         resolved ? options.data : options.plugin.parent_path(), mo2Input ? &modelAssets : nullptr, options.assetCache);
-    navmesh::skyrim::offline::ModelGeometryCache modelCache(options.workingMemoryMiB * 1024ULL * 1024ULL / 2);
+    navmesh::skyrim::ModelGeometryCache modelCache(options.workingMemoryMiB * 1024ULL * 1024ULL / 2);
     for (std::size_t cellIndex{}; cellIndex < sceneCells.size(); ++cellIndex)
     {
         auto extracted =
             options.terrainOnly
-                ? navmesh::skyrim::offline::GeometryExtraction{}
-                : navmesh::skyrim::offline::ExtractGeometry(
+                ? navmesh::skyrim::GeometryExtraction{}
+                : navmesh::skyrim::ExtractGeometry(
                       resolved ? options.data : options.plugin.parent_path(), sceneCells[cellIndex],
                       assetCacheDirectory,
                       [&](std::size_t completed, std::size_t total)
@@ -588,8 +586,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                       wasCancelled, mo2Input ? &modelAssets : nullptr, &modelCache);
         if (!options.terrainOnly)
         {
-            navmesh::skyrim::offline::TrimModelAssetCache(assetCacheDirectory,
-                                                          options.cacheBudgetMiB * 1024ULL * 1024ULL);
+            navmesh::skyrim::TrimModelAssetCache(assetCacheDirectory, options.cacheBudgetMiB * 1024ULL * 1024ULL);
         }
         const bool inNeighborhood = sceneCellIds.contains(sceneCells[cellIndex].id);
         if (!inNeighborhood && neighborhoodBounds)
@@ -598,8 +595,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         if (resolved && inNeighborhood)
         {
-            auto terrain = navmesh::skyrim::offline::ExtractTerrain(*resolved, sceneCells[cellIndex]);
-            navmesh::skyrim::offline::GeometryExtraction terrainGeometry;
+            auto terrain = navmesh::skyrim::ExtractTerrain(*resolved, sceneCells[cellIndex]);
+            navmesh::skyrim::GeometryExtraction terrainGeometry;
             terrainGeometry.scene = std::move(terrain.scene);
 
             terrainGeometry.terrainSupported = terrain.landRecordsDecoded != 0;
@@ -666,7 +663,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     std::ofstream reportStream(reportPath, std::ios::trunc | std::ios::binary);
     reportStream << report;
     const auto geometryPath = options.exportGeometry.empty() ? options.output / "geometry.obj" : options.exportGeometry;
-    if (!navmesh::skyrim::offline::WriteGeometryObj(geometryPath, geometry))
+    if (!navmesh::skyrim::WriteGeometryObj(geometryPath, geometry))
     {
         std::cerr << "Failed to write geometry OBJ to " << geometryPath << "\n";
     }
@@ -674,7 +671,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     {
         std::cerr << "Failed to write geometry metadata sidecar\n";
     }
-    if (!navmesh::skyrim::offline::WriteGeometryJson(options.output / "geometry.json", *cell, geometry, metadata))
+    if (!navmesh::skyrim::WriteGeometryJson(options.output / "geometry.json", *cell, geometry, metadata))
     {
         std::cerr << "Failed to write geometry JSON\n";
     }
@@ -908,7 +905,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         else
         {
-            for (auto path : navmesh::skyrim::offline::ReadLoadOrderManifest(options.loadOrder))
+            for (auto path : navmesh::skyrim::ReadLoadOrderManifest(options.loadOrder))
             {
                 inputPaths.push_back(path.is_absolute() ? path : options.data / path);
             }
@@ -916,8 +913,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         std::filesystem::path pluginPath;
         std::string error;
         update(89, "Writing NAVM override plugin");
-        if (!navmesh::skyrim::offline::WriteNavmeshOverride(options.output, inputPaths, *resolved, *cell, *candidate,
-                                                            pluginPath, error))
+        if (!navmesh::skyrim::WriteNavmeshOverride(options.output, inputPaths, *resolved, *cell, *candidate, pluginPath,
+                                                   error))
         {
             std::cerr << "Plugin generation failed: " << error << "\n";
             update(89, std::format("Plugin generation failed: {}", error));

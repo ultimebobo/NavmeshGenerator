@@ -16,7 +16,7 @@
 namespace
 {
     using Bytes = std::vector<std::uint8_t>;
-    using navmesh::skyrim::offline::ResolvedRecord;
+    using navmesh::skyrim::ResolvedRecord;
     constexpr std::uint32_t PathingDoorCrc = 0xE48B73F3U;
 
     void U16(Bytes &b, std::uint16_t n)
@@ -152,7 +152,7 @@ namespace
         return static_cast<std::uint32_t>(std::distance(outputMasters.begin(), it)) << 24 | (raw & 0xFFFFFFU);
     }
     /// Resolve a load-order FormID through the record that introduced it, including light-plugin IDs.
-    std::optional<std::uint32_t> RebaseResolvedFormId(const navmesh::skyrim::offline::ResolvedLoadOrder &resolved,
+    std::optional<std::uint32_t> RebaseResolvedFormId(const navmesh::skyrim::ResolvedLoadOrder &resolved,
                                                       const std::vector<std::string> &outputMasters,
                                                       std::uint32_t global)
     {
@@ -193,7 +193,7 @@ namespace
      * including its implicit self slot. Unmatched incoming edges also need overrides
      * because their destination triangle indices cannot survive regeneration.
      */
-    bool CollectIncomingNeighbors(const navmesh::skyrim::offline::ResolvedLoadOrder &resolved,
+    bool CollectIncomingNeighbors(const navmesh::skyrim::ResolvedLoadOrder &resolved,
                                   const std::vector<std::filesystem::path> &inputPlugins,
                                   const std::vector<const ResolvedRecord *> &replacedRecords,
                                   std::map<std::uint32_t, const ResolvedRecord *> &neighborRecords,
@@ -302,8 +302,8 @@ namespace
     }
     /// Compact rebased external entries and clear edges into replaced triangle spaces.
     /// Requires a bounds-checked external table. Geometry and subsequent trailing sections retain their bytes.
-    bool RemoveIncomingPortals(Bytes &nvnm, const navmesh::skyrim::offline::NavmLayout &layout,
-                               navmesh::core::NavMesh &mesh, const std::set<std::uint32_t> &replacedIds)
+    bool RemoveIncomingPortals(Bytes &nvnm, const navmesh::skyrim::NavmLayout &layout, navmesh::core::NavMesh &mesh,
+                               const std::set<std::uint32_t> &replacedIds)
     {
         const auto trailing = static_cast<std::size_t>(layout.trailingData.offset - layout.header.offset);
         const auto oldExternalCount = Get32(nvnm, trailing);
@@ -407,15 +407,12 @@ namespace
     {
         std::vector<ResolvedRecord> records;
         std::vector<std::string> masters;
-        std::vector<navmesh::skyrim::offline::Diagnostic> diagnostics;
+        std::vector<navmesh::skyrim::Diagnostic> diagnostics;
         bool light{};
-        if (!navmesh::skyrim::offline::DirectPluginReader{}.Read(path, records, masters, light, diagnostics) ||
-            std::any_of(diagnostics.begin(), diagnostics.end(),
-                        [&](const auto &diagnostic)
-                        {
-                            return !copiedPlugin ||
-                                   diagnostic.kind != navmesh::skyrim::offline::DiagnosticKind::UnsupportedVersion;
-                        }))
+        if (!navmesh::skyrim::DirectPluginReader{}.Read(path, records, masters, light, diagnostics) ||
+            std::any_of(
+                diagnostics.begin(), diagnostics.end(), [&](const auto &diagnostic)
+                { return !copiedPlugin || diagnostic.kind != navmesh::skyrim::DiagnosticKind::UnsupportedVersion; }))
         {
             return false;
         }
@@ -563,12 +560,12 @@ namespace
     }
 } // namespace
 
-bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path &outputDirectory,
-                                                     const std::vector<std::filesystem::path> &inputPlugins,
-                                                     const ResolvedLoadOrder &resolved,
-                                                     const std::vector<NavmeshReplacement> &replacements,
-                                                     std::filesystem::path &writtenPath, std::string &error,
-                                                     const std::string &copyPlugin)
+bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputDirectory,
+                                            const std::vector<std::filesystem::path> &inputPlugins,
+                                            const ResolvedLoadOrder &resolved,
+                                            const std::vector<NavmeshReplacement> &replacements,
+                                            std::filesystem::path &writtenPath, std::string &error,
+                                            const std::string &copyPlugin)
 {
     const auto fail = [&](const char *reason)
     {
@@ -1620,11 +1617,11 @@ bool navmesh::skyrim::offline::WriteNavmeshOverrides(const std::filesystem::path
     return true;
 }
 
-bool navmesh::skyrim::offline::WriteNavmeshOverride(const std::filesystem::path &outputDirectory,
-                                                    const std::vector<std::filesystem::path> &inputPlugins,
-                                                    const ResolvedLoadOrder &resolved, const core::Cell &cell,
-                                                    const core::CandidateNavMesh &candidate,
-                                                    std::filesystem::path &writtenPath, std::string &error)
+bool navmesh::skyrim::WriteNavmeshOverride(const std::filesystem::path &outputDirectory,
+                                           const std::vector<std::filesystem::path> &inputPlugins,
+                                           const ResolvedLoadOrder &resolved, const core::Cell &cell,
+                                           const core::CandidateNavMesh &candidate, std::filesystem::path &writtenPath,
+                                           std::string &error)
 {
     return WriteNavmeshOverrides(outputDirectory, inputPlugins, resolved, {{&cell, &candidate}}, writtenPath, error);
 }
