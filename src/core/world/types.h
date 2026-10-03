@@ -27,6 +27,8 @@ namespace navmesh::core
         bool initiallyDisabled{};
         /// True when the winning placed-record header marks this reference deleted.
         bool deleted{};
+        /// Winning placement has a teleport destination (XTEL), including non-physical cave exits.
+        bool teleportExit{};
         std::optional<AABB> localBounds;
     };
     struct Cell

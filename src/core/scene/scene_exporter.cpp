@@ -9,11 +9,17 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <tuple>
 #include <unordered_map>
 
 namespace
 {
     using namespace navmesh::core;
+    // This order controls both the scene tree and the flattened mesh list in viewers.
+    constexpr std::array LayerOrder{SceneLayer::OriginalNavmesh,   SceneLayer::ExistingNavmesh,
+                                    SceneLayer::CandidateNavmesh,  SceneLayer::NavmeshLinks,
+                                    SceneLayer::DiagnosticMarkers, SceneLayer::Terrain,
+                                    SceneLayer::Collision,         SceneLayer::RenderFallback};
     struct Object
     {
         SceneLayer layer{};
@@ -32,7 +38,11 @@ namespace
         switch (layer)
         {
         case SceneLayer::ExistingNavmesh:
-            return "Existing NAVM";
+            return "Neighboring NAVM";
+        case SceneLayer::OriginalNavmesh:
+            return "Original NAVM (current cell)";
+        case SceneLayer::NavmeshLinks:
+            return "NAVM links";
         case SceneLayer::Terrain:
             return "Terrain";
         case SceneLayer::Collision:
@@ -40,7 +50,7 @@ namespace
         case SceneLayer::RenderFallback:
             return "Render fallback";
         case SceneLayer::DiagnosticMarkers:
-            return "Diagnostic markers";
+            return "Doors";
         case SceneLayer::CandidateNavmesh:
             return "Candidate NAVM";
         }
@@ -48,6 +58,14 @@ namespace
     }
     [[nodiscard]] std::size_t MaterialIndex(SceneLayer layer, const std::string &classification = {})
     {
+        if (classification == "door_linked" || classification == "entrance")
+        {
+            return 13;
+        }
+        if (layer == SceneLayer::NavmeshLinks)
+        {
+            return 14;
+        }
         if (layer == SceneLayer::Terrain)
         {
             return 1; // brown/green
@@ -62,7 +80,7 @@ namespace
         }
         if (layer == SceneLayer::CandidateNavmesh)
         {
-            return classification == "entrance" ? 13 : 12;
+            return 12;
         }
         if (classification.empty())
         {
@@ -213,21 +231,96 @@ namespace
         const Mesh &mesh_;
         std::map<Key, std::vector<std::size_t>> cells_;
     };
-    void AppendMarker(Object &object, const DiagnosticMarker &marker)
+    void AppendDoorMarker(Object &object, const Vec3 &position)
     {
         // Small world-space pyramid, readable in viewers that hide POINTS.
         constexpr float r = 12.0F, h = 24.0F;
         const auto base = static_cast<std::uint32_t>(object.vertices.size());
-        object.vertices.insert(object.vertices.end(),
-                               {{marker.position.x - r, marker.position.y - r, marker.position.z},
-                                {marker.position.x + r, marker.position.y - r, marker.position.z},
-                                {marker.position.x + r, marker.position.y + r, marker.position.z},
-                                {marker.position.x - r, marker.position.y + r, marker.position.z},
-                                {marker.position.x, marker.position.y, marker.position.z + h}});
+        object.vertices.insert(object.vertices.end(), {{position.x - r, position.y - r, position.z},
+                                                       {position.x + r, position.y - r, position.z},
+                                                       {position.x + r, position.y + r, position.z},
+                                                       {position.x - r, position.y + r, position.z},
+                                                       {position.x, position.y, position.z + h}});
         object.triangles.insert(object.triangles.end(), {{base, base + 1, base + 4},
                                                          {base + 1, base + 2, base + 4},
                                                          {base + 2, base + 3, base + 4},
                                                          {base + 3, base, base + 4}});
+    }
+    /// Resolve only valid, selected triangles so door colors and link endpoints obey identical culling.
+    [[nodiscard]] std::optional<std::array<Vec3, 3>> SelectedPolygon(const NavMesh &mesh, std::size_t index,
+                                                                     const std::optional<SceneBounds> &selection)
+    {
+        if (index >= mesh.polygons.size())
+        {
+            return std::nullopt;
+        }
+        std::array<Vec3, 3> points;
+        AABB bounds;
+        for (std::size_t vertex{}; vertex < points.size(); ++vertex)
+        {
+            const auto source = mesh.polygons[index].vertices[vertex];
+            if (source >= mesh.vertices.size())
+            {
+                return std::nullopt;
+            }
+            points[vertex] = mesh.vertices[source];
+            bounds.Expand(points[vertex]);
+        }
+        if (selection && !bounds.Intersects(selection->world))
+        {
+            return std::nullopt;
+        }
+        return points;
+    }
+    void AppendPolygon(Object &object, const std::array<Vec3, 3> &points)
+    {
+        const auto base = static_cast<std::uint32_t>(object.vertices.size());
+        object.vertices.insert(object.vertices.end(), points.begin(), points.end());
+        object.triangles.push_back({base, base + 1, base + 2});
+    }
+    /// A solid prism follows the recorded portal edge in Skyrim world coordinates,
+    /// lifted in Z so triangle-only viewers can distinguish it from the NAVM surface.
+    void AppendLinkBar(Object &object, Vec3 start, Vec3 end)
+    {
+        start.z += 8.0F;
+        end.z += 8.0F;
+        const auto delta = end - start;
+        const auto length = std::hypot(delta.x, delta.y, delta.z);
+        if (!std::isfinite(length) || length <= 0.001F)
+        {
+            return;
+        }
+        const auto direction = delta / length;
+        const auto horizontalLength = std::hypot(direction.x, direction.y);
+        const Vec3 side = horizontalLength > 0.001F
+                              ? Vec3{-direction.y / horizontalLength, direction.x / horizontalLength, 0}
+                              : Vec3{1, 0, 0};
+        const Vec3 up{direction.y * side.z - direction.z * side.y, direction.z * side.x - direction.x * side.z,
+                      direction.x * side.y - direction.y * side.x};
+        const auto base = static_cast<std::uint32_t>(object.vertices.size());
+        for (const auto &center : {start, end})
+        {
+            object.vertices.push_back(center - side * 4.0F - up * 4.0F);
+            object.vertices.push_back(center + side * 4.0F - up * 4.0F);
+            object.vertices.push_back(center + side * 4.0F + up * 4.0F);
+            object.vertices.push_back(center - side * 4.0F + up * 4.0F);
+        }
+        constexpr std::array<std::array<std::uint32_t, 3>, 12> faces{{{0, 2, 1},
+                                                                      {0, 3, 2},
+                                                                      {4, 5, 6},
+                                                                      {4, 6, 7},
+                                                                      {0, 1, 5},
+                                                                      {0, 5, 4},
+                                                                      {1, 2, 6},
+                                                                      {1, 6, 5},
+                                                                      {2, 3, 7},
+                                                                      {2, 7, 6},
+                                                                      {3, 0, 4},
+                                                                      {3, 4, 7}}};
+        for (const auto &face : faces)
+        {
+            object.triangles.push_back({base + face[0], base + face[1], base + face[2]});
+        }
     }
     template <typename T> void Append(std::vector<std::uint8_t> &bytes, const T &value)
     {
@@ -330,32 +423,38 @@ namespace navmesh::core
         {
             for (const auto &navmesh : navmeshes)
             {
+                const bool isOriginal =
+                    metadata.selectedCell &&
+                    std::any_of(metadata.selectedCell->navMeshes.begin(), metadata.selectedCell->navMeshes.end(),
+                                [&](const auto &mesh) { return mesh.id == navmesh.id; });
+                std::set<std::uint32_t> doorPolygons;
+                for (const auto &door : navmesh.doorLinks)
+                {
+                    doorPolygons.insert(door.polygon);
+                }
                 std::map<std::string, Object> classifiedObjects;
                 for (std::size_t polygonIndex{}; polygonIndex < navmesh.polygons.size(); ++polygonIndex)
                 {
-                    const auto &polygon = navmesh.polygons[polygonIndex];
-                    if (polygon.vertices[0] >= navmesh.vertices.size() ||
-                        polygon.vertices[1] >= navmesh.vertices.size() ||
-                        polygon.vertices[2] >= navmesh.vertices.size())
-                    {
-                        continue;
-                    }
-                    AABB polygonBounds;
-                    for (const auto vertex : polygon.vertices)
-                    {
-                        polygonBounds.Expand(navmesh.vertices[vertex]);
-                    }
-                    if (options.bounds && !polygonBounds.Intersects(options.bounds->world))
+                    const auto points = SelectedPolygon(navmesh, polygonIndex, options.bounds);
+                    if (!points)
                     {
                         continue;
                     }
                     const auto found = polygonClassifications.find({navmesh.id, polygonIndex});
-                    const std::string classification = found == polygonClassifications.end() ? "" : found->second;
+                    std::string classification;
+                    if (found != polygonClassifications.end())
+                    {
+                        classification = found->second;
+                    }
+                    if (doorPolygons.contains(static_cast<std::uint32_t>(polygonIndex)))
+                    {
+                        classification = "door_linked";
+                    }
                     auto [it, inserted] = classifiedObjects.try_emplace(classification);
                     auto &object = it->second;
                     if (inserted)
                     {
-                        object.layer = SceneLayer::ExistingNavmesh;
+                        object.layer = isOriginal ? SceneLayer::OriginalNavmesh : SceneLayer::ExistingNavmesh;
                         object.classification = classification;
                         object.name = std::format("Existing NAVM {:08X}: {}", navmesh.id,
                                                   classification.empty() ? "unclassified" : classification);
@@ -363,12 +462,7 @@ namespace navmesh::core
                             std::format("{{\"navmeshFormId\":\"{:08X}\",\"classification\":\"{}\"}}", navmesh.id,
                                         Escape(classification.empty() ? "unclassified" : classification));
                     }
-                    const auto base = static_cast<std::uint32_t>(object.vertices.size());
-                    for (const auto vertex : polygon.vertices)
-                    {
-                        object.vertices.push_back(navmesh.vertices[vertex]);
-                    }
-                    object.triangles.push_back({base, base + 1, base + 2});
+                    AppendPolygon(object, *points);
                 }
                 for (auto &[_, object] : classifiedObjects)
                 {
@@ -380,33 +474,33 @@ namespace navmesh::core
         {
             const auto &candidate = *options.candidateNavmesh;
             Object object{SceneLayer::CandidateNavmesh, "Candidate NAVM", "{\"kind\":\"neutral_candidate\"}"};
-            for (const auto &polygon : candidate.polygons)
+            Object doors{SceneLayer::CandidateNavmesh, "Candidate NAVM: door_linked",
+                         "{\"kind\":\"neutral_candidate\",\"classification\":\"door_linked\"}", "door_linked"};
+            std::set<std::uint32_t> doorPolygons;
+            if (options.candidateEntrances)
             {
-                if (polygon.vertices[0] >= candidate.vertices.size() ||
-                    polygon.vertices[1] >= candidate.vertices.size() ||
-                    polygon.vertices[2] >= candidate.vertices.size())
+                for (const auto &door : *options.candidateEntrances)
+                {
+                    if (door.polygon)
+                    {
+                        doorPolygons.insert(*door.polygon);
+                    }
+                }
+            }
+            for (std::size_t polygonIndex{}; polygonIndex < candidate.polygons.size(); ++polygonIndex)
+            {
+                const auto points = SelectedPolygon(candidate, polygonIndex, options.bounds);
+                if (!points)
                 {
                     continue;
                 }
-                AABB bounds;
-                for (const auto vertex : polygon.vertices)
-                {
-                    bounds.Expand(candidate.vertices[vertex]);
-                }
-                if (options.bounds && !bounds.Intersects(options.bounds->world))
-                {
-                    continue;
-                }
-                const auto base = static_cast<std::uint32_t>(object.vertices.size());
-                for (const auto vertex : polygon.vertices)
-                {
-                    object.vertices.push_back(candidate.vertices[vertex]);
-                }
-                object.triangles.push_back({base, base + 1, base + 2});
+                AppendPolygon(doorPolygons.contains(static_cast<std::uint32_t>(polygonIndex)) ? doors : object,
+                              *points);
             }
             objects.push_back(std::move(object));
+            objects.push_back(std::move(doors));
         }
-        if (options.candidateEntrances && Contains(options.layers, SceneLayer::CandidateNavmesh))
+        if (options.candidateEntrances && Contains(options.layers, SceneLayer::DiagnosticMarkers))
         {
             for (const auto &entrance : *options.candidateEntrances)
             {
@@ -414,39 +508,97 @@ namespace navmesh::core
                 {
                     continue;
                 }
-                Object object{SceneLayer::CandidateNavmesh, std::format("Entrance {:08X}", entrance.referenceId),
+                Object object{SceneLayer::DiagnosticMarkers, std::format("Door {:08X}", entrance.referenceId),
                               std::format("{{\"kind\":\"entrance\",\"referenceFormId\":\"{:08X}\",\"region\":{}}}",
                                           entrance.referenceId,
                                           entrance.region ? std::to_string(*entrance.region) : "null"),
                               "entrance"};
-                AppendMarker(object, {.position = entrance.position});
-                objects.push_back(std::move(object));
-            }
-        }
-        if (Contains(options.layers, SceneLayer::DiagnosticMarkers))
-        {
-            std::map<std::string, Object> markerObjects;
-            for (const auto &marker : markers)
-            {
-                if (options.bounds && !options.bounds->world.Contains(marker.position))
-                {
-                    continue;
-                }
-                auto [it, inserted] = markerObjects.try_emplace(
-                    marker.classification, SceneLayer::DiagnosticMarkers,
-                    std::format("Diagnostic: {}", marker.classification),
-                    std::format("{{\"classification\":\"{}\"}}", Escape(marker.classification)), marker.classification);
-                AppendMarker(it->second, marker);
-            }
-            for (auto &[_, object] : markerObjects)
-            {
+                AppendDoorMarker(object, entrance.position);
                 objects.push_back(std::move(object));
             }
         }
 
+        // Resolve destinations against displayed authored geometry. Reciprocal
+        // authored edges share a bar; candidate triangles have separate numbering.
+        std::unordered_map<std::uint32_t, const NavMesh *> meshById;
+        for (const auto &mesh : navmeshes)
+        {
+            meshById.emplace(mesh.id, &mesh);
+        }
+        std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t>> authoredPairs;
+        const auto appendLink = [&](const NavMesh &source, std::uint32_t sourcePolygon, std::uint8_t sourceEdge,
+                                    std::uint32_t targetId, std::uint32_t targetPolygon, bool generated)
+        {
+            const auto target = meshById.find(targetId);
+            if (target == meshById.end())
+            {
+                return;
+            }
+            const auto sourcePoints = SelectedPolygon(source, sourcePolygon, options.bounds);
+            const auto targetPoints = SelectedPolygon(*target->second, targetPolygon, options.bounds);
+            if (!sourcePoints || !targetPoints)
+            {
+                return;
+            }
+            if (!generated)
+            {
+                const auto first = std::pair{source.id, sourcePolygon};
+                const auto second = std::pair{targetId, targetPolygon};
+                const auto [a, b] = std::minmax(first, second);
+                if (a == b || !authoredPairs.emplace(a.first, a.second, b.first, b.second).second)
+                {
+                    return;
+                }
+            }
+            Object object{SceneLayer::NavmeshLinks,
+                          generated
+                              ? std::format("Candidate link {} -> {:08X}:{}", sourcePolygon, targetId, targetPolygon)
+                              : std::format("Authored link {:08X}:{} -> {:08X}:{}", source.id, sourcePolygon, targetId,
+                                            targetPolygon),
+                          std::format("{{\"kind\":\"{}\",\"sourceNavmeshFormId\":\"{:08X}\",\"sourcePolygon\":{},"
+                                      "\"sourceEdge\":{},\"targetNavmeshFormId\":\"{:08X}\",\"targetPolygon\":{}}}",
+                                      generated ? "candidate_border_link" : "authored_external_link", source.id,
+                                      sourcePolygon, sourceEdge, targetId, targetPolygon)};
+            // The consuming edge fixes the portal's exact endpoints, including
+            // authored border drift and slope. The target remains required for culling.
+            AppendLinkBar(object, (*sourcePoints)[sourceEdge], (*sourcePoints)[(sourceEdge + 1) % 3]);
+            objects.push_back(std::move(object));
+        };
+        if (Contains(options.layers, SceneLayer::ExistingNavmesh))
+        {
+            for (const auto &mesh : navmeshes)
+            {
+                for (const auto &link : mesh.externalLinks)
+                {
+                    if (link.edge < 3)
+                    {
+                        appendLink(mesh, link.polygon, link.edge, link.navmeshId, link.targetPolygon, false);
+                    }
+                }
+            }
+        }
+        if (options.candidateNavmesh && options.candidateBorderLinks &&
+            Contains(options.layers, SceneLayer::CandidateNavmesh) &&
+            Contains(options.layers, SceneLayer::ExistingNavmesh))
+        {
+            for (const auto &link : *options.candidateBorderLinks)
+            {
+                if (link.edge < 3 && link.neighborEdge < 3)
+                {
+                    appendLink(*options.candidateNavmesh, link.polygon, link.edge, link.neighborNavmeshId,
+                               link.neighborPolygon, true);
+                }
+            }
+        }
+        std::stable_sort(objects.begin(), objects.end(),
+                         [](const Object &a, const Object &b)
+                         {
+                             return std::find(LayerOrder.begin(), LayerOrder.end(), a.layer) <
+                                    std::find(LayerOrder.begin(), LayerOrder.end(), b.layer);
+                         });
         std::vector<std::uint8_t> binary;
         std::vector<std::string> bufferViews, accessors, meshes, nodes, provenanceObjects;
-        std::array<std::vector<std::size_t>, 6> layerChildren;
+        std::array<std::vector<std::size_t>, LayerOrder.size()> layerChildren;
         for (const auto &object : objects)
         {
             if (object.triangles.empty())
@@ -510,7 +662,7 @@ namespace navmesh::core
             result.triangles += object.triangles.size();
             ++result.objects;
         }
-        const std::array<const char *, 14> materialNames{"Unclassified NAVM (cyan)",
+        const std::array<const char *, 15> materialNames{"Unclassified NAVM (cyan)",
                                                          "Terrain (brown-green)",
                                                          "Collision (gray)",
                                                          "Render fallback (purple)",
@@ -523,8 +675,9 @@ namespace navmesh::core
                                                          "Ambiguous (violet)",
                                                          "Unsupported or unknown (dark gray)",
                                                          "Candidate NAVM (blue-green)",
-                                                         "Entrance (orange)"};
-        const std::array<std::array<float, 4>, 14> colors{{{{0.0F, 0.85F, 0.95F, 0.70F}},
+                                                         "Door / door-linked NAVM (orange)",
+                                                         "NAVM link (green)"};
+        const std::array<std::array<float, 4>, 15> colors{{{{0.0F, 0.85F, 0.95F, 0.70F}},
                                                            {{0.35F, 0.48F, 0.16F, 1.0F}},
                                                            {{0.46F, 0.46F, 0.50F, 1.0F}},
                                                            {{0.58F, 0.25F, 0.75F, 0.80F}},
@@ -537,7 +690,8 @@ namespace navmesh::core
                                                            {{0.48F, 0.20F, 0.90F, 0.75F}},
                                                            {{0.25F, 0.28F, 0.32F, 0.75F}},
                                                            {{0.02F, 0.78F, 0.72F, 0.8F}},
-                                                           {{1.0F, 0.45F, 0.0F, 1.0F}}}};
+                                                           {{1.0F, 0.45F, 0.0F, 1.0F}},
+                                                           {{0.05F, 1.0F, 0.10F, 1.0F}}}};
         std::vector<std::string> materials;
         for (std::size_t i{}; i < materialNames.size(); ++i)
         {
@@ -560,10 +714,16 @@ namespace navmesh::core
         // extracted triangles. A viewer can then distinguish unavailable
         // terrain/collision/NAVM from an exporter silently losing that layer.
         std::vector<std::size_t> rootNodes;
-        std::set<SceneLayer> emittedLayers;
-        for (const auto layer : options.layers)
+        auto exportedLayers = options.layers;
+        if (Contains(options.layers, SceneLayer::ExistingNavmesh))
         {
-            if (!emittedLayers.insert(layer).second)
+            exportedLayers.push_back(SceneLayer::OriginalNavmesh);
+            exportedLayers.push_back(SceneLayer::NavmeshLinks);
+        }
+        std::vector<std::string> provenanceLayers;
+        for (const auto layer : LayerOrder)
+        {
+            if (!Contains(exportedLayers, layer))
             {
                 continue;
             }
@@ -573,6 +733,7 @@ namespace navmesh::core
             {
                 children << (childIndex ? "," : "") << values[childIndex];
             }
+            provenanceLayers.push_back(std::format("\"{}\"", LayerName(layer)));
             rootNodes.push_back(nodes.size());
             nodes.push_back(
                 std::format("{{\"name\":\"{}\",\"children\":[{}],\"extras\":{{\"layer\":\"{}\",\"objectCount\":{}}}}}",
@@ -616,10 +777,9 @@ namespace navmesh::core
         std::ofstream provenance(outputPath.string() + ".provenance.json", std::ios::trunc);
         if (provenance)
         {
-            provenance << "{\n  \"metadata\": " << reproducibility::ToJson(metadata, "    ")
-                       << ",\n  \"layers\": [\"Existing NAVM\", \"Terrain\", \"Collision\", \"Render fallback\", "
-                          "\"Diagnostic markers\", \"Candidate NAVM\"],\n  \"selection\": {\"culledTriangles\": "
-                       << result.culledTriangles << ", \"detail\": \""
+            provenance << "{\n  \"metadata\": " << reproducibility::ToJson(metadata, "    ") << ",\n  \"layers\": ["
+                       << join(provenanceLayers)
+                       << "],\n  \"selection\": {\"culledTriangles\": " << result.culledTriangles << ", \"detail\": \""
                        << (options.detailedProvenance ? "full" : "summary") << "\"},\n  \"objects\": ["
                        << join(provenanceObjects) << "]\n}\n";
         }

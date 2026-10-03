@@ -129,6 +129,12 @@ model suppliers; distant suppliers contribute intersecting model geometry while
 terrain and authored NAVM stay within the scene neighborhood.
 `app/batch_runner` owns batch orchestration,
 bounded geometry reuse, per-cell evidence, and combined writer dispatch.
+The plugin readers decode authored door and consumed external-edge tables into
+neutral NAVM connection evidence. Load-order assembly resolves connection
+identities using each winning plugin's master table. The shared runner gathers
+exit markers independently of generation. `core/scene/scene_exporter` owns
+ordered inspection groups, selected-cell ownership, face materials, and solid
+connection bars along consuming triangle edges; it does not infer portals from geometric proximity.
 `cli/inspection_report` owns inspection OBJ, JSON, HTML, and console reporting;
 it consumes the runner's results without choosing generation policy.
 

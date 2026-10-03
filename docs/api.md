@@ -8,6 +8,11 @@ this reference.
 
 - `navmesh::core`: neutral geometry, world and navmesh data, scene provenance,
   candidate generation, and exports.
+- `navmesh::core::WriteCombinedGlb`: ordered scene groups, separate selected-cell
+  originals, door-linked face materials, exit markers, and authored/generated
+  connection bars along recorded portal edges. Selection omits bars without both displayed endpoint triangles.
+- `navmesh::skyrim::offline::DecodeNavmeshConnections`: bounded inspection decoding
+  of consumed external entries and door associations, retaining raw plugin bytes.
 - `navmesh::core::SharedBytes`: immutable shared byte ownership and bounded slices
   for parser payload/subrecord data without repeated copies.
 - `navmesh::core::ContentHash`: incremental SHA-256 identities for cache dependencies.

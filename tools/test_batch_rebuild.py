@@ -88,7 +88,7 @@ class BatchRebuild(unittest.TestCase):
         (self.root / "Patch.esp").write_bytes(record("TES4", 0, patch_header) + group(int.from_bytes(b"WRLD", "little"), 0, patch))
         (self.root / "plugins.txt").write_text("Baseline.esm\nPatch.esp\n")
 
-    def write_baseline(self, navmeshes=None):
+    def write_baseline(self, navmeshes=None, references=None):
         if navmeshes is None:
             navmeshes = {x: navm(x) for x in range(3)}
         cells = b""
@@ -98,6 +98,7 @@ class BatchRebuild(unittest.TestCase):
             children = record("LAND", 0x300 + x, land())
             if x in navmeshes:
                 children += record("NAVM", 0x200 + x, navmeshes[x])
+            children += (references or {}).get(x, b"")
             cells += record("CELL", cell, payload) + group(cell, 6, group(cell, 9, children))
         header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
         world = record("WRLD", 0x400, sub("EDID", b"FixtureWorld\0")) + group(0x400, 1, cells)
@@ -432,6 +433,125 @@ class BatchRebuild(unittest.TestCase):
         completed = subprocess.run([str(EXE), "--plugin", str(self.root / "Baseline.esm"),
                                     "--generate-candidate", "--skip-existing-navmesh"], capture_output=True, text=True)
         self.assertEqual(completed.returncode, 1)
+
+    def test_scene_groups_doors_and_neighbor_connections(self):
+        def connected_navm(x, polygon, edge, target, target_polygon, doors=()):
+            payload = navm(x)
+            body = bytearray(payload[6:])
+            triangles_at = 20 + 4 * 12 + 4
+            struct.pack_into("<H", body, triangles_at + polygon * 16 + 6 + edge * 2, 0)
+            struct.pack_into("<H", body, triangles_at + polygon * 16 + 12, 1 << edge)
+            trailing_at = triangles_at + 2 * 16
+            connections = struct.pack("<IIIHI", 1, 0, target, target_polygon, len(doors))
+            connections += b"".join(struct.pack("<HII", triangle, 0xE48B73F3, ref) for triangle, ref in doors)
+            return sub("NVNM", bytes(body[:trailing_at]) + connections + body[trailing_at + 8:])
+
+        def placed_exit(form, teleport=False, disabled=False):
+            payload = sub("NAME", struct.pack("<I", 0x600))
+            payload += sub("DATA", struct.pack("<6f", 64, 64, 0, 0, 0, 0))
+            if teleport:
+                payload += sub("XTEL", struct.pack("<I6f", 0x900, *([0] * 6)))
+            return record("REFR", form, payload, (1 << 11) if disabled else 0)
+
+        meshes = {0: connected_navm(0, 0, 1, 0x201, 1, [(0, 0x501)]),
+                  1: connected_navm(1, 1, 2, 0x200, 0)}
+        refs = b"".join([placed_exit(0x500, teleport=True), placed_exit(0x501),
+                          placed_exit(0x502), placed_exit(0x503, teleport=True, disabled=True)])
+        self.write_baseline(meshes, {0: refs})
+        # Exit references can have no visible model, as for an invisible cave entrance.
+        baseline = self.root / "Baseline.esm"
+        baseline.write_bytes(baseline.read_bytes() + record("DOOR", 0x600, b""))
+        unrelated = record("TES4", 0, sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800)))
+        (self.root / "Unrelated.esm").write_bytes(unrelated)
+        # The winning NAVM override has a different master table from its origin.
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        header += sub("MAST", b"Unrelated.esm\0") + sub("DATA", bytes(8))
+        header += sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
+        winning = connected_navm(0, 0, 1, 0x01000201, 1, [(0, 0x01000501)])
+        patch = group(0x01000400, 1, group(0x01000100, 6,
+                      group(0x01000100, 9, record("NAVM", 0x01000200, winning))))
+        (self.root / "Patch.esp").write_bytes(record("TES4", 0, header) +
+            group(int.from_bytes(b"WRLD", "little"), 0, patch))
+        (self.root / "plugins.txt").write_text("Unrelated.esm\nBaseline.esm\nPatch.esp\n")
+
+        def read_scene(output):
+            data = (output / "scene.glb").read_bytes()
+            json_size = struct.unpack_from("<I", data, 12)[0]
+            return json.loads(data[20:20 + json_size]), data[28 + json_size:]
+
+        for generating in (False, True):
+            output = self.run_cli("--cell-formid", "01000100", "--neighboring-cell-radius", "1",
+                                  *(["--generate-candidate"] if generating else []),
+                                  output=f"scene-connections-{generating}")
+            scene, binary = read_scene(output)
+            roots = [scene["nodes"][index] for index in scene["scenes"][0]["nodes"]]
+            expected = ["Original NAVM (current cell)", "Neighboring NAVM"]
+            if generating:
+                expected.append("Candidate NAVM")
+            expected += ["NAVM links", "Doors", "Terrain", "Collision", "Render fallback"]
+            self.assertEqual([node["name"] for node in roots], expected)
+            self.assertEqual([scene["nodes"][i]["name"] for i in roots[0]["children"]],
+                             ["Existing NAVM 01000200: door_linked", "Existing NAVM 01000200: supported"])
+            self.assertTrue(all("01000201" in scene["nodes"][i]["name"] for i in roots[1]["children"]))
+            names = [node["name"] for node in scene["nodes"]]
+            self.assertIn("Door 01000500", names)
+            self.assertIn("Door 01000501", names)
+            self.assertNotIn("Door 01000502", names)
+            self.assertNotIn("Door 01000503", names)
+            self.assertFalse(any(name.startswith("Diagnostic:") for name in names))
+            door_faces = next(mesh for mesh in scene["meshes"] if mesh["name"] ==
+                              "Existing NAVM 01000200: door_linked")
+            material = scene["materials"][door_faces["primitives"][0]["material"]]
+            self.assertIn("door-linked", material["name"])
+            self.assertGreater(material["pbrMetallicRoughness"]["baseColorFactor"][0],
+                               material["pbrMetallicRoughness"]["baseColorFactor"][1])
+            bars = [mesh for mesh in scene["meshes"] if mesh["name"].startswith("Authored link")]
+            self.assertEqual(len(bars), 1)  # Reciprocal directions share one bar.
+            bar = bars[0]["primitives"][0]
+            color = scene["materials"][bar["material"]]["pbrMetallicRoughness"]["baseColorFactor"]
+            self.assertGreater(color[1], color[0])
+            self.assertGreater(color[1], color[2])
+            positions = scene["accessors"][bar["attributes"]["POSITION"]]
+            view = scene["bufferViews"][positions["bufferView"]]
+            points = [struct.unpack_from("<3f", binary, view["byteOffset"] + i * 12)
+                      for i in range(positions["count"])]
+            self.assertEqual(len(points), 8)
+            # Prism ends follow the connected edge at the cell boundary, lifted above the surface.
+            centers = [tuple(sum(point[axis] for point in points[start:start + 4]) / 4
+                             for axis in range(3)) for start in (0, 4)]
+            self.assertEqual(centers, [(4096, 0, 8), (4096, 4096, 8)])
+            self.assertEqual(scene["accessors"][bar["indices"]]["count"], 36)
+            if generating:
+                candidate = json.loads((output / "candidate-navm.json").read_text())
+                self.assertEqual(sum(name.startswith("Candidate link") for name in names),
+                                 len(candidate["border_links"]))
+                self.assertIn("Candidate NAVM: door_linked", names)
+            provenance = json.loads((output / "scene.glb.provenance.json").read_text())
+            self.assertEqual(provenance["layers"], expected)
+
+        simple_output = self.root / "scene-single-plugin"
+        completed = subprocess.run([str(EXE), "--plugin", str(baseline), "--cell-formid", "100",
+                                    "--terrain-only", "--output", str(simple_output)],
+                                   capture_output=True, text=True, timeout=90)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        simple, _ = read_scene(simple_output)
+        names = [node["name"] for node in simple["nodes"]]
+        self.assertIn("Existing NAVM 00000200: door_linked", names)
+        self.assertIn("Door 00000500", names)
+        self.assertIn("Door 00000501", names)
+        self.assertNotIn("Door 00000502", names)
+        self.assertNotIn("Door 00000503", names)
+
+        # Culling either triangle removes its connecting bar; layer filtering keeps stable order.
+        output = self.run_cli("--cell-formid", "01000100", "--neighboring-cell-radius", "1",
+                              "--scene-bounds", "1", "1", "100", "100", output="scene-bounded")
+        bounded, _ = read_scene(output)
+        self.assertFalse(any(mesh["name"].startswith("Authored link") for mesh in bounded["meshes"]))
+        output = self.run_cli("--cell-formid", "01000100", "--neighboring-cell-radius", "1",
+                              "--geometry-layers", "terrain,diagnostics,navmesh", output="scene-reordered")
+        filtered, _ = read_scene(output)
+        self.assertEqual([filtered["nodes"][i]["name"] for i in filtered["scenes"][0]["nodes"]],
+                         ["Original NAVM (current cell)", "Neighboring NAVM", "NAVM links", "Doors", "Terrain"])
 
     def test_scene_neighborhood_excludes_distant_geometry_supplier_cells(self):
         # Distant references can supply intersecting models without adding their

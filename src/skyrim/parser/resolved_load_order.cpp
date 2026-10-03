@@ -318,12 +318,90 @@ namespace
             polygon.flags = U16(payload, offset + 12);
             mesh.polygons.push_back(polygon);
         }
+        const auto trailing = static_cast<std::size_t>(layout.trailingData.offset);
+        const auto size = static_cast<std::size_t>(layout.trailingData.size);
+        if (Has(payload, trailing, size))
+        {
+            (void)navmesh::skyrim::offline::DecodeNavmeshConnections({payload.data() + trailing, size}, mesh);
+        }
         return mesh;
     }
 } // namespace
 
 namespace navmesh::skyrim::offline
 {
+    bool DecodeNavmeshConnections(std::span<const std::uint8_t> trailing, core::NavMesh &mesh)
+    {
+        mesh.externalLinks.clear();
+        mesh.doorLinks.clear();
+        const auto read16 = [&](std::size_t offset)
+        {
+            std::uint16_t value{};
+            std::memcpy(&value, trailing.data() + offset, sizeof(value));
+            return value;
+        };
+        const auto read32 = [&](std::size_t offset)
+        {
+            std::uint32_t value{};
+            std::memcpy(&value, trailing.data() + offset, sizeof(value));
+            return value;
+        };
+        if (trailing.size() < 4)
+        {
+            return false;
+        }
+        const auto externalCount = read32(0);
+        if (externalCount > (trailing.size() - 4) / 10)
+        {
+            return false;
+        }
+        const auto doorOffset = 4 + static_cast<std::size_t>(externalCount) * 10;
+        if (trailing.size() - doorOffset < 4)
+        {
+            return false;
+        }
+        const auto doorCount = read32(doorOffset);
+        if (doorCount > (trailing.size() - doorOffset - 4) / 10)
+        {
+            return false;
+        }
+        // Only flagged edges consume the external table. Ordinary neighbor values
+        // are local triangle indices, even when they happen to fit that table.
+        std::vector<core::NavmeshExternalLink> externalLinks;
+        for (std::size_t polygonIndex{}; polygonIndex < mesh.polygons.size(); ++polygonIndex)
+        {
+            const auto &polygon = mesh.polygons[polygonIndex];
+            for (std::uint8_t edge{}; edge < 3; ++edge)
+            {
+                if (!(polygon.flags & (1U << edge)))
+                {
+                    continue;
+                }
+                if (polygon.neighbors[edge] >= externalCount)
+                {
+                    return false;
+                }
+                const auto offset = 4 + static_cast<std::size_t>(polygon.neighbors[edge]) * 10;
+                externalLinks.push_back(
+                    {static_cast<std::uint32_t>(polygonIndex), edge, read32(offset + 4), read16(offset + 8)});
+            }
+        }
+        std::vector<core::NavmeshDoorLink> doorLinks;
+        for (std::uint32_t index{}; index < doorCount; ++index)
+        {
+            const auto offset = doorOffset + 4 + static_cast<std::size_t>(index) * 10;
+            const auto polygon = read16(offset);
+            if (polygon >= mesh.polygons.size())
+            {
+                return false;
+            }
+            doorLinks.push_back({polygon, read32(offset + 6)});
+        }
+        mesh.externalLinks = std::move(externalLinks);
+        mesh.doorLinks = std::move(doorLinks);
+        return true;
+    }
+
     std::set<std::uint32_t> CellsWithExistingNavmesh(const ResolvedLoadOrder &resolved)
     {
         std::set<std::uint32_t> cells;
@@ -805,8 +883,24 @@ namespace navmesh::skyrim::offline
             {
                 continue;
             }
-            if (const auto mesh = DecodeNavMesh(record))
+            if (auto mesh = DecodeNavMesh(record))
             {
+                // Connection identities use the winning file's master table, which
+                // can differ from both the NAVM's origin and global load-order slots.
+                const auto owner = byName.find(Lower(record.winning.plugin));
+                if (owner != byName.end())
+                {
+                    for (auto &link : mesh->externalLinks)
+                    {
+                        link.navmeshId = link.navmeshId ? resolve(owner->second, link.navmeshId).value_or(0) : 0;
+                    }
+                    for (auto &link : mesh->doorLinks)
+                    {
+                        link.referenceId = link.referenceId ? resolve(owner->second, link.referenceId).value_or(0) : 0;
+                    }
+                    std::erase_if(mesh->externalLinks, [](const auto &link) { return link.navmeshId == 0; });
+                    std::erase_if(mesh->doorLinks, [](const auto &link) { return link.referenceId == 0; });
+                }
                 result.cells[cell->second].navMeshes.push_back(*mesh);
             }
         }
@@ -832,6 +926,9 @@ namespace navmesh::skyrim::offline
             {
                 reference.initiallyDisabled = (record.raw->flags & (1U << 11)) != 0;
                 reference.deleted = (record.raw->flags & (1U << 5)) != 0;
+                reference.teleportExit =
+                    std::any_of(record.raw->subrecords.begin(), record.raw->subrecords.end(), [](const auto &sub)
+                                { return sub.type == "XTEL" && sub.data.size() >= 4 && U32(sub.data, 0) != 0; });
             }
             if (!record.referencedFormIds.empty())
             {

@@ -10,12 +10,22 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 #include <unordered_map>
 
 namespace navmesh::skyrim::offline
 {
+    /** Decode the external and door tables from supported NVNM trailing bytes for inspection.
+     * @param trailing Bytes immediately after the owning mesh's triangle array.
+     * @param mesh Geometry whose edge flags consume the external table; connection arrays are replaced.
+     * @return False for truncated tables or invalid consuming indices, leaving connection arrays empty.
+     * FormIDs retain plugin-local indices; load-order assembly resolves them before scene export.
+     * Unconsumed external entries and later cover/grid sections remain uninterpreted.
+     */
+    [[nodiscard]] bool DecodeNavmeshConnections(std::span<const std::uint8_t> trailing, core::NavMesh &mesh);
+
     enum class DiagnosticKind
     {
         MissingMaster,

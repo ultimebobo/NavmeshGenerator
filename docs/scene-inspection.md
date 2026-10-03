@@ -4,33 +4,56 @@ Milestone 6 writes one binary glTF scene, `scene.glb`, for each analysis run.
 It uses named objects and stable materials so it can be inspected without
 manually joining the OBJ exports:
 
+The scene tree and flattened mesh list put navigation first: `Original NAVM
+(current cell)`, `Neighboring NAVM`, `Candidate NAVM` when generated, `NAVM
+links`, and `Doors`, followed by `Terrain`, `Collision`, and `Render fallback`.
+The `navmesh` layer selection includes both original and neighboring authored
+meshes and their connection bars. Each authored NAVM is split by face color
+inside its owning group.
+
 | Layer/object name | Color | Meaning |
 | --- | --- | --- |
-| `Existing NAVM ...: unclassified` | cyan | decoded NAVM polygons without an analysis result, including neighboring cells |
+| `Existing NAVM ...: unclassified` | cyan | decoded authored polygons without analysis evidence |
+| `Existing NAVM ...: supported` | green | supported polygons |
+| `Existing NAVM ...: floating` | amber | floating polygons |
+| `Existing NAVM ...: buried` | red | buried polygons |
+| `Existing NAVM ...: too_steep` | yellow | polygons with overly steep support |
+| `Existing NAVM ...: blocked` | magenta | blocked polygons |
+| `Existing NAVM ...: out_of_coverage` | blue | polygons outside extracted support coverage |
+| `Existing NAVM ...: ambiguous` | violet | polygons with conflicting support evidence |
+| `Existing NAVM ...: unsupported` | dark gray | unsupported or unknown classification |
+| `Existing NAVM ...: door_linked` / `Candidate NAVM: door_linked` | orange | triangles associated with an exit; this material takes priority over the analysis face color |
+| `Candidate NAVM` | blue-green | generated navigation connected to an entrance or exterior cell border |
+| `Authored link ...` / `Candidate link ...` | bright green | solid bars running along the recorded edge between connected triangles, lifted above the surface |
+| `Door ...` | orange | enabled exit position, including physical doors and invisible cave entrances |
 | `Terrain` | brown-green | decoded `LAND` height surface |
 | `Collision` | gray | packed Havok support geometry |
-| `Render fallback` | purple | visual geometry: low-confidence support where collision was absent, plus display-only render meshes retained beside authoritative collision |
-| `Existing NAVM ...: supported` / `Diagnostic: supported` | green | supported polygons and their centroid markers |
-| `Existing NAVM ...: floating` / `Diagnostic: floating` | orange | floating polygons and markers |
-| `Existing NAVM ...: buried` / `Diagnostic: buried` | red | buried polygons and markers |
-| `Existing NAVM ...: too_steep` / `Diagnostic: too_steep` | yellow | polygons with overly steep support |
-| `Existing NAVM ...: blocked` / `Diagnostic: blocked` | magenta | blocked polygons |
-| `Existing NAVM ...: out_of_coverage` / `Diagnostic: out_of_coverage` | blue | polygons outside extracted support coverage |
-| `Existing NAVM ...: ambiguous` / `Diagnostic: ambiguous` | violet | polygons with conflicting support evidence |
-| `Existing NAVM ...: unsupported` / `Diagnostic: unsupported` | dark gray | unsupported or unknown classification |
-| `Candidate NAVM` | blue-green | generated navigation connected to an entrance or exterior cell border |
-| `Entrance ...` | orange | enabled placed DOOR position; scene provenance records its reference ID and matched candidate region |
+| `Render fallback` | purple | visual geometry, including display-only meshes retained beside authoritative collision |
 
-Each analyzed NAVM is split into named objects by polygon classification under
-the `Existing NAVM` layer. The GLB contains the geometry and colors. Its adjacent
-`scene.glb.provenance.json` contains the reproducibility metadata, named GLB
-objects, and source record/model provenance. `analysis.json` links each NAVM
-classification to its selected world-triangle index; `geometry.json` resolves
-that index to the complete triangle provenance. This is intentionally a report
-join, not a new repair classification.
+Here a **door** means an exit to another area, including another worldspace or
+an interior. Scene markers use placed teleport destinations (`XTEL`) or authored
+NAVM door associations; a door model alone does not identify an exit. Markers
+appear during inspection as well as generation, and disabled or deleted
+placements are excluded. The `diagnostics` layer selection controls these door
+markers. Polygon classifications remain available as face colors and in reports;
+the scene emits no classification centroid markers.
+
+Authored connection bars come from consuming external NAVM edges, while
+candidate bars use the generated border-link matches. Reciprocal authored
+connections share a single bar. Bars follow the consuming triangle’s edge endpoints,
+including its slope and authored border drift. A bar requires both linked triangles to
+be displayed; unresolved destinations, invalid indices, and connections cut by
+scene bounds are omitted. Nearby unlinked edges do not produce bars.
+
+The GLB contains geometry, groups, and colors. Its adjacent
+`scene.glb.provenance.json` records the exported groups in display order, named
+objects, source record/model provenance, and connection endpoint identities.
+`analysis.json` links each NAVM classification to its selected world-triangle
+index; `geometry.json` resolves that index to complete triangle provenance.
+Door coloring does not change the analysis classification or repair evidence.
 
 Every requested layer is emitted as a top-level GLB group, even when it has no
-child mesh. An empty `Terrain`, `Collision`, or `Existing NAVM` group therefore
+child mesh. An empty `Terrain`, `Collision`, or `Original NAVM (current cell)` group therefore
 means the selected input did not provide that source; consult the metadata
 warnings and coverage report rather than treating it as fallback geometry.
 

@@ -35,9 +35,9 @@ with all offsets relative to the start of NVNM data:
 | `0x14` | `vertexCount` × `{ float x, float y, float z }` | Read as a 12-byte array. |
 | after vertices | `uint32` triangle count | Bounds checked. |
 | after triangle count | `triangleCount` × 16-byte triangle | Read/preserved.  The runtime definition supports three `uint16` vertex indices, three `uint16` neighbours, `uint16` triangle flags, and `uint16` traversal flags. |
-| remaining NVNM bytes | links, doors, cover/grid/other version-specific content | Kept verbatim and exposed as `trailingData`; not interpreted. |
+| remaining NVNM bytes | links, doors, cover/grid/other version-specific content | Kept verbatim as `trailingData`; bounds-checked external and door tables also provide scene inspection evidence. Cover/grid and later content remain uninterpreted by the reader. |
 
-The reader retains trailing bytes. The writer creates fresh external, door,
+The reader retains trailing bytes. Inspection decodes only external entries consumed by flagged triangle edges and valid door associations, resolving their FormIDs through the winning plugin’s master table. Malformed connection tables yield no scene connection evidence; their original bytes remain intact. The writer creates fresh external, door,
 cover, and grid sections for generated geometry. A matched border edge adds a
 portal entry and a reciprocal portal in an adjacent NAVM override. A matched
 entrance adds a door triangle referencing the placed door. Other authored

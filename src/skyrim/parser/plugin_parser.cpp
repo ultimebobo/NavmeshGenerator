@@ -115,6 +115,10 @@ namespace
             {
                 std::memcpy(&reference.scale, payload.data() + dataStart, 4);
             }
+            else if (subType == "XTEL" && subSize >= 4)
+            {
+                reference.teleportExit = ReadU32LE(payload, dataStart) != 0;
+            }
             offset = dataEnd;
         }
         references.push_back({std::move(reference), 0});
@@ -229,6 +233,12 @@ namespace
             }
             polygon.flags = ReadU16LE(payload, triangleOffset + 12);
             mesh.polygons.push_back(polygon);
+        }
+        if (ReadU32LE(payload, bodyStart) == 12)
+        {
+            const auto trailingStart = trianglesStart + static_cast<std::size_t>(polygonCount) * 16;
+            (void)navmesh::skyrim::offline::DecodeNavmeshConnections(
+                {payload.data() + trailingStart, bodyEnd - trailingStart}, mesh);
         }
         return mesh;
     }

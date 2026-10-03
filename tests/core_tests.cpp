@@ -1173,40 +1173,273 @@ namespace
         Require(std::abs(point.x - 10) < 1.0e-4F && std::abs(point.y - 2) < 1.0e-4F);
     }
 
+    void TestAuthoredNavmeshConnections()
+    {
+        using namespace navmesh::core;
+        using navmesh::skyrim::offline::DecodeNavmeshConnections;
+        NavMesh mesh{.polygons = {{.neighbors = {0, 0, 0}, .flags = 2}}};
+        std::vector<std::uint8_t> trailing;
+        PutU32(trailing, 1);
+        PutU32(trailing, 0);
+        PutU32(trailing, 0x1234);
+        PutU16(trailing, 7);
+        PutU32(trailing, 1);
+        PutU16(trailing, 0);
+        PutU32(trailing, 0xE48B73F3);
+        PutU32(trailing, 0x5678);
+        Require(DecodeNavmeshConnections(trailing, mesh));
+        Require(mesh.externalLinks.size() == 1 && mesh.doorLinks.size() == 1);
+        const auto &link = mesh.externalLinks.front();
+        Require(link.polygon == 0 && link.edge == 1 && link.navmeshId == 0x1234 && link.targetPolygon == 7);
+        Require(mesh.doorLinks.front().polygon == 0 && mesh.doorLinks.front().referenceId == 0x5678);
+        // Every truncated prefix must leave no partial or stale connection evidence.
+        for (std::size_t size{}; size < trailing.size(); ++size)
+        {
+            Require(!DecodeNavmeshConnections({trailing.data(), size}, mesh));
+            Require(mesh.externalLinks.empty() && mesh.doorLinks.empty());
+        }
+        mesh.polygons.front().neighbors[1] = 1;
+        Require(!DecodeNavmeshConnections(trailing, mesh));
+        mesh.polygons.front().flags = 0;
+        Require(DecodeNavmeshConnections(trailing, mesh) && mesh.externalLinks.empty());
+        trailing[18] = 1;
+        Require(!DecodeNavmeshConnections(trailing, mesh));
+    }
+
+    void TestNavmeshSceneConnections()
+
+    {
+
+        using namespace navmesh::core;
+
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-scene-connections-test";
+
+        std::filesystem::create_directories(root);
+
+        NavMesh original{.id = 0x99,
+
+                         .vertices = {{0, 0, 5}, {30, 0, 15}, {0, 30, 0}},
+
+                         .polygons = {{.vertices = {0, 1, 2}}},
+
+                         .externalLinks = {{0, 0, 0x100, 0}, {0, 1, 0x100, 20}, {0, 2, 0x200, 0}},
+
+                         .doorLinks = {{0, 0x42}}};
+
+        NavMesh neighbor{.id = 0x100,
+
+                         .vertices = {{30, 0, 15}, {0, 0, 5}, {30, -30, 5}},
+
+                         .polygons = {{.vertices = {0, 1, 2}}},
+
+                         .externalLinks = {{0, 0, 0x99, 0}}};
+
+        NavMesh candidate = original;
+        candidate.polygons.front().vertices = {2, 0, 1};
+
+        const std::vector<CandidateExit> doors{{.referenceId = 0x42, .position = {5, 5, 0}, .polygon = 0}};
+
+        const std::vector<CandidateBorderLink> links{{0, 1, 0x100, 0, 0}, {0, 1, 0x100, 20, 0}};
+
+        Cell cell{.navMeshes = {original}};
+
+        const navmesh::reproducibility::ExportMetadata metadata{.selectedCell = &cell};
+
+        SceneExportOptions options{.layers = {SceneLayer::Terrain, SceneLayer::CandidateNavmesh,
+
+                                              SceneLayer::DiagnosticMarkers, SceneLayer::ExistingNavmesh},
+
+                                   .candidateNavmesh = &candidate,
+
+                                   .candidateEntrances = &doors,
+
+                                   .candidateBorderLinks = &links};
+
+        const auto output = root / "scene.glb";
+
+        const auto exported = WriteCombinedGlb(output, {}, {original, neighbor}, {}, metadata, options);
+
+        Require(exported.objects == 6 && exported.triangles == 31);
+
+        std::ifstream glb(output, std::ios::binary);
+
+        std::uint32_t jsonLength{};
+
+        glb.seekg(12);
+
+        glb.read(reinterpret_cast<char *>(&jsonLength), sizeof(jsonLength));
+
+        glb.seekg(4, std::ios::cur);
+
+        std::string json(jsonLength, '\0');
+
+        glb.read(json.data(), jsonLength);
+
+        Require(json.contains("Original NAVM (current cell)") && json.contains("Neighboring NAVM"));
+
+        Require(json.contains("Candidate NAVM: door_linked") && json.contains("Existing NAVM 00000099: door_linked"));
+
+        Require(json.contains("Candidate link 0 -> 00000100:0") && json.contains("\"material\":14"));
+
+        Require(!json.contains("Candidate link 0 -> 00000100:20") && !json.contains("Diagnostic:"));
+
+        std::uint32_t binaryLength{}, binaryType{};
+        glb.read(reinterpret_cast<char *>(&binaryLength), sizeof(binaryLength));
+        glb.read(reinterpret_cast<char *>(&binaryType), sizeof(binaryType));
+        Require(binaryType == 0x004E4942);
+        std::vector<std::uint8_t> binary(binaryLength);
+        glb.read(reinterpret_cast<char *>(binary.data()), binaryLength);
+        // Resolve the named bar through glTF accessors and buffer views, then
+        // measure its prism end centers in world space, independently of object ordering.
+        const auto arrayObject = [&](const char *name, std::size_t index)
+        {
+            auto start = json.find(std::format("\"{}\":[", name));
+            Require(start != std::string::npos);
+            for (std::size_t entry{}; entry <= index; ++entry)
+            {
+                start = json.find('{', start);
+                Require(start != std::string::npos);
+                const auto end = json.find('}', start);
+                Require(end != std::string::npos);
+                if (entry == index)
+                {
+                    return json.substr(start, end - start + 1);
+                }
+                start = end + 1;
+            }
+            return std::string{};
+        };
+        const auto fieldIndex = [&](const std::string &object, const char *name)
+        {
+            const auto key = std::format("\"{}\":", name);
+            const auto start = object.find(key);
+            Require(start != std::string::npos);
+            return std::stoul(object.substr(start + key.size()));
+        };
+        for (const auto *name : {"Authored link 00000099:0 -> 00000100:0", "Candidate link 0 -> 00000100:0"})
+        {
+            const auto start = json.find(std::format("\"name\":\"{}\",\"primitives\"", name));
+            Require(start != std::string::npos);
+            const auto accessorIndex = fieldIndex(json.substr(start), "POSITION");
+            const auto accessor = arrayObject("accessors", accessorIndex);
+            Require(fieldIndex(accessor, "count") == 8);
+            const auto view = arrayObject("bufferViews", fieldIndex(accessor, "bufferView"));
+            const auto offset = fieldIndex(view, "byteOffset");
+            Require(offset + 8 * sizeof(Vec3) <= binary.size());
+            std::array<Vec3, 8> points;
+            std::memcpy(points.data(), binary.data() + offset, sizeof(points));
+            const std::array<Vec3, 2> expected{{{0, 0, 13}, {30, 0, 23}}};
+            for (std::size_t end{}; end < expected.size(); ++end)
+            {
+                Vec3 center;
+                for (std::size_t vertex{}; vertex < 4; ++vertex)
+                {
+                    center = center + points[end * 4 + vertex] / 4.0F;
+                }
+                Require(std::abs(center.x - expected[end].x) < 0.001F);
+                Require(std::abs(center.y - expected[end].y) < 0.001F);
+                Require(std::abs(center.z - expected[end].z) < 0.001F);
+            }
+        }
+        options.bounds = SceneBounds{.world = {.min = {-1, 1, -1}, .max = {50, 50, 50}}};
+
+        const auto culled = WriteCombinedGlb(root / "culled.glb", {}, {original, neighbor}, {}, metadata, options);
+
+        Require(culled.objects == 3 && culled.triangles == 6);
+
+        neighbor.vertices.pop_back();
+
+        options.bounds.reset();
+
+        const auto invalid = WriteCombinedGlb(root / "invalid.glb", {}, {original, neighbor}, {}, metadata, options);
+
+        Require(invalid.objects == 3 && invalid.triangles == 6);
+    }
+
     void TestCombinedColorLayeredGlb()
     {
-        const auto root = std::filesystem::temp_directory_path() / "navmesh-combined-glb-test"; std::filesystem::remove_all(root); std::filesystem::create_directories(root);
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-combined-glb-test";
+        std::filesystem::remove_all(root);
+        std::filesystem::create_directories(root);
         navmesh::core::Scene scene;
-        scene.geometrySources.push_back({ .modelPath = "meshes/fixture.nif", .sourceType = navmesh::core::GeometrySourceType::Collision, .collisionType = "hkPackedNiTriStripsData", .confidence = 1.0F, .reference = { "Fixture.esp", 0x42, "REFR" } });
-        scene.mesh = { .vertices = { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 } }, .triangles = { { { 0, 1, 2 } } } }; scene.triangleProvenance.push_back({ 0, 0 });
-        navmesh::core::NavMesh navmesh{ .id = 0x99, .vertices = scene.mesh.vertices, .polygons = { { .vertices = { 0, 1, 2 } } } };
-        navmesh::core::Cell cell{ .id = 0x1234, .editorId = "Fixture" }; const navmesh::reproducibility::ExportMetadata metadata{ .selectedCell = &cell };
+        scene.geometrySources.push_back({.modelPath = "meshes/fixture.nif",
+                                         .sourceType = navmesh::core::GeometrySourceType::Collision,
+                                         .collisionType = "hkPackedNiTriStripsData",
+                                         .confidence = 1.0F,
+                                         .reference = {"Fixture.esp", 0x42, "REFR"}});
+        scene.mesh = {.vertices = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, .triangles = {{{0, 1, 2}}}};
+        scene.triangleProvenance.push_back({0, 0});
+        navmesh::core::NavMesh navmesh{
+            .id = 0x99, .vertices = scene.mesh.vertices, .polygons = {{.vertices = {0, 1, 2}}}};
+        navmesh::core::Cell cell{.id = 0x1234, .editorId = "Fixture"};
+        const navmesh::reproducibility::ExportMetadata metadata{.selectedCell = &cell};
         const auto output = root / "scene.glb";
-        const auto exported = navmesh::core::WriteCombinedGlb(output, scene, { navmesh }, { { .position = { 0, 0, 2 }, .classification = "floating", .navmeshPolygon = 0, .navmeshFormId = navmesh.id } }, metadata);
-        Require(exported.objects == 3 && exported.triangles == 6); Require(std::filesystem::file_size(output) > 100);
-        std::ifstream glb(output, std::ios::binary); std::uint32_t magic{}; glb.read(reinterpret_cast<char*>(&magic), sizeof(magic)); Require(magic == 0x46546C67);
-        std::uint32_t version{}, length{}, jsonLength{}, jsonType{}; glb.read(reinterpret_cast<char*>(&version), sizeof(version)); glb.read(reinterpret_cast<char*>(&length), sizeof(length)); glb.read(reinterpret_cast<char*>(&jsonLength), sizeof(jsonLength)); glb.read(reinterpret_cast<char*>(&jsonType), sizeof(jsonType)); std::string gltf(jsonLength, '\0'); glb.read(gltf.data(), jsonLength); Require(gltf.contains("\"name\":\"Terrain\",\"children\":[]") && gltf.contains("\"name\":\"Collision\",\"children\":["));
+        const auto exported = navmesh::core::WriteCombinedGlb(
+            output, scene, {navmesh},
+            {{.position = {0, 0, 2}, .classification = "floating", .navmeshPolygon = 0, .navmeshFormId = navmesh.id}},
+            metadata);
+        Require(exported.objects == 2 && exported.triangles == 2);
+        Require(std::filesystem::file_size(output) > 100);
+        std::ifstream glb(output, std::ios::binary);
+        std::uint32_t magic{};
+        glb.read(reinterpret_cast<char *>(&magic), sizeof(magic));
+        Require(magic == 0x46546C67);
+        std::uint32_t version{}, length{}, jsonLength{}, jsonType{};
+        glb.read(reinterpret_cast<char *>(&version), sizeof(version));
+        glb.read(reinterpret_cast<char *>(&length), sizeof(length));
+        glb.read(reinterpret_cast<char *>(&jsonLength), sizeof(jsonLength));
+        glb.read(reinterpret_cast<char *>(&jsonType), sizeof(jsonType));
+        std::string gltf(jsonLength, '\0');
+        glb.read(gltf.data(), jsonLength);
+        Require(gltf.contains("\"name\":\"Terrain\",\"children\":[]") &&
+                gltf.contains("\"name\":\"Collision\",\"children\":["));
         Require(gltf.contains("\"name\":\"Existing NAVM 00000099: floating\"") && gltf.contains("\"material\":5"));
-        Require(gltf.contains("\"name\":\"Too steep (yellow)\"") && gltf.contains("\"name\":\"Blocked (magenta)\"") && gltf.contains("\"name\":\"Out of coverage (blue)\"") && gltf.contains("\"name\":\"Ambiguous (violet)\""));
-        std::ifstream provenance(output.string() + ".provenance.json"); std::string text((std::istreambuf_iterator<char>(provenance)), {}); Require(text.contains("Collision") && text.contains("Fixture.esp") && text.contains("Diagnostic: floating"));
-        const std::array<std::pair<const char*, std::size_t>, 7> classifications{{ { "supported", 4 }, { "floating", 5 }, { "buried", 6 }, { "too_steep", 7 }, { "blocked", 8 }, { "out_of_coverage", 9 }, { "ambiguous", 10 } }};
+        Require(gltf.contains("\"name\":\"Too steep (yellow)\"") && gltf.contains("\"name\":\"Blocked (magenta)\"") &&
+                gltf.contains("\"name\":\"Out of coverage (blue)\"") &&
+                gltf.contains("\"name\":\"Ambiguous (violet)\""));
+        std::ifstream provenance(output.string() + ".provenance.json");
+        std::string text((std::istreambuf_iterator<char>(provenance)), {});
+        Require(text.contains("Collision") && text.contains("Fixture.esp") && !text.contains("Diagnostic: floating"));
+        const std::array<std::pair<const char *, std::size_t>, 7> classifications{{{"supported", 4},
+                                                                                   {"floating", 5},
+                                                                                   {"buried", 6},
+                                                                                   {"too_steep", 7},
+                                                                                   {"blocked", 8},
+                                                                                   {"out_of_coverage", 9},
+                                                                                   {"ambiguous", 10}}};
         navmesh.polygons.resize(classifications.size() + 1, navmesh.polygons.front());
         std::vector<navmesh::core::DiagnosticMarker> classMarkers;
-        for (std::size_t i{}; i < classifications.size(); ++i) classMarkers.push_back({ .classification = classifications[i].first, .navmeshPolygon = i, .navmeshFormId = navmesh.id });
-        navmesh::core::SceneExportOptions navmeshOnly{ .layers = { navmesh::core::SceneLayer::ExistingNavmesh } };
+        for (std::size_t i{}; i < classifications.size(); ++i)
+        {
+            classMarkers.push_back(
+                {.classification = classifications[i].first, .navmeshPolygon = i, .navmeshFormId = navmesh.id});
+        }
+        navmesh::core::SceneExportOptions navmeshOnly{.layers = {navmesh::core::SceneLayer::ExistingNavmesh}};
         const auto classifiedPath = root / "classified.glb";
-        const auto classified = navmesh::core::WriteCombinedGlb(classifiedPath, scene, { navmesh }, classMarkers, metadata, navmeshOnly);
+        const auto classified =
+            navmesh::core::WriteCombinedGlb(classifiedPath, scene, {navmesh}, classMarkers, metadata, navmeshOnly);
         Require(classified.objects == classifications.size() + 1 && classified.triangles == classifications.size() + 1);
-        std::ifstream classifiedGlb(classifiedPath, std::ios::binary); classifiedGlb.seekg(12); classifiedGlb.read(reinterpret_cast<char*>(&jsonLength), sizeof(jsonLength)); classifiedGlb.seekg(4, std::ios::cur); std::string classifiedJson(jsonLength, '\0'); classifiedGlb.read(classifiedJson.data(), jsonLength);
-        for (const auto& [name, material] : classifications) {
-            const auto start = classifiedJson.find(std::format("\"name\":\"Existing NAVM 00000099: {}\",\"primitives\"", name));
+        std::ifstream classifiedGlb(classifiedPath, std::ios::binary);
+        classifiedGlb.seekg(12);
+        classifiedGlb.read(reinterpret_cast<char *>(&jsonLength), sizeof(jsonLength));
+        classifiedGlb.seekg(4, std::ios::cur);
+        std::string classifiedJson(jsonLength, '\0');
+        classifiedGlb.read(classifiedJson.data(), jsonLength);
+        for (const auto &[name, material] : classifications)
+        {
+            const auto start =
+                classifiedJson.find(std::format("\"name\":\"Existing NAVM 00000099: {}\",\"primitives\"", name));
             Require(start != std::string::npos);
             const auto end = classifiedJson.find("}]}", start);
-            Require(end != std::string::npos && classifiedJson.substr(start, end - start).contains(std::format("\"material\":{}", material)));
+            Require(end != std::string::npos &&
+                    classifiedJson.substr(start, end - start).contains(std::format("\"material\":{}", material)));
         }
         Require(classifiedJson.contains("\"name\":\"Existing NAVM 00000099: unclassified\""));
-        navmesh::core::SceneExportOptions cull{ .layers = { navmesh::core::SceneLayer::Collision }, .bounds = navmesh::core::SceneBounds{ .world = { .min = { 100, 100, -1 }, .max = { 101, 101, 1 } } } };
-        const auto culled = navmesh::core::WriteCombinedGlb(root / "culled.glb", scene, {}, {}, metadata, cull); Require(culled.triangles == 0 && culled.culledTriangles == 1);
+        navmesh::core::SceneExportOptions cull{
+            .layers = {navmesh::core::SceneLayer::Collision},
+            .bounds = navmesh::core::SceneBounds{.world = {.min = {100, 100, -1}, .max = {101, 101, 1}}}};
+        const auto culled = navmesh::core::WriteCombinedGlb(root / "culled.glb", scene, {}, {}, metadata, cull);
+        Require(culled.triangles == 0 && culled.culledTriangles == 1);
     }
     void TestCandidateGeneration()
     {
@@ -1500,7 +1733,7 @@ namespace
         std::ifstream candidateJson(root / "candidate.json", std::ios::binary);
         const std::string candidateBytes(std::istreambuf_iterator<char>(candidateJson), {});
         Require(candidateBytes.contains("\"profile\": {\"name\":\"human\",\"agent_radius\":"));
-        SceneExportOptions options{.layers = {SceneLayer::CandidateNavmesh},
+        SceneExportOptions options{.layers = {SceneLayer::CandidateNavmesh, SceneLayer::DiagnosticMarkers},
                                    .candidateNavmesh = &doorLinked.mesh,
                                    .candidateEntrances = &doorLinked.exits};
         Cell cell{.id = 0x100, .editorId = "Fixture"};
@@ -1509,7 +1742,7 @@ namespace
         Require(exported.triangles == doorLinked.mesh.polygons.size() + 4);
         std::ifstream entranceGlb(root / "scene.glb", std::ios::binary);
         const std::string entranceBytes(std::istreambuf_iterator<char>(entranceGlb), {});
-        Require(entranceBytes.contains("Entrance (orange)") && entranceBytes.contains("Entrance 00000200"));
+        Require(entranceBytes.contains("Door / door-linked NAVM (orange)") && entranceBytes.contains("Door 00000200"));
 
         Scene stairs;
         stairs.geometrySources = scene.geometrySources;
@@ -1653,7 +1886,13 @@ int main(int argc, char** argv)
         TestReciprocalCellTransitions(2.5F, true);
         return 0;
     }
-    if (argc > 1 && std::string_view(argv[1]) == "--scene-only") { TestCombinedColorLayeredGlb(); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--scene-only")
+    {
+        TestAuthoredNavmeshConnections();
+        TestNavmeshSceneConnections();
+        TestCombinedColorLayeredGlb();
+        return 0;
+    }
     if (argc > 1 && std::string_view(argv[1]) == "--candidate-only") { TestCandidateGeneration(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--recast-only") { TestRecastSceneGeneration(); return 0; }
     if (argc > 2 && std::string_view(argv[1]) == "--local-stair-obj") { TestLocalStairs(argv[2]); return 0; }
@@ -1685,6 +1924,8 @@ int main(int argc, char** argv)
     TestBstTriShapeExtraction();
     TestPackedCollisionPreferredOverRenderFixture();
     TestSceneTransforms();
+    TestAuthoredNavmeshConnections();
+    TestNavmeshSceneConnections();
     TestCombinedColorLayeredGlb();
     TestCandidateGeneration();
     TestRecastSceneGeneration();

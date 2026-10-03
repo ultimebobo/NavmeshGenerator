@@ -24,6 +24,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -32,6 +33,51 @@
 
 namespace
 {
+    /// Scene markers identify exits from teleport metadata or authored door associations,
+    /// independently of whether this run generated a candidate. Cave exits need no visible model.
+    [[nodiscard]] std::vector<navmesh::core::CandidateExit> CollectSceneDoors(
+        const std::vector<navmesh::core::Cell> &cells, const std::vector<navmesh::core::NavMesh> &meshes,
+        const navmesh::core::CandidateNavMesh *candidate)
+    {
+        std::set<std::uint32_t> authoredDoors;
+        for (const auto &mesh : meshes)
+        {
+            for (const auto &link : mesh.doorLinks)
+            {
+                authoredDoors.insert(link.referenceId);
+            }
+        }
+        std::map<std::uint32_t, navmesh::core::CandidateExit> doors;
+        for (const auto &cell : cells)
+        {
+            for (const auto &reference : cell.references)
+            {
+                if (!reference.deleted && !reference.initiallyDisabled &&
+                    (reference.teleportExit || authoredDoors.contains(reference.id)))
+                {
+                    doors.try_emplace(reference.id, navmesh::core::CandidateExit{.referenceId = reference.id,
+                                                                                 .position = reference.position});
+                }
+            }
+        }
+        if (candidate)
+        {
+            for (const auto &exit : candidate->exits)
+            {
+                if (doors.contains(exit.referenceId))
+                {
+                    doors[exit.referenceId] = exit;
+                }
+            }
+        }
+        std::vector<navmesh::core::CandidateExit> result;
+        for (const auto &[id, door] : doors)
+        {
+            result.push_back(door);
+        }
+        return result;
+    }
+
     [[nodiscard]] bool EqualsIgnoreCase(const std::string &left, const std::string &right)
     {
         return left.size() == right.size() &&
@@ -815,13 +861,15 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         return 2;
     }
     std::cout << navmeshCounts;
+    const auto sceneDoors = CollectSceneDoors(sceneCells, sceneNavmeshes, candidate ? &*candidate : nullptr);
     navmesh::core::SceneExportOptions sceneOptions{.layers = ParseSceneLayers(options.geometryLayers),
-                                                   .detailedProvenance = options.outputDetail != "summary"};
+                                                   .detailedProvenance = options.outputDetail != "summary",
+                                                   .candidateEntrances = &sceneDoors};
     if (candidate)
     {
         sceneOptions.layers.push_back(navmesh::core::SceneLayer::CandidateNavmesh);
         sceneOptions.candidateNavmesh = &candidate->mesh;
-        sceneOptions.candidateEntrances = &candidate->exits;
+        sceneOptions.candidateBorderLinks = &candidate->borderLinks;
     }
     if (options.sceneBounds)
     {
