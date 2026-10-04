@@ -179,13 +179,16 @@ class BatchRebuild(unittest.TestCase):
         for tagged, untagged in zip(tagged_candidate["polygons"], untagged_candidate["polygons"]):
             self.assertEqual(tagged["vertices"], untagged["vertices"])
             self.assertEqual(tagged["neighbors"], untagged["neighbors"])
-        for kind, _, _, payload in read_records(disabled / "generated-navmesh.esp"):
+        for kind, form, _, payload in read_records(disabled / "generated-navmesh.esp"):
             if kind == "NAVM":
                 body = payload[6:]
                 triangle_at = 20 + struct.unpack_from("<I", body, 16)[0] * 12
                 count = struct.unpack_from("<I", body, triangle_at)[0]
-                self.assertFalse(any(struct.unpack_from("<H", body, triangle_at + 4 + i * 16 + 12)[0] & 0x240
-                                     for i in range(count)))
+                flags = [struct.unpack_from("<H", body, triangle_at + 4 + i * 16 + 12)[0] for i in range(count)]
+                if form & 0xffffff == 0x200:
+                    self.assertFalse(any(flag & 0x240 for flag in flags))
+                else:
+                    self.assertTrue(any(flag & 0x40 for flag in flags))  # Authored neighbors retain their tags.
         batch = self.run_cli("--rebuild-plugin", "Patch.esp", output="tagged-batch")
         check(json.loads((batch / "cells/00000100/candidate-navm.json").read_text()), True)
         disabled_batch = self.run_cli("--rebuild-plugin", "Patch.esp", "--no-triangle-tagging",
@@ -220,12 +223,79 @@ class BatchRebuild(unittest.TestCase):
         output = self.run_cli("--cell-formid", "100", "--generate-candidate", output="parent-water")
         self.assertTrue(any(p["water"] for p in json.loads((output / "candidate-navm.json").read_text())["polygons"]))
 
+    def test_authored_crossings_survive_cell_and_batch_generation(self):
+        def with_portal(payload, polygon, edge, target, target_polygon):
+            body = bytearray(payload[6:])
+            vertex_count = struct.unpack_from("<I", body, 16)[0]
+            triangle_at = 20 + vertex_count * 12
+            triangle_count = struct.unpack_from("<I", body, triangle_at)[0]
+            face_at = triangle_at + 4 + polygon * 16
+            struct.pack_into("<H", body, face_at + 6 + edge * 2, 0)
+            struct.pack_into("<H", body, face_at + 12, 1 << edge)
+            tail_at = triangle_at + 4 + triangle_count * 16
+            body[tail_at:tail_at + 4] = struct.pack("<IIIH", 1, 0, target, target_polygon)
+            return sub("NVNM", bytes(body))
+
+        self.write_baseline(navmeshes={
+            0: with_portal(navm(0), 0, 1, 0x201, 1),
+            1: with_portal(navm(1), 1, 2, 0x200, 0),
+            2: navm(2)})
+        single = self.run_cli("--cell-formid", "100", "--generate-plugin", output="authored-cell")
+        batch = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", output="authored-batch")
+        for output, path in [(single, single / "candidate-navm.json"),
+                             (batch, batch / "cells" / "00000100" / "candidate-navm.json")]:
+            with self.subTest(output=output):
+                candidate = json.loads(path.read_text())
+                self.assertTrue(candidate["topology"]["valid"])
+                portals = [link for link in candidate["border_links"]
+                           if int(link["neighbor_navmesh_id"], 16) == 0x201]
+                self.assertEqual(len(portals), 1)
+                link = portals[0]
+                face = candidate["polygons"][link["polygon"]]["vertices"]
+                self.assertEqual(candidate["vertices"][face[link["edge"]]], [4096, 0, 0])
+                self.assertEqual(candidate["vertices"][face[(link["edge"] + 1) % 3]], [4096, 4096, 0])
+                self.assertTrue((output / "generated-navmesh.esp").is_file())
+
+    def test_authored_crossings_survive_cell_and_batch_generation(self):
+        def with_portal(payload, polygon, edge, target, target_polygon):
+            body = bytearray(payload[6:])
+            vertex_count = struct.unpack_from("<I", body, 16)[0]
+            triangle_at = 20 + vertex_count * 12
+            triangle_count = struct.unpack_from("<I", body, triangle_at)[0]
+            face_at = triangle_at + 4 + polygon * 16
+            struct.pack_into("<H", body, face_at + 6 + edge * 2, 0)
+            struct.pack_into("<H", body, face_at + 12, 1 << edge)
+            tail_at = triangle_at + 4 + triangle_count * 16
+            body[tail_at:tail_at + 4] = struct.pack("<II IH", 1, 0, target, target_polygon)
+            return sub("NVNM", bytes(body))
+
+        self.write_baseline(navmeshes={
+            0: with_portal(navm(0), 0, 1, 0x201, 1),
+            1: with_portal(navm(1), 1, 2, 0x200, 0),
+            2: navm(2)})
+        single = self.run_cli("--cell-formid", "100", "--generate-plugin", output="authored-cell")
+        batch = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", output="authored-batch")
+        for output, path in [(single, single / "candidate-navm.json"),
+                             (batch, batch / "cells" / "00000100" / "candidate-navm.json")]:
+            with self.subTest(output=output):
+                candidate = json.loads(path.read_text())
+                self.assertTrue(candidate["topology"]["valid"])
+                portals = [link for link in candidate["border_links"]
+                           if int(link["neighbor_navmesh_id"], 16) == 0x201]
+                self.assertEqual(len(portals), 1)
+                link = portals[0]
+                face = candidate["polygons"][link["polygon"]]["vertices"]
+                self.assertEqual(candidate["vertices"][face[link["edge"]]], [4096, 0, 0])
+                self.assertEqual(candidate["vertices"][face[(link["edge"] + 1) % 3]], [4096, 4096, 0])
+                self.assertTrue((output / "generated-navmesh.esp").is_file())
+
     def test_generated_polygons_reach_door_or_border(self):
         """Check actual adjacency after border stitching in both shared run paths."""
         single = self.run_cli("--cell-formid", "100", "--generate-candidate", output="reachable-cell")
         batch = self.run_cli("--rebuild-plugin", "Patch.esp", output="reachable-batch")
         candidates = [(single / "candidate-navm.json", 0)]
         candidates.extend((batch / "cells" / f"{0x100 + x:08X}" / "candidate-navm.json", x) for x in range(2))
+        generated_neighbors = {0x200 + x: json.loads(path.read_text()) for path, x in candidates[1:]}
         for path, cell_x in candidates:
             with self.subTest(path=path):
                 candidate = json.loads(path.read_text())
@@ -233,6 +303,22 @@ class BatchRebuild(unittest.TestCase):
                 self.assertGreater(len(polygons), 0)
                 pending = [door["polygon"] for door in candidate["exits"] if door["polygon"] is not None]
                 pending.extend(link["polygon"] for link in candidate["border_links"])
+                self.assertGreater(len(candidate["border_links"]), 0)
+                for link in candidate["border_links"]:
+                    target_id = int(link["neighbor_navmesh_id"], 16)
+                    if path != single / "candidate-navm.json" and target_id in generated_neighbors:
+                        target = generated_neighbors[target_id]
+                        target_vertices = target["vertices"]
+                        target_face = target["polygons"][link["neighbor_polygon"]]["vertices"]
+                    else:
+                        positions, faces = navm_geometry(navm(target_id - 0x200))
+                        target_vertices = list(struct.iter_unpack("<3f", positions))
+                        target_face = struct.unpack("<3H", faces[link["neighbor_polygon"]])
+                    source_face = polygons[link["polygon"]]["vertices"]
+                    self.assertEqual(tuple(candidate["vertices"][source_face[link["edge"]]]),
+                                     tuple(target_vertices[target_face[(link["neighbor_edge"] + 1) % 3]]))
+                    self.assertEqual(tuple(candidate["vertices"][source_face[(link["edge"] + 1) % 3]]),
+                                     tuple(target_vertices[target_face[link["neighbor_edge"]]]))
                 for index, polygon in enumerate(polygons):
                     for edge, neighbor in enumerate(polygon["neighbors"]):
                         if neighbor is not None:
@@ -242,7 +328,8 @@ class BatchRebuild(unittest.TestCase):
                         if any(abs(a[axis] - limit) <= candidate["profile"]["weld_tolerance"] and
                                abs(b[axis] - limit) <= candidate["profile"]["weld_tolerance"]
                                for axis, limit in ((0, cell_x * 4096), (0, (cell_x + 1) * 4096), (1, 0), (1, 4096))):
-                            pending.append(index)
+                            self.assertIn((index, edge), {(link["polygon"], link["edge"])
+                                                         for link in candidate["border_links"]})
                 reachable = set()
                 while pending:
                     index = pending.pop()
@@ -252,6 +339,30 @@ class BatchRebuild(unittest.TestCase):
                     reachable.add(index)
                     pending.extend(neighbor for neighbor in polygons[index]["neighbors"] if neighbor is not None)
                 self.assertEqual(reachable, set(range(len(polygons))))
+
+    def test_isolated_candidates_are_skipped_without_a_patch(self):
+        self.write_baseline({})
+        single = self.run_cli("--cell-formid", "100", "--generate-plugin", "--skip-existing-navmesh",
+                              output="isolated-cell")
+        candidate = json.loads((single / "candidate-navm.json").read_text())
+        self.assertEqual(candidate["polygons"], [])
+        self.assertEqual(candidate["vertices"], [])
+        self.assertEqual(json.loads((single / "generation-report.json").read_text())["status"],
+                         "skipped_empty_candidate")
+        self.assertFalse((single / "generated-navmesh.esp").exists())
+        batch = self.run_cli("--rebuild-load-order", "--generate-plugin", "--skip-existing-navmesh",
+                             output="isolated-batch")
+        self.assertTrue(all(cell["status"] == "skipped_empty_candidate"
+                            for cell in json.loads((batch / "batch-report.json").read_text())["cells"]))
+        self.assertFalse((batch / "generated-navmesh.esp").exists())
+
+        preview = self.root / "isolated-preview"
+        completed = subprocess.run([str(EXE), "--plugin", str(self.root / "Baseline.esm"),
+                                    "--cell-formid", "100", "--terrain-only", "--generate-candidate",
+                                    "--asset-cache", str(self.root / "cache"), "--output", str(preview)],
+                                   capture_output=True, text=True, timeout=90)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(json.loads((preview / "candidate-navm.json").read_text())["polygons"], [])
 
     def test_baseline_only_has_no_changes(self):
         (self.root / "plugins.txt").write_text("Baseline.esm\n")
@@ -519,7 +630,12 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(json.loads((output / "generation-report.json").read_text())["status"], "skipped_existing_navm")
 
     def test_multiple_uncovered_cells_get_unique_plugin_owned_records(self):
-        self.write_baseline({})
+        references = {x: record("REFR", 0x500 + x, sub("NAME", struct.pack("<I", 0x600)) +
+                                sub("DATA", struct.pack("<6f", x * 4096 + 2048, 2048, 0, 0, 0, 0)))
+                      for x in range(3)}
+        self.write_baseline({}, references)
+        baseline = self.root / "Baseline.esm"
+        baseline.write_bytes(baseline.read_bytes() + record("DOOR", 0x600, b""))
         output = self.run_cli("--rebuild-load-order", "--neighboring-cell-radius", "1",
                               "--generate-plugin", "--skip-existing-navmesh")
         report = json.loads((output / "batch-report.json").read_text())
@@ -620,8 +736,11 @@ class BatchRebuild(unittest.TestCase):
             self.assertIn("door-linked", material["name"])
             self.assertGreater(material["pbrMetallicRoughness"]["baseColorFactor"][0],
                                material["pbrMetallicRoughness"]["baseColorFactor"][1])
-            bars = [mesh for mesh in scene["meshes"] if mesh["name"].startswith("Authored link")]
+            bar_prefix = "Candidate link" if generating else "Authored link"
+            bars = [mesh for mesh in scene["meshes"] if mesh["name"].startswith(bar_prefix)]
             self.assertEqual(len(bars), 1)  # Reciprocal directions share one bar.
+            if generating:
+                self.assertFalse(any(name.startswith("Authored link") for name in names))
             bar = bars[0]["primitives"][0]
             color = scene["materials"][bar["material"]]["pbrMetallicRoughness"]["baseColorFactor"]
             self.assertGreater(color[1], color[0])
@@ -656,6 +775,17 @@ class BatchRebuild(unittest.TestCase):
         self.assertIn("Door 00000501", names)
         self.assertNotIn("Door 00000502", names)
         self.assertNotIn("Door 00000503", names)
+
+        preview_output = self.root / "scene-single-plugin-candidate"
+        completed = subprocess.run([str(EXE), "--plugin", str(baseline), "--cell-formid", "100",
+                                    "--terrain-only", "--generate-candidate", "--output", str(preview_output),
+                                    "--asset-cache", str(self.root / "cache")],
+                                   capture_output=True, text=True, timeout=90)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        preview, _ = read_scene(preview_output)
+        preview_names = [node["name"] for node in preview["nodes"]]
+        self.assertTrue(any(name.startswith("Candidate link") for name in preview_names))
+        self.assertFalse(any(name.startswith("Authored link") for name in preview_names))
 
         # Culling either triangle removes its connecting bar; layer filtering keeps stable order.
         output = self.run_cli("--cell-formid", "01000100", "--neighboring-cell-radius", "1",

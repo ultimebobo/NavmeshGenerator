@@ -119,15 +119,18 @@ Generated-to-generated borders are redirected to generated triangle indices
 and must have matching full edges and reciprocal targets. Incompatible border
 partitions fail the batch before a final ESP is created. Adjacent cells outside
 the rebuilding set keep their geometry and receive reciprocal portal overrides
-where required. Existing output plugins are refused. Every emitted NAVM is read
+where required. Each cell's authored exterior crossings constrain generation;
+missing required crossings fail candidate validation before batch reconciliation
+or plugin writing. Candidate cache inputs include these selected-cell portals.
+Existing output plugins are refused. Every emitted NAVM is read
 back before the temporary file is finalized.
 
 In uncovered-cell mode, authored neighbor vertices and triangles are preserved;
 matched borders may add reciprocal portal links to them. Generated navigation
-retains only components reaching a matched door or an exterior CELL boundary
-edge, without an authored portal requirement. Unmatched
-borders remain unlinked, including between newly covered cells, and require
-independent connection review. The generated ESP is light-flagged only when its
+retains only components reaching a matched door or a real neighboring portal
+after stitching against the authored snapshot. Unmatched seam wedges retract
+into the CELL, and isolated candidates are skipped. Surviving navigation still
+requires independent connection review. The generated ESP is light-flagged only when its
 master table and newly allocated identities fit the light format.
 
 The existing writer limitations still apply: NAVI, teleport-door XNDP, cover and

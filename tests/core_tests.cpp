@@ -34,6 +34,7 @@
 #include <filesystem>
 #include <fstream>
 #include <source_location>
+#include <set>
 #include <sstream>
 #include <string_view>
 #include <vector>
@@ -540,6 +541,355 @@ namespace
                                                         {{&*selected, &candidate}, {&*adjacent, &adjacentCandidate}},
                                                         output, error));
     }
+    void RequireCompleteBorderStitch(const navmesh::core::CandidateNavMesh &candidate,
+                                     const navmesh::core::AABB &bounds,
+                                     const std::vector<navmesh::core::NavMesh> &neighbors)
+    {
+        using namespace navmesh::core;
+        Require(candidate.topology.valid);
+        std::set<std::pair<std::uint32_t, std::uint8_t>> linked;
+        std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint8_t>> destinations;
+        const auto equal = [](Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; };
+        std::vector<Vec3> matchedVertices;
+        for (const auto &link : candidate.borderLinks)
+        {
+            Require(linked.emplace(link.polygon, link.edge).second);
+            Require(destinations.emplace(link.neighborNavmeshId, link.neighborPolygon, link.neighborEdge).second);
+            const auto target = std::find_if(neighbors.begin(), neighbors.end(),
+                                             [&](const auto &mesh) { return mesh.id == link.neighborNavmeshId; });
+            Require(target != neighbors.end());
+            const auto &sourceFace = candidate.mesh.polygons.at(link.polygon);
+            const auto &targetFace = target->polygons.at(link.neighborPolygon);
+            matchedVertices.push_back(target->vertices.at(targetFace.vertices.at(link.neighborEdge)));
+            matchedVertices.push_back(target->vertices.at(targetFace.vertices.at((link.neighborEdge + 1) % 3)));
+            Require(sourceFace.neighbors.at(link.edge) == std::numeric_limits<std::uint32_t>::max());
+            Require(equal(candidate.mesh.vertices.at(sourceFace.vertices.at(link.edge)),
+                          target->vertices.at(targetFace.vertices.at((link.neighborEdge + 1) % 3))));
+            Require(equal(candidate.mesh.vertices.at(sourceFace.vertices.at((link.edge + 1) % 3)),
+                          target->vertices.at(targetFace.vertices.at(link.neighborEdge))));
+        }
+        for (std::uint32_t polygon{}; polygon < candidate.mesh.polygons.size(); ++polygon)
+        {
+            const auto &face = candidate.mesh.polygons[polygon];
+            for (std::uint8_t edge{}; edge < 3; ++edge)
+            {
+                const auto a = candidate.mesh.vertices[face.vertices[edge]];
+                const auto b = candidate.mesh.vertices[face.vertices[(edge + 1) % 3]];
+                const bool border =
+                    (a.x == bounds.min.x && b.x == bounds.min.x) || (a.x == bounds.max.x && b.x == bounds.max.x) ||
+                    (a.y == bounds.min.y && b.y == bounds.min.y) || (a.y == bounds.max.y && b.y == bounds.max.y);
+                if (border)
+                {
+                    Require(linked.contains({polygon, edge}));
+                }
+            }
+        }
+        for (const auto vertex : candidate.mesh.vertices)
+        {
+            if (vertex.x == bounds.min.x || vertex.x == bounds.max.x || vertex.y == bounds.min.y ||
+                vertex.y == bounds.max.y)
+            {
+                Require(std::any_of(matchedVertices.begin(), matchedVertices.end(),
+                                    [&](Vec3 other) { return equal(vertex, other); }));
+            }
+        }
+        std::vector<bool> reached(candidate.mesh.polygons.size());
+        std::vector<std::uint32_t> pending;
+        for (const auto &link : candidate.borderLinks)
+        {
+            pending.push_back(link.polygon);
+        }
+        for (const auto &door : candidate.exits)
+        {
+            if (door.polygon)
+            {
+                Require(door.region && *door.region < candidate.regions.size());
+                pending.push_back(*door.polygon);
+            }
+        }
+        while (!pending.empty())
+        {
+            const auto polygon = pending.back();
+            pending.pop_back();
+            if (reached[polygon])
+            {
+                continue;
+            }
+            reached[polygon] = true;
+            for (const auto neighbor : candidate.mesh.polygons[polygon].neighbors)
+            {
+                if (neighbor != std::numeric_limits<std::uint32_t>::max())
+                {
+                    pending.push_back(neighbor);
+                }
+            }
+        }
+        Require(std::all_of(reached.begin(), reached.end(), [](bool value) { return value; }));
+    }
+
+    void TestAuthoredPortalPreservation()
+    {
+        using namespace navmesh::core;
+        const auto open = std::numeric_limits<std::uint32_t>::max();
+        const AABB bounds{.min = {0, 0, -100}, .max = {300, 300, 100}};
+        for (int rotation{}; rotation < 4; ++rotation)
+        {
+            // A shallow generated fan cannot reach a lower authored portal by
+            // splitting its thin triangle. Repair must use the surrounding floor.
+            CandidateNavMesh generated;
+            generated.mesh.vertices = {{0, 0, 10}, {300, 0, 10}, {150, 1, 10}, {150, 150, 10}};
+            generated.mesh.polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, 1, 2}},
+                                       {.vertices = {1, 3, 2}, .neighbors = {open, 2, 0}},
+                                       {.vertices = {2, 3, 0}, .neighbors = {1, open, 0}}};
+            generated.polygonSourceTriangles = {0, 1, 2};
+            for (auto &face : generated.mesh.polygons)
+            {
+                face.flags = WaterFlag;
+            }
+            generated.polygonContributingTriangles = {{0}, {1}, {2}};
+            generated.regions = {{.id = 0, .polygons = {0, 1, 2}}};
+            generated.exits = {{.referenceId = 0x300, .position = {150, 0.5F, 10}, .region = 0, .polygon = 0}};
+            NavMesh authored{.id = 0x200,
+                             .vertices = {{20, 0, 0}, {280, 0, 0}, {150, 150, 0}},
+                             .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}},
+                             .externalLinks = {{0, 0, 0x201, 0}}};
+            NavMesh neighbor{.id = 0x201,
+                             .vertices = {{280, 0, 0}, {20, 0, 0}, {150, -150, 0}},
+                             .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}},
+                             .externalLinks = {{0, 0, 0x200, 0}}};
+            const auto rotate = [](Vec3 point) { return Vec3{300 - point.y, point.x, point.z}; };
+            for (int turn{}; turn < rotation; ++turn)
+            {
+                for (auto &point : generated.mesh.vertices)
+                {
+                    point = rotate(point);
+                }
+                for (auto &point : authored.vertices)
+                {
+                    point = rotate(point);
+                }
+                for (auto &point : neighbor.vertices)
+                {
+                    point = rotate(point);
+                }
+                generated.exits.front().position = rotate(generated.exits.front().position);
+            }
+            auto unconstrained = generated;
+            Require(StitchCandidateBorders(unconstrained, bounds, {neighbor}) == 0);
+            Require(StitchCandidateBorders(generated, bounds, {neighbor}, {authored}) == 1);
+            RequireCompleteBorderStitch(generated, bounds, {neighbor});
+            Require(generated.exits.front().polygon.has_value());
+            Require(generated.borderLinks.front().neighborNavmeshId == neighbor.id &&
+                    generated.borderLinks.front().neighborPolygon == 0 &&
+                    generated.borderLinks.front().neighborEdge == 0);
+            const auto portal = generated.borderLinks.front().polygon;
+            Require(generated.mesh.polygons[portal].flags == WaterFlag);
+            Require(generated.polygonContributingTriangles[portal] == std::vector<std::size_t>({0, 1, 2}));
+            Require(StitchCandidateBorders(generated, bounds, {neighbor}, {authored}) == 0);
+            RequireCompleteBorderStitch(generated, bounds, {neighbor});
+            CandidateNavMesh missingFloor;
+            Require(StitchCandidateBorders(missingFloor, bounds, {neighbor}, {authored}) == 0);
+            Require(!missingFloor.topology.valid &&
+                    std::any_of(missingFloor.topology.findings.begin(), missingFloor.topology.findings.end(),
+                                [](const auto &finding)
+                                { return finding.find("Authored border portal") != std::string::npos; }));
+        }
+    }
+
+    void TestBorderCavityHeightSamples()
+    {
+        using namespace navmesh::core;
+        const auto open = std::numeric_limits<std::uint32_t>::max();
+        const AABB bounds{.min = {0, 0, -100}, .max = {300, 300, 100}};
+        for (int rotation{}; rotation < 4; ++rotation)
+        {
+            // A seam height sample keeps a steep interior rim traversable within
+            // its existing slope envelope. The complete portal has no subdivision.
+            CandidateNavMesh candidate;
+            candidate.mesh.vertices = {{0, 0, 0},
+                                       {275.4395F, 0, 8.4778F},
+                                       {25.9629F, 0, 2.08714F},
+                                       {52.7715F, 180, 5.9169F},
+                                       {24.7715F, 184, -26.0831F}};
+            candidate.mesh.polygons = {{.vertices = {0, 2, 4}, .neighbors = {open, 1, open}},
+                                       {.vertices = {2, 3, 4}, .neighbors = {2, open, 0}},
+                                       {.vertices = {2, 1, 3}, .neighbors = {open, open, 1}}};
+            candidate.polygonSourceTriangles = {0, 1, 2};
+            candidate.polygonContributingTriangles = {{0}, {1}, {2}};
+            candidate.regions = {{.id = 0, .polygons = {0, 1, 2}}};
+            NavMesh authored{.id = 0x200,
+                             .vertices = {{0, 0, 0}, {275.4395F, 0, 8.4778F}, {150, 200, 0}},
+                             .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}},
+                             .externalLinks = {{0, 0, 0x201, 0}}};
+            NavMesh neighbor{.id = 0x201,
+                             .vertices = {authored.vertices[1], authored.vertices[0], {150, -200, 0}},
+                             .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}},
+                             .externalLinks = {{0, 0, 0x200, 0}}};
+            const auto rotate = [](Vec3 point) { return Vec3{300 - point.y, point.x, point.z}; };
+            for (int turn{}; turn < rotation; ++turn)
+            {
+                for (auto *mesh : {&candidate.mesh, &authored, &neighbor})
+                {
+                    for (auto &point : mesh->vertices)
+                    {
+                        point = rotate(point);
+                    }
+                }
+            }
+            Require(StitchCandidateBorders(candidate, bounds, {neighbor}, {authored}) == 1);
+            RequireCompleteBorderStitch(candidate, bounds, {neighbor});
+            Require(candidate.mesh.polygons.size() >= 4);
+            Require(candidate.polygonContributingTriangles[candidate.borderLinks.front().polygon] ==
+                    std::vector<std::size_t>({0, 1, 2}));
+        }
+    }
+
+    void TestBorderCavityEndpointAlignment()
+    {
+        using namespace navmesh::core;
+        const auto open = std::numeric_limits<std::uint32_t>::max();
+        const AABB bounds{.min = {0, 0, -100}, .max = {300, 300, 100}};
+        for (int rotation{}; rotation < 4; ++rotation)
+        {
+            // Endpoint drift must move the complete fan; retaining this short
+            // seam fragment at a different height would force a steep connector.
+            CandidateNavMesh candidate;
+            candidate.mesh.vertices = {{0, 0, 2}, {280.18F, 0, 2}, {300, 0, 2}, {150, 100, 2}};
+            candidate.mesh.polygons = {{.vertices = {0, 1, 3}, .neighbors = {open, 1, open}},
+                                       {.vertices = {1, 2, 3}, .neighbors = {open, open, 0}}};
+            candidate.polygonSourceTriangles = {0, 1};
+            candidate.polygonContributingTriangles = {{0}, {1}};
+            candidate.regions = {{.id = 0, .polygons = {0, 1}}};
+            NavMesh authored{.id = 0x200,
+                             .vertices = {{20, -2.2F, 0}, {280, 0, 0}, {150, 100, 0}},
+                             .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}},
+                             .externalLinks = {{0, 0, 0x201, 0}}};
+            NavMesh neighbor{.id = 0x201,
+                             .vertices = {authored.vertices[1], authored.vertices[0], {150, -100, 0}},
+                             .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}},
+                             .externalLinks = {{0, 0, 0x200, 0}}};
+            const auto rotate = [](Vec3 point) { return Vec3{300 - point.y, point.x, point.z}; };
+            for (int turn{}; turn < rotation; ++turn)
+            {
+                for (auto *mesh : {&candidate.mesh, &authored, &neighbor})
+                {
+                    for (auto &point : mesh->vertices)
+                    {
+                        point = rotate(point);
+                    }
+                }
+            }
+            Require(StitchCandidateBorders(candidate, bounds, {neighbor}, {authored}) == 1);
+            RequireCompleteBorderStitch(candidate, bounds, {neighbor});
+        }
+    }
+
+    void TestCompleteBorderStitching()
+    {
+        using namespace navmesh::core;
+        const auto open = std::numeric_limits<std::uint32_t>::max();
+        const AABB bounds{.min = {0, 0, -100}, .max = {4096, 4096, 100}};
+        for (int rotation{}; rotation < 4; ++rotation)
+        {
+            // A short corner triangle consumes two portals. Their indices must
+            // survive successive subdivisions of the same generated triangle.
+            CandidateNavMesh corner;
+            corner.mesh.vertices = {{4064, 4096, 0}, {4096, 4064, 0}, {4096, 4096, 0}};
+            corner.mesh.polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}};
+            corner.polygonSourceTriangles = {0};
+            corner.polygonContributingTriangles = {{0}};
+            corner.regions = {{.id = 0, .polygons = {0}}};
+            std::vector<NavMesh> neighbors{{.id = 0x201,
+                                            .vertices = {{4096, 4096, 0}, {4096, 4064, 0}, {4200, 4096, 0}},
+                                            .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}}},
+                                           {.id = 0x202,
+                                            .vertices = {{4064, 4096, 0}, {4096, 4096, 0}, {4064, 4200, 0}},
+                                            .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}}}};
+            for (int turn{}; turn < rotation; ++turn)
+            {
+                for (auto &point : corner.mesh.vertices)
+                {
+                    point = {4096 - point.y, point.x, point.z};
+                }
+                for (auto &neighbor : neighbors)
+                {
+                    for (auto &point : neighbor.vertices)
+                    {
+                        point = {4096 - point.y, point.x, point.z};
+                    }
+                }
+            }
+            Require(StitchCandidateBorders(corner, bounds, neighbors) == 2);
+            RequireCompleteBorderStitch(corner, bounds, neighbors);
+            Require(StitchCandidateBorders(corner, bounds, neighbors) == 0);
+            RequireCompleteBorderStitch(corner, bounds, neighbors);
+
+            for (const auto inset : {0.0F, 16.0F})
+            {
+                CandidateNavMesh partitioned;
+                partitioned.mesh.vertices = {{4000, 130, 0},
+                                             {4096 - inset, 100, 0},
+                                             {4096 - inset, 120, 0},
+                                             {4096 - inset, 140, 0},
+                                             {4096 - inset, 160, 0}};
+                partitioned.mesh.polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, 1}},
+                                             {.vertices = {0, 2, 3}, .neighbors = {0, open, 2}},
+                                             {.vertices = {0, 3, 4}, .neighbors = {1, open, open}}};
+                partitioned.polygonSourceTriangles = {0, 1, 2};
+                partitioned.polygonContributingTriangles = {{0}, {1}, {2}};
+                partitioned.regions = {{.id = 0, .polygons = {0, 1, 2}, .reachesBorder = true}};
+                NavMesh neighbor{.id = 0x201,
+                                 .vertices = {{4096, 160, 0}, {4096, 100, 0}, {4200, 130, 0}},
+                                 .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}}};
+                for (int turn{}; turn < rotation; ++turn)
+                {
+                    for (auto &point : partitioned.mesh.vertices)
+                    {
+                        point = {4096 - point.y, point.x, point.z};
+                    }
+                    for (auto &point : neighbor.vertices)
+                    {
+                        point = {4096 - point.y, point.x, point.z};
+                    }
+                }
+                auto isolated = partitioned;
+                Require(StitchCandidateBorders(isolated, bounds, {}) == 0);
+                Require(isolated.mesh.polygons.empty() && isolated.mesh.vertices.empty() && isolated.regions.empty());
+                RequireCompleteBorderStitch(isolated, bounds, {});
+                auto doorLinked = partitioned;
+                const auto &face = doorLinked.mesh.polygons.front();
+                const auto position =
+                    (doorLinked.mesh.vertices[face.vertices[0]] + doorLinked.mesh.vertices[face.vertices[1]] +
+                     doorLinked.mesh.vertices[face.vertices[2]]) /
+                    3.0F;
+                doorLinked.exits = {{.referenceId = 0x300, .position = position, .region = 0, .polygon = 0}};
+                Require(StitchCandidateBorders(doorLinked, bounds, {}) == 0);
+                Require(!doorLinked.mesh.polygons.empty() && doorLinked.exits.front().polygon);
+                RequireCompleteBorderStitch(doorLinked, bounds, {});
+                Require(StitchCandidateBorders(partitioned, bounds, {neighbor}) == 1);
+                RequireCompleteBorderStitch(partitioned, bounds, {neighbor});
+            }
+        }
+        // Authored coverage occupies only part of a generated edge. Remaining
+        // seam wedges retract while the one complete portal keeps its endpoints.
+        CandidateNavMesh partial;
+        partial.mesh.vertices = {{4000, 250, 0}, {4096, 100, 0}, {4096, 400, 0}};
+        partial.mesh.polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}};
+        partial.polygonSourceTriangles = {0};
+        partial.polygonContributingTriangles = {{0}};
+        partial.regions = {{.id = 0, .polygons = {0}}};
+        NavMesh neighbor{.id = 0x201,
+                         .vertices = {{4096, 300, 0}, {4096, 200, 0}, {4200, 250, 0}},
+                         .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}}};
+        Require(StitchCandidateBorders(partial, bounds, {neighbor}) == 1);
+        RequireCompleteBorderStitch(partial, bounds, {neighbor});
+        const auto count = partial.mesh.polygons.size();
+        Require(StitchCandidateBorders(partial, bounds, {neighbor}) == 0 && partial.mesh.polygons.size() == count);
+        RequireCompleteBorderStitch(partial, bounds, {neighbor});
+        neighbor.vertices[0].z += 1;
+        Require(StitchCandidateBorders(partial, bounds, {neighbor}) == 0 && !partial.topology.valid);
+    }
+
     void TestAdjacentBorderBridges()
     {
         using namespace navmesh::core;
@@ -561,8 +911,8 @@ namespace
         const AABB bounds{.min = {0, 0, -100}, .max = {4096, 4096, 100}};
         Require(StitchCandidateBorders(candidate, bounds, {neighbor}) == 2);
         Require(candidate.topology.valid && candidate.borderLinks.size() == 2 && candidate.mesh.polygons.size() == 7 &&
-                candidate.regions.size() == 2 && candidate.statistics.rejectedUnreachable == 0);
-        Require(candidate.mesh.polygons[4].neighbors[2] == 5 && candidate.mesh.polygons[5].neighbors[0] == 4);
+                candidate.regions.size() == 1 && candidate.statistics.rejectedUnreachable == 1);
+        RequireCompleteBorderStitch(candidate, bounds, {neighbor});
     }
     void TestAuthoredBorderTolerance()
     {
@@ -597,9 +947,9 @@ namespace
                 }
                 const bool accepted = std::abs(drift) <= AuthoredBorderTolerance;
                 Require(StitchCandidateBorders(candidate, bounds, {neighbor}) == (accepted ? 1U : 0U));
-                Require(candidate.topology.valid && candidate.regions.size() == 1);
-                Require(candidate.mesh.polygons.size() == (accepted ? 3U : 1U));
-                Require(candidate.statistics.rejectedUnreachable == 0);
+                Require(candidate.topology.valid && candidate.regions.size() == (accepted ? 1U : 0U));
+                Require(candidate.mesh.polygons.size() == (accepted ? 3U : 0U));
+                Require(candidate.statistics.rejectedUnreachable == (accepted ? 0U : 1U));
                 if (accepted)
                 {
                     const auto &link = candidate.borderLinks.front();
@@ -653,9 +1003,8 @@ namespace
             {
                 std::fprintf(stderr, "Partitioned topology: %s\n", finding.c_str());
             }
-            Require(candidate.topology.valid && candidate.regions.size() == 2 &&
-                    candidate.regions[1].polygons == std::vector<std::uint32_t>{1} &&
-                    candidate.statistics.rejectedUnreachable == 0);
+            Require(candidate.topology.valid && candidate.regions.size() == 1 &&
+                    candidate.statistics.rejectedUnreachable == 1);
             Require(candidate.polygonSourceTriangles.size() == candidate.mesh.polygons.size() &&
                     candidate.polygonContributingTriangles.size() == candidate.mesh.polygons.size());
             Require(candidate.exits.front().polygon && *candidate.exits.front().polygon != 0);
@@ -670,13 +1019,8 @@ namespace
                 Require(start.x == targetStart.x && start.y == targetStart.y && start.z == targetStart.z &&
                         end.x == targetEnd.x && end.y == targetEnd.y && end.z == targetEnd.z);
             }
-            auto elevated = neighbor;
-            for (auto &vertex : elevated.vertices)
-            {
-                vertex.z = candidate.profile.stepHeight + 1;
-            }
             const auto count = candidate.mesh.polygons.size();
-            Require(StitchCandidateBorders(candidate, bounds, {elevated}) == 0 &&
+            Require(StitchCandidateBorders(candidate, bounds, {neighbor}) == 0 &&
                     candidate.mesh.polygons.size() == count && candidate.topology.valid);
         }
     }
@@ -740,7 +1084,8 @@ namespace
                     }
                     auto unlinked = candidate;
                     Require(StitchCandidateBorders(unlinked, bounds, {elevated}) == 0 && unlinked.topology.valid &&
-                            unlinked.mesh.polygons.size() == candidate.mesh.polygons.size());
+                            unlinked.borderLinks.empty() && unlinked.exits.front().polygon &&
+                            unlinked.regions.size() == 1);
                     const auto added = StitchCandidateBorders(candidate, bounds, {neighbor});
                     if (added != 1 || !candidate.topology.valid)
                     {
@@ -1281,7 +1626,7 @@ namespace
 
         const auto exported = WriteCombinedGlb(output, {}, {original, neighbor}, {}, metadata, options);
 
-        Require(exported.objects == 6 && exported.triangles == 31);
+        Require(exported.objects == 5 && exported.triangles == 19);
 
         std::ifstream glb(output, std::ios::binary);
 
@@ -1304,6 +1649,7 @@ namespace
         Require(json.contains("Candidate link 0 -> 00000100:0") && json.contains("\"material\":14"));
 
         Require(!json.contains("Candidate link 0 -> 00000100:20") && !json.contains("Diagnostic:"));
+        Require(!json.contains("Authored link"));
 
         std::uint32_t binaryLength{}, binaryType{};
         glb.read(reinterpret_cast<char *>(&binaryLength), sizeof(binaryLength));
@@ -1338,7 +1684,7 @@ namespace
             Require(start != std::string::npos);
             return std::stoul(object.substr(start + key.size()));
         };
-        for (const auto *name : {"Authored link 00000099:0 -> 00000100:0", "Candidate link 0 -> 00000100:0"})
+        for (const auto *name : {"Candidate link 0 -> 00000100:0"})
         {
             const auto start = json.find(std::format("\"name\":\"{}\",\"primitives\"", name));
             Require(start != std::string::npos);
@@ -1973,6 +2319,10 @@ int main(int argc, char **argv)
     if (argc > 1 && std::string_view(argv[1]) == "--border-only")
     {
         TestAuthoredBorderTolerance();
+        TestCompleteBorderStitching();
+        TestAuthoredPortalPreservation();
+        TestBorderCavityHeightSamples();
+        TestBorderCavityEndpointAlignment();
         TestPartitionedBorderRetention();
         TestGeneratedBorderPartitions();
         TestAdjacentBorderBridges();
@@ -2009,6 +2359,10 @@ int main(int argc, char **argv)
     TestNewNavmeshRecords();
     TestReciprocalCellTransitions();
     TestAdjacentBorderBridges();
+    TestCompleteBorderStitching();
+    TestAuthoredPortalPreservation();
+    TestBorderCavityHeightSamples();
+    TestBorderCavityEndpointAlignment();
     TestAuthoredBorderTolerance();
     TestPartitionedBorderRetention();
     TestGeneratedBorderPartitions();

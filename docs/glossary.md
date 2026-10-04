@@ -35,10 +35,11 @@ use the neighbor's exact endpoints, including height. Distance, step, slope,
 and topology checks can reject a match. Applicable tolerances are defined by
 the navigation profile and shared border policy, rather than by this guide.
 
-An unmatched edge remains open. A structurally valid output file does not mean
-that every border is connected. Missing support, different heights, disconnected
-gaps, or incompatible boundary layouts can prevent a match. Inspect `border_links`
-in candidate JSON for the connections the tool actually found.
+Missing support, different heights, disconnected gaps, or incompatible boundary
+layouts can prevent a match. Unmatched generated seam wedges retract into the
+working cell, and components without a real portal or matched door are removed.
+Every remaining generated CELL seam must consume an exact neighboring edge.
+Inspect `border_links` and topology findings in candidate JSON for these checks.
 
 ## Why a single-cell export can include neighboring NAVMs
 

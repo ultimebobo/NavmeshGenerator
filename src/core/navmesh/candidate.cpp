@@ -21,6 +21,8 @@ namespace
 {
     using namespace navmesh::core;
     constexpr auto NoNeighbor = std::numeric_limits<std::uint32_t>::max();
+    /// Angular allowance in degrees for float roundoff when deforming a world-space fan.
+    constexpr float BorderSlopeRoundoff = 0.001F;
     using Key = std::tuple<std::int64_t, std::int64_t, std::int64_t>;
     using Key2 = std::pair<std::int64_t, std::int64_t>;
     using Edge = std::pair<Key2, Key2>;
@@ -1499,7 +1501,7 @@ namespace
      */
     template <class Border>
     void CoalesceGeneratedBorders(CandidateNavMesh &candidate, const std::vector<NavMesh> &neighbors,
-                                  const Border &border)
+                                  const Border &border, float maximumGap)
     {
         for (const auto &neighbor : neighbors)
         {
@@ -1527,7 +1529,7 @@ namespace
                     {
                         const auto p = candidate.mesh.vertices[vertex];
                         const auto fraction = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / lengthSquared;
-                        if (fraction <= 0 || fraction >= 1 || border(p, p, AuthoredBorderTolerance) != side ||
+                        if (fraction <= 0 || fraction >= 1 || border(p, p, maximumGap) != side ||
                             std::abs(p.z - Interpolate(a, b, fraction).z) > candidate.profile.stepHeight)
                         {
                             ++vertex;
@@ -1670,6 +1672,35 @@ namespace
         {
             throw std::logic_error("Border subdivision does not contain the complete authored edge");
         }
+        // Splitting one side can rotate the triangle or move another portal to
+        // a child. Preserve those portals by their directed endpoint identities.
+        for (auto &link : candidate.borderLinks)
+        {
+            if (link.polygon != polygon)
+            {
+                continue;
+            }
+            const auto firstVertex = original.vertices[link.edge];
+            const auto lastVertex = original.vertices[(link.edge + 1) % 3];
+            bool found{};
+            for (const auto child : faces)
+            {
+                for (std::uint8_t side{}; side < 3; ++side)
+                {
+                    const auto &triangle = mesh.polygons[child];
+                    if (triangle.vertices[side] == firstVertex && triangle.vertices[(side + 1) % 3] == lastVertex)
+                    {
+                        link.polygon = child;
+                        link.edge = side;
+                        found = true;
+                    }
+                }
+            }
+            if (!found)
+            {
+                throw std::logic_error("Border subdivision would remove an existing portal");
+            }
+        }
         for (auto &region : candidate.regions)
         {
             if (std::find(region.polygons.begin(), region.polygons.end(), polygon) != region.polygons.end())
@@ -1707,6 +1738,87 @@ namespace
         }
         candidate.borderLinks.push_back({portal->first, portal->second, targetMesh, targetPolygon, targetEdge});
         BuildAdjacency(mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
+    }
+
+    /** Align seam endpoints through their complete incident fans.
+     * Moving every coincident use preserves the interior rim's shared vertices.
+     * Existing portals pin their endpoints. Inverted or nonwalkable incident
+     * triangles reject the prepared copy before it can replace the candidate.
+     */
+    bool AlignBorderEndpoints(CandidateNavMesh &candidate, std::uint32_t polygon, std::uint8_t edge,
+                              std::optional<Vec3> first, std::optional<Vec3> last)
+    {
+        const auto face = candidate.mesh.polygons[polygon];
+        const std::array original{candidate.mesh.vertices[face.vertices[edge]],
+                                  candidate.mesh.vertices[face.vertices[(edge + 1) % 3]]};
+        const std::array replacements{first, last};
+        const auto originalVertices = candidate.mesh.vertices;
+        std::vector<bool> moved(candidate.mesh.vertices.size());
+        std::set<std::uint32_t> pinned;
+        for (const auto &link : candidate.borderLinks)
+        {
+            const auto &portal = candidate.mesh.polygons[link.polygon];
+            pinned.insert(portal.vertices[link.edge]);
+            pinned.insert(portal.vertices[(link.edge + 1) % 3]);
+        }
+        for (std::uint32_t vertex{}; vertex < candidate.mesh.vertices.size(); ++vertex)
+        {
+            const auto point = candidate.mesh.vertices[vertex];
+            for (std::size_t end{}; end < replacements.size(); ++end)
+            {
+                if (!replacements[end] || Quantize(point, candidate.profile.weldTolerance) !=
+                                              Quantize(original[end], candidate.profile.weldTolerance))
+                {
+                    continue;
+                }
+                const auto target = *replacements[end];
+                if (pinned.contains(vertex) && (point.x != target.x || point.y != target.y || point.z != target.z))
+                {
+                    return false;
+                }
+                candidate.mesh.vertices[vertex] = target;
+                moved[vertex] = true;
+            }
+        }
+        // Recast floor triangles can include steep voxel transitions. Alignment
+        // must not exceed the affected fan's existing slope envelope.
+        auto maximumSlope = candidate.profile.maxSlopeDegrees;
+        for (const auto &triangle : candidate.mesh.polygons)
+        {
+            if (std::any_of(triangle.vertices.begin(), triangle.vertices.end(),
+                            [&](auto vertex) { return moved[vertex]; }))
+            {
+                const auto a = originalVertices[triangle.vertices[0]];
+                const auto u = originalVertices[triangle.vertices[1]] - a;
+                const auto v = originalVertices[triangle.vertices[2]] - a;
+                maximumSlope =
+                    std::max(maximumSlope, std::atan2(std::hypot(u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z),
+                                                      u.x * v.y - u.y * v.x) *
+                                               180.0F / 3.14159265358979323846F);
+            }
+        }
+        for (const auto &triangle : candidate.mesh.polygons)
+        {
+            if (std::none_of(triangle.vertices.begin(), triangle.vertices.end(),
+                             [&](auto vertex) { return moved[vertex]; }))
+            {
+                continue;
+            }
+            const auto a = candidate.mesh.vertices[triangle.vertices[0]];
+            const auto b = candidate.mesh.vertices[triangle.vertices[1]];
+            const auto c = candidate.mesh.vertices[triangle.vertices[2]];
+            const auto u = b - a;
+            const auto v = c - a;
+            const auto area = Cross2(a, b, c);
+            if (area <= 0.01F || std::atan2(std::hypot(u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z), area) * 180.0F /
+                                         3.14159265358979323846F >
+                                     maximumSlope + BorderSlopeRoundoff)
+            {
+                return false;
+            }
+        }
+        BuildAdjacency(candidate.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
+        return ValidateCandidateTopology(candidate).valid;
     }
 
     /** Match authored edge subdivisions to containing generated boundary edges.
@@ -1750,15 +1862,11 @@ namespace
                         std::uint8_t edge{};
                         Vec3 start, end;
                         float score{};
+                        std::optional<CandidateNavMesh> prepared;
                     };
                     std::optional<Match> best;
                     for (std::uint32_t polygon{}; polygon < candidate.mesh.polygons.size(); ++polygon)
                     {
-                        if (std::any_of(candidate.borderLinks.begin(), candidate.borderLinks.end(),
-                                        [&](const auto &link) { return link.polygon == polygon; }))
-                        {
-                            continue;
-                        }
                         const auto &face = candidate.mesh.polygons[polygon];
                         for (std::uint8_t edge{}; edge < 3; ++edge)
                         {
@@ -1784,12 +1892,12 @@ namespace
                             }
                             const auto start = ((c.x - a.x) * dx + (c.y - a.y) * dy) / lengthSquared;
                             const auto end = ((d.x - a.x) * dx + (d.y - a.y) * dy) / lengthSquared;
-                            if (start < 0 || end > 1 || end <= start)
+                            if (end <= start || end <= 0 || start >= 1)
                             {
                                 continue;
                             }
-                            const auto p = Interpolate(a, b, start);
-                            const auto q = Interpolate(a, b, end);
+                            auto p = Interpolate(a, b, std::clamp(start, 0.0F, 1.0F));
+                            auto q = Interpolate(a, b, std::clamp(end, 0.0F, 1.0F));
                             const auto gapA = std::hypot(p.x - c.x, p.y - c.y);
                             const auto gapB = std::hypot(q.x - d.x, q.y - d.y);
                             if (gapA > maximumGap || gapB > maximumGap ||
@@ -1799,19 +1907,48 @@ namespace
                                 continue;
                             }
                             const auto score = gapA + gapB + std::abs(p.z - c.z) + std::abs(q.z - d.z);
-                            if (!CanSubdivideBorder(a, b, candidate.mesh.vertices[face.vertices[(edge + 2) % 3]], p, q,
-                                                    c, d, candidate.profile))
+                            if (best && score >= best->score)
                             {
                                 continue;
                             }
-                            if (!best || score < best->score)
+                            std::optional<CandidateNavMesh> prepared;
+                            auto preparedA = a;
+                            auto preparedB = b;
+                            if (start < 0 || end > 1)
                             {
-                                best = {polygon, edge, p, q, score};
+                                prepared = candidate;
+                                if (!AlignBorderEndpoints(*prepared, polygon, edge,
+                                                          start < 0 ? std::optional(c) : std::nullopt,
+                                                          end > 1 ? std::optional(d) : std::nullopt))
+                                {
+                                    continue;
+                                }
+                                preparedA = prepared->mesh.vertices[face.vertices[edge]];
+                                preparedB = prepared->mesh.vertices[face.vertices[(edge + 1) % 3]];
+                                if (start < 0)
+                                {
+                                    p = c;
+                                }
+                                if (end > 1)
+                                {
+                                    q = d;
+                                }
                             }
+                            const auto &mesh = prepared ? prepared->mesh : candidate.mesh;
+                            if (!CanSubdivideBorder(preparedA, preparedB, mesh.vertices[face.vertices[(edge + 2) % 3]],
+                                                    p, q, c, d, candidate.profile))
+                            {
+                                continue;
+                            }
+                            best = {polygon, edge, p, q, score, std::move(prepared)};
                         }
                     }
                     if (best)
                     {
+                        if (best->prepared)
+                        {
+                            candidate = std::move(*best->prepared);
+                        }
                         AddPartitionedPortal(candidate, best->polygon, best->edge, best->start, best->end, c, d,
                                              neighbor.id, targetPolygon, targetEdge);
                     }
@@ -1819,17 +1956,1241 @@ namespace
             }
         }
     }
+
+    /** Find a triangulation retaining every rim vertex and the constrained portal edge.
+     * Dynamic programming rejects inverted, welded or excessive-slope triangles
+     * and considers every diagonal instead of committing to a greedy ear.
+     */
+    std::vector<std::array<std::uint32_t, 3>> TriangulateBorderOutline(
+        const std::vector<std::uint32_t> &outline, const NavMesh &mesh, const NavigationProfile &profile,
+        std::optional<std::uint32_t> interior = std::nullopt)
+    {
+        std::vector<std::array<std::uint32_t, 3>> replacements;
+        const auto validTriangle = [&](std::array<std::uint32_t, 3> face)
+        {
+            const auto a = mesh.vertices[face[0]];
+            const auto b = mesh.vertices[face[1]];
+            const auto opposite = mesh.vertices[face[2]];
+            const auto area = Cross2(a, b, opposite);
+            if (area <= 0.01F || !CanSubdivideBorder(a, b, opposite, a, b, a, b, profile) ||
+                std::any_of(outline.begin(), outline.end(),
+                            [&](auto other)
+                            {
+                                if (std::find(face.begin(), face.end(), other) != face.end())
+                                {
+                                    return false;
+                                }
+                                const auto p = mesh.vertices[other];
+                                return Cross2(a, b, p) >= -0.01F && Cross2(b, opposite, p) >= -0.01F &&
+                                       Cross2(opposite, a, p) >= -0.01F;
+                            }))
+            {
+                return false;
+            }
+            if (interior && std::find(face.begin(), face.end(), *interior) == face.end())
+            {
+                const auto point = mesh.vertices[*interior];
+                if (Cross2(a, b, point) >= -0.01F && Cross2(b, opposite, point) >= -0.01F &&
+                    Cross2(opposite, a, point) >= -0.01F)
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+        // Dynamic programming considers alternative diagonals: a large
+        // early ear can leave a steep final triangle beside the portal.
+        std::vector<std::vector<int>> split(outline.size(), std::vector<int>(outline.size(), -1));
+        for (std::size_t i{}; i + 1 < outline.size(); ++i)
+        {
+            split[i][i + 1] = 0;
+        }
+        for (std::size_t span = 2; span < outline.size(); ++span)
+        {
+            for (std::size_t i{}; i + span < outline.size(); ++i)
+            {
+                const auto j = i + span;
+                for (auto k = i + 1; k < j; ++k)
+                {
+                    if (split[i][k] >= 0 && split[k][j] >= 0 && validTriangle({outline[i], outline[k], outline[j]}))
+                    {
+                        split[i][j] = static_cast<int>(k);
+                        break;
+                    }
+                }
+            }
+        }
+        const auto emit = [&](auto &&self, std::size_t i, std::size_t j) -> void
+        {
+            if (j <= i + 1)
+            {
+                return;
+            }
+            const auto k = static_cast<std::size_t>(split[i][j]);
+            replacements.push_back({outline[i], outline[k], outline[j]});
+            self(self, i, k);
+            self(self, k, j);
+        };
+        if (interior && outline.size() >= 3)
+        {
+            // Keep one interior height sample. A fan may skip a convex rim run
+            // only when the ordinary triangulation fills that run without
+            // covering the sample. All faces retain the original directed rim.
+            std::vector<std::size_t> previous(outline.size() + 1, outline.size() + 1);
+            previous[0] = 0;
+            for (std::size_t end = 1; end <= outline.size(); ++end)
+            {
+                for (std::size_t begin{}; begin < end; ++begin)
+                {
+                    if (previous[begin] > outline.size() || (end < outline.size() && split[begin][end] < 0) ||
+                        (end == outline.size() && begin + 1 != end) ||
+                        !validTriangle({outline[begin], outline[end % outline.size()], *interior}))
+                    {
+                        continue;
+                    }
+                    previous[end] = begin;
+                    break;
+                }
+            }
+            if (previous.back() <= outline.size())
+            {
+                auto end = outline.size();
+                while (end != 0)
+                {
+                    const auto begin = previous[end];
+                    replacements.push_back({outline[begin], outline[end % outline.size()], *interior});
+                    if (end < outline.size())
+                    {
+                        emit(emit, begin, end);
+                    }
+                    end = begin;
+                }
+            }
+        }
+        else if (outline.size() >= 3 && split[0].back() >= 0)
+        {
+            emit(emit, 0, outline.size() - 1);
+        }
+        return replacements;
+    }
+
+    /** Replace a cavity atomically, preserving portals, door anchors and source joins.
+     * Removed faces contribute to every replacement; unmodified faces retain their
+     * evidence. Invalid remaps or topology leave the caller's mesh untouched.
+     */
+    bool CommitBorderCavity(CandidateNavMesh &candidate, CandidateNavMesh revised,
+                            const std::set<std::uint32_t> &selected,
+                            const std::vector<std::array<std::uint32_t, 3>> &replacements, std::uint32_t targetFirst,
+                            std::uint32_t targetLast, const NavMesh &neighbor, std::uint32_t targetPolygon,
+                            std::uint8_t targetEdge)
+    {
+        const auto &mesh = candidate.mesh;
+        const auto flags = mesh.polygons[*selected.begin()].flags;
+        if (std::any_of(selected.begin(), selected.end(),
+                        [&](auto polygon) { return mesh.polygons[polygon].flags != flags; }))
+        {
+            return false;
+        }
+        std::vector<std::size_t> contributors;
+        std::vector<std::uint32_t> remap(mesh.polygons.size(), NoNeighbor);
+        revised.mesh.polygons.clear();
+        revised.polygonSourceTriangles.clear();
+        revised.polygonContributingTriangles.clear();
+        for (std::uint32_t polygon{}; polygon < mesh.polygons.size(); ++polygon)
+        {
+            if (selected.contains(polygon))
+            {
+                const auto &sources = candidate.polygonContributingTriangles[polygon];
+                contributors.insert(contributors.end(), sources.begin(), sources.end());
+                continue;
+            }
+            remap[polygon] = static_cast<std::uint32_t>(revised.mesh.polygons.size());
+            revised.mesh.polygons.push_back(mesh.polygons[polygon]);
+            revised.polygonSourceTriangles.push_back(candidate.polygonSourceTriangles[polygon]);
+            revised.polygonContributingTriangles.push_back(candidate.polygonContributingTriangles[polygon]);
+        }
+        std::sort(contributors.begin(), contributors.end());
+        contributors.erase(std::unique(contributors.begin(), contributors.end()), contributors.end());
+        if (contributors.empty())
+        {
+            return false;
+        }
+        const auto begin = static_cast<std::uint32_t>(revised.mesh.polygons.size());
+        for (const auto &face : replacements)
+        {
+            revised.mesh.polygons.push_back(
+                {.vertices = face, .neighbors = {NoNeighbor, NoNeighbor, NoNeighbor}, .flags = flags});
+            revised.polygonSourceTriangles.push_back(contributors.front());
+            revised.polygonContributingTriangles.push_back(contributors);
+        }
+        bool preserved = true;
+        for (auto &link : revised.borderLinks)
+        {
+            const auto source = mesh.polygons[link.polygon];
+            const auto a = source.vertices[link.edge];
+            const auto b = source.vertices[(link.edge + 1) % 3];
+            if (!selected.contains(link.polygon))
+            {
+                link.polygon = remap[link.polygon];
+                continue;
+            }
+            bool found{};
+            for (std::uint32_t p = begin; p < revised.mesh.polygons.size(); ++p)
+            {
+                for (std::uint8_t e{}; e < 3; ++e)
+                {
+                    const auto &face = revised.mesh.polygons[p];
+                    if (face.vertices[e] == a && face.vertices[(e + 1) % 3] == b)
+                    {
+                        link.polygon = p;
+                        link.edge = e;
+                        found = true;
+                    }
+                }
+            }
+            preserved &= found;
+        }
+        bool assigned{};
+        for (auto &region : revised.regions)
+        {
+            const auto touched = std::any_of(region.polygons.begin(), region.polygons.end(),
+                                             [&](auto p) { return selected.contains(p); });
+            std::erase_if(region.polygons, [&](auto p) { return selected.contains(p); });
+            for (auto &p : region.polygons)
+            {
+                p = remap[p];
+            }
+            if (touched)
+            {
+                preserved &= !assigned;
+                assigned = true;
+                for (std::uint32_t p = begin; p < revised.mesh.polygons.size(); ++p)
+                {
+                    region.polygons.push_back(p);
+                }
+            }
+        }
+        for (auto &exit : revised.exits)
+        {
+            if (!exit.polygon)
+            {
+                continue;
+            }
+            if (!selected.contains(*exit.polygon))
+            {
+                exit.polygon = remap[*exit.polygon];
+                continue;
+            }
+            exit.polygon.reset();
+            for (std::uint32_t p = begin; p < revised.mesh.polygons.size(); ++p)
+            {
+                const auto &face = revised.mesh.polygons[p];
+                float height{};
+                if (HeightAt(exit.position, revised.mesh.vertices[face.vertices[0]],
+                             revised.mesh.vertices[face.vertices[1]], revised.mesh.vertices[face.vertices[2]], height))
+                {
+                    exit.polygon = p;
+                    break;
+                }
+            }
+            preserved &= exit.polygon.has_value();
+        }
+        bool portal{};
+        for (std::uint32_t p = begin; p < revised.mesh.polygons.size(); ++p)
+        {
+            for (std::uint8_t e{}; e < 3; ++e)
+            {
+                const auto &face = revised.mesh.polygons[p];
+                if (face.vertices[e] == targetFirst && face.vertices[(e + 1) % 3] == targetLast)
+                {
+                    revised.borderLinks.push_back({p, e, neighbor.id, targetPolygon, targetEdge});
+                    portal = true;
+                }
+            }
+        }
+        revised.contours.clear();
+        BuildAdjacency(revised.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
+        CompactBorderVertices(revised);
+        const auto validation = ValidateCandidateTopology(revised);
+        if (preserved && portal && validation.valid)
+        {
+            candidate = std::move(revised);
+            return true;
+        }
+        return false;
+    }
+
+    /// Required crossing repair bounds, in Skyrim world units, derived from its authored floor.
+    struct BorderCavityLimits
+    {
+        float depth;
+        float heightTolerance;
+    };
+
+    /** Resolve selected-cell exterior links through their reciprocal neighboring edges.
+     * A geometric edge match supplies the target only when the return entry is absent.
+     * The authored triangle bounds repair depth and accommodates endpoint height drift.
+     */
+    template <class Border>
+    auto ResolveAuthoredBorderPortals(const std::vector<NavMesh> &authored, const std::vector<NavMesh> &neighbors,
+                                      const Border &border, const NavigationProfile &profile, float maximumGap)
+    {
+        const auto distance = [](Vec3 a, Vec3 b) { return std::hypot(std::hypot(a.x - b.x, a.y - b.y), a.z - b.z); };
+        // Reciprocal identities disambiguate stacked floors and short corners.
+        std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint8_t>, BorderCavityLimits> required;
+        for (const auto &source : authored)
+        {
+            for (const auto &link : source.externalLinks)
+            {
+                const auto neighbor = std::find_if(neighbors.begin(), neighbors.end(),
+                                                   [&](const auto &mesh) { return mesh.id == link.navmeshId; });
+                if (neighbor == neighbors.end() || link.targetPolygon >= neighbor->polygons.size() ||
+                    link.polygon >= source.polygons.size() || link.edge >= 3)
+                {
+                    continue;
+                }
+                const auto &face = source.polygons[link.polygon];
+                const auto a = source.vertices.at(face.vertices[link.edge]);
+                const auto b = source.vertices.at(face.vertices[(link.edge + 1) % 3]);
+                const auto side = border(a, b, maximumGap);
+                std::optional<std::uint8_t> targetEdge;
+                for (const auto &incoming : neighbor->externalLinks)
+                {
+                    if (incoming.polygon == link.targetPolygon && incoming.navmeshId == source.id &&
+                        incoming.targetPolygon == link.polygon && incoming.edge < 3)
+                    {
+                        targetEdge = incoming.edge;
+                        break;
+                    }
+                }
+                const auto &target = neighbor->polygons[link.targetPolygon];
+                float best = std::numeric_limits<float>::max();
+                if (!targetEdge)
+                {
+                    for (std::uint8_t edge{}; edge < 3; ++edge)
+                    {
+                        const auto c = neighbor->vertices.at(target.vertices[(edge + 1) % 3]);
+                        const auto d = neighbor->vertices.at(target.vertices[edge]);
+                        const auto score = distance(a, c) + distance(b, d);
+                        if (border(c, d, AuthoredBorderTolerance) == side && score < best)
+                        {
+                            targetEdge = edge;
+                            best = score;
+                        }
+                    }
+                }
+                if (targetEdge && side >= 0 &&
+                    border(neighbor->vertices.at(target.vertices[*targetEdge]),
+                           neighbor->vertices.at(target.vertices[(*targetEdge + 1) % 3]),
+                           AuthoredBorderTolerance) == side)
+                {
+                    const auto c = neighbor->vertices.at(target.vertices[(*targetEdge + 1) % 3]);
+                    const auto d = neighbor->vertices.at(target.vertices[*targetEdge]);
+                    const auto opposite = source.vertices.at(face.vertices[(link.edge + 2) % 3]);
+                    const auto length = std::hypot(d.x - c.x, d.y - c.y);
+                    const auto depth = length > 0 ? std::abs(Cross2(c, d, opposite)) / length : maximumGap;
+                    const auto heights = profile.stepHeight + std::max(std::abs(a.z - c.z), std::abs(b.z - d.z));
+                    required.emplace(std::tuple{neighbor->id, link.targetPolygon, *targetEdge},
+                                     BorderCavityLimits{std::max(maximumGap, depth), heights});
+                }
+            }
+        }
+        return required;
+    }
+
+    /** Prepare near-coincident portal endpoints through their complete incident fans.
+     * Distances and heights are in Skyrim world units. Only vertices on the
+     * target CELL side qualify; existing portals and invalid deformations stay fixed.
+     */
+    template <class Border>
+    void AlignCavityEndpoints(CandidateNavMesh &candidate, Vec3 first, Vec3 last, int cellSide, float heightTolerance,
+                              const Border &border)
+    {
+        for (const auto endpoint : {first, last})
+        {
+            std::set<std::uint32_t> visited;
+            for (std::uint32_t polygon{}; polygon < candidate.mesh.polygons.size(); ++polygon)
+            {
+                const auto face = candidate.mesh.polygons[polygon];
+                for (std::uint8_t edge{}; edge < 3; ++edge)
+                {
+                    const auto index = face.vertices[edge];
+                    const auto point = candidate.mesh.vertices[index];
+                    if (!visited.insert(index).second ||
+                        (point.x == endpoint.x && point.y == endpoint.y && point.z == endpoint.z) ||
+                        border(point, point, AuthoredBorderTolerance) != cellSide ||
+                        std::hypot(point.x - endpoint.x, point.y - endpoint.y) > AuthoredBorderTolerance ||
+                        std::abs(point.z - endpoint.z) > heightTolerance)
+                    {
+                        continue;
+                    }
+                    auto aligned = candidate;
+                    if (AlignBorderEndpoints(aligned, polygon, edge, endpoint, std::nullopt))
+                    {
+                        candidate = std::move(aligned);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Preserve a removed seam height sample inside a repaired cavity.
+     * Try bounded moves toward incident floor centroids in Skyrim world space.
+     * Successful triangulation adds one vertex to revised; failure leaves it unchanged.
+     * The complete portal and immutable rim stay intact under the cavity slope envelope.
+     */
+    template <class Border>
+    std::vector<std::array<std::uint32_t, 3>> TriangulateCavityWithHeightSample(
+        NavMesh &revised, const NavMesh &original, const std::vector<std::uint32_t> &boundary,
+        const std::vector<std::uint32_t> &outline, const std::set<std::uint32_t> &selected,
+        const NavigationProfile &profile, int cellSide, float maximumGap, const Border &border)
+    {
+        for (const auto sample : boundary)
+        {
+            const auto point = original.vertices[sample];
+            if (std::find(outline.begin(), outline.end(), sample) != outline.end() ||
+                border(point, point, maximumGap) != cellSide)
+            {
+                continue;
+            }
+            for (const auto polygon : selected)
+            {
+                const auto &face = original.polygons[polygon];
+                if (std::find(face.vertices.begin(), face.vertices.end(), sample) == face.vertices.end())
+                {
+                    continue;
+                }
+                const auto center = (original.vertices[face.vertices[0]] + original.vertices[face.vertices[1]] +
+                                     original.vertices[face.vertices[2]]) /
+                                    3.0F;
+                const auto distance = std::hypot(center.x - point.x, center.y - point.y);
+                const auto inset = std::max(profile.agentRadius, profile.weldTolerance * 4.0F);
+                const auto fraction = distance > inset ? std::min(0.5F, inset / distance) : 0.5F;
+                const auto position = Interpolate(point, center, fraction);
+                if (border(position, position, profile.weldTolerance) >= 0)
+                {
+                    continue;
+                }
+                const auto interior = static_cast<std::uint32_t>(revised.vertices.size());
+                revised.vertices.push_back(position);
+                auto replacements = TriangulateBorderOutline(outline, revised, profile, interior);
+                if (!replacements.empty())
+                {
+                    return replacements;
+                }
+                revised.vertices.pop_back();
+            }
+        }
+        return {};
+    }
+
+    /** Retriangulate a connected boundary cavity around a complete authored portal.
+     * The exterior chain is replaced by the exact portal; the cavity's interior
+     * rim and other portals remain fixed. Enlarging through adjacent triangles
+     * gives height adjustments room without deforming the surrounding floor.
+     * All changes are transactional, including source, region and door joins.
+     */
+    template <class Border>
+    bool RetriangulateBorderPortal(CandidateNavMesh &candidate, const NavMesh &neighbor, std::uint32_t targetPolygon,
+                                   std::uint8_t targetEdge, const Border &border, float maximumGap, float cavityDepth,
+                                   float heightTolerance)
+    {
+        const auto &target = neighbor.polygons[targetPolygon];
+        const auto c = neighbor.vertices[target.vertices[(targetEdge + 1) % 3]];
+        const auto d = neighbor.vertices[target.vertices[targetEdge]];
+        const auto cellSide = border(c, d, AuthoredBorderTolerance);
+        const auto dx = d.x - c.x;
+        const auto dy = d.y - c.y;
+        const auto lengthSquared = dx * dx + dy * dy;
+        if (cellSide < 0 || lengthSquared <= 0.01F)
+        {
+            return false;
+        }
+        const auto projection = [&](Vec3 p) { return ((p.x - c.x) * dx + (p.y - c.y) * dy) / lengthSquared; };
+        auto prepared = candidate;
+        AlignCavityEndpoints(prepared, c, d, cellSide, heightTolerance, border);
+        const auto &mesh = prepared.mesh;
+        std::set<std::uint32_t> selected;
+        for (std::uint32_t polygon{}; polygon < mesh.polygons.size(); ++polygon)
+        {
+            const auto &face = mesh.polygons[polygon];
+            for (std::uint8_t edge{}; edge < 3; ++edge)
+            {
+                if (face.neighbors[edge] != NoNeighbor)
+                {
+                    continue;
+                }
+                const auto a = mesh.vertices[face.vertices[edge]];
+                const auto b = mesh.vertices[face.vertices[(edge + 1) % 3]];
+                const auto start = projection(a);
+                const auto end = projection(b);
+                if (border(a, b, maximumGap) != cellSide || end <= start || end <= 0 || start >= 1)
+                {
+                    continue;
+                }
+                const auto p = Interpolate(a, b, std::clamp(-start / (end - start), 0.0F, 1.0F));
+                const auto q = Interpolate(a, b, std::clamp((1 - start) / (end - start), 0.0F, 1.0F));
+                if (std::abs(p.z - Interpolate(c, d, std::clamp(projection(p), 0.0F, 1.0F)).z) <= heightTolerance &&
+                    std::abs(q.z - Interpolate(c, d, std::clamp(projection(q), 0.0F, 1.0F)).z) <= heightTolerance)
+                {
+                    selected.insert(polygon);
+                }
+            }
+        }
+        if (selected.empty())
+        {
+            return false;
+        }
+        // Boundary vertices removed from the chain must have their entire fan
+        // inside the cavity. Otherwise the new edge would leave a T-junction.
+        std::set<std::uint32_t> seamVertices;
+        for (const auto polygon : selected)
+        {
+            const auto &face = mesh.polygons[polygon];
+            for (std::uint8_t edge{}; edge < 3; ++edge)
+            {
+                if (face.neighbors[edge] != NoNeighbor ||
+                    border(mesh.vertices[face.vertices[edge]], mesh.vertices[face.vertices[(edge + 1) % 3]],
+                           maximumGap) != cellSide)
+                {
+                    continue;
+                }
+                for (const auto vertex : {face.vertices[edge], face.vertices[(edge + 1) % 3]})
+                {
+                    const auto point = mesh.vertices[vertex];
+                    if (border(point, point, maximumGap) == cellSide && projection(point) >= 0 &&
+                        projection(point) <= 1)
+                    {
+                        seamVertices.insert(vertex);
+                    }
+                }
+            }
+        }
+        for (std::uint32_t polygon{}; polygon < mesh.polygons.size(); ++polygon)
+        {
+            if (std::any_of(mesh.polygons[polygon].vertices.begin(), mesh.polygons[polygon].vertices.end(),
+                            [&](auto vertex) { return seamVertices.contains(vertex); }))
+            {
+                selected.insert(polygon);
+            }
+        }
+        for (;;)
+        {
+            // Immutable rim edges can already contain steep voxel transitions;
+            // replacements must remain within this cavity's slope envelope.
+            auto cavityProfile = candidate.profile;
+            for (const auto polygon : selected)
+            {
+                const auto &face = mesh.polygons[polygon];
+                const auto a = mesh.vertices[face.vertices[0]];
+                const auto u = mesh.vertices[face.vertices[1]] - a;
+                const auto v = mesh.vertices[face.vertices[2]] - a;
+                const auto slope =
+                    std::atan2(std::hypot(u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z), u.x * v.y - u.y * v.x) *
+                    180.0F / 3.14159265358979323846F;
+                cavityProfile.maxSlopeDegrees = std::max(cavityProfile.maxSlopeDegrees, slope);
+            }
+            std::map<std::uint32_t, std::uint32_t> rim;
+            bool simple = true;
+            for (const auto polygon : selected)
+            {
+                const auto &face = mesh.polygons[polygon];
+                for (std::size_t edge{}; edge < 3; ++edge)
+                {
+                    if (!selected.contains(face.neighbors[edge]) &&
+                        !rim.emplace(face.vertices[edge], face.vertices[(edge + 1) % 3]).second)
+                    {
+                        simple = false;
+                    }
+                }
+            }
+            std::vector<std::uint32_t> boundary;
+            if (simple && !rim.empty())
+            {
+                auto vertex = rim.begin()->first;
+                do
+                {
+                    boundary.push_back(vertex);
+                    const auto next = rim.find(vertex);
+                    if (next == rim.end())
+                    {
+                        break;
+                    }
+                    vertex = next->second;
+                } while (vertex != boundary.front() && boundary.size() <= rim.size());
+                simple = vertex == boundary.front() && boundary.size() == rim.size();
+            }
+            std::optional<std::size_t> first, last;
+            if (simple)
+            {
+                for (std::size_t i{}; i < boundary.size(); ++i)
+                {
+                    const auto a = mesh.vertices[boundary[i]];
+                    const auto b = mesh.vertices[boundary[(i + 1) % boundary.size()]];
+                    if (border(a, b, maximumGap) == cellSide && projection(b) > projection(a))
+                    {
+                        if (projection(a) <= 0 && projection(b) > 0)
+                        {
+                            first = i;
+                        }
+                        if (projection(a) < 1 && projection(b) >= 1)
+                        {
+                            last = i;
+                        }
+                    }
+                }
+            }
+            if (first && last)
+            {
+                auto revised = prepared;
+                const auto vertex = [&](Vec3 point)
+                {
+                    for (std::uint32_t i{}; i < revised.mesh.vertices.size(); ++i)
+                    {
+                        const auto other = revised.mesh.vertices[i];
+                        if (point.x == other.x && point.y == other.y && point.z == other.z)
+                        {
+                            return i;
+                        }
+                    }
+                    revised.mesh.vertices.push_back(point);
+                    return static_cast<std::uint32_t>(revised.mesh.vertices.size() - 1);
+                };
+                const auto targetFirst = vertex(c);
+                const auto targetLast = vertex(d);
+                std::vector<std::uint32_t> outline{boundary[*first], targetFirst, targetLast};
+                auto cursor = (*last + 1) % boundary.size();
+                while (cursor != *first && outline.size() <= boundary.size() + 3)
+                {
+                    outline.push_back(boundary[cursor]);
+                    cursor = (cursor + 1) % boundary.size();
+                }
+                // Coincident endpoints are represented by the authored vertex;
+                // every other rim vertex keeps its identity for shared edges.
+                outline.erase(std::unique(outline.begin(), outline.end()), outline.end());
+                auto replacements = TriangulateBorderOutline(outline, revised.mesh, cavityProfile);
+                if (replacements.empty())
+                {
+                    replacements = TriangulateCavityWithHeightSample(revised.mesh, mesh, boundary, outline, selected,
+                                                                     cavityProfile, cellSide, maximumGap, border);
+                }
+                if (!replacements.empty() &&
+                    CommitBorderCavity(candidate, std::move(revised), selected, replacements, targetFirst, targetLast,
+                                       neighbor, targetPolygon, targetEdge))
+                {
+                    return true;
+                }
+            }
+            auto expanded = selected;
+            // Long floor triangles can reach the repair band even when their
+            // centroids lie outside it. Keep those incident rim choices available.
+            for (const auto polygon : selected)
+            {
+                for (const auto next : mesh.polygons[polygon].neighbors)
+                {
+                    if (next == NoNeighbor)
+                    {
+                        continue;
+                    }
+                    const auto &face = mesh.polygons[next];
+                    if (std::any_of(face.vertices.begin(), face.vertices.end(),
+                                    [&](auto vertex)
+                                    {
+                                        const auto point = mesh.vertices[vertex];
+                                        const auto projected =
+                                            Interpolate(c, d, std::clamp(projection(point), 0.0F, 1.0F));
+                                        return std::hypot(point.x - projected.x, point.y - projected.y) <= cavityDepth;
+                                    }))
+                    {
+                        expanded.insert(next);
+                    }
+                }
+            }
+            if (expanded.size() == selected.size())
+            {
+                return false;
+            }
+            selected = std::move(expanded);
+        }
+    }
+
+    /// Squared distance to a triangle in Skyrim world space, including its interpolated floor height.
+    float DoorDistanceSquared(Vec3 position, const NavMesh &mesh, const NavPolygon &face)
+    {
+        const auto a = mesh.vertices[face.vertices[0]];
+        const auto b = mesh.vertices[face.vertices[1]];
+        const auto c = mesh.vertices[face.vertices[2]];
+        float height{};
+        if (HeightAt(position, a, b, c, height))
+        {
+            return (height - position.z) * (height - position.z);
+        }
+        auto best = std::numeric_limits<float>::max();
+        for (std::size_t edge{}; edge < 3; ++edge)
+        {
+            const auto first = mesh.vertices[face.vertices[edge]];
+            const auto direction = mesh.vertices[face.vertices[(edge + 1) % 3]] - first;
+            const auto offset = position - first;
+            const auto lengthSquared =
+                direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
+            const auto fraction = std::clamp(
+                (offset.x * direction.x + offset.y * direction.y + offset.z * direction.z) / lengthSquared, 0.0F, 1.0F);
+            const auto distance = offset - direction * fraction;
+            best = std::min(best, distance.x * distance.x + distance.y * distance.y + distance.z * distance.z);
+        }
+        return best;
+    }
+
+    /// Place the trimming fan inside the original floor plane, near its unmatched seam or corner.
+    Vec3 BorderFanCenter(const NavMesh &mesh, const NavPolygon &face, const std::array<bool, 3> &unmatched,
+                         const NavigationProfile &profile)
+    {
+        const auto center =
+            (mesh.vertices[face.vertices[0]] + mesh.vertices[face.vertices[1]] + mesh.vertices[face.vertices[2]]) /
+            3.0F;
+        auto seam = center;
+        if (std::count(unmatched.begin(), unmatched.end(), true) == 1)
+        {
+            const auto edge =
+                static_cast<std::size_t>(std::find(unmatched.begin(), unmatched.end(), true) - unmatched.begin());
+            seam = (mesh.vertices[face.vertices[edge]] + mesh.vertices[face.vertices[(edge + 1) % 3]]) / 2.0F;
+        }
+        else
+        {
+            for (std::size_t vertex{}; vertex < 3; ++vertex)
+            {
+                if (unmatched[vertex] && unmatched[(vertex + 2) % 3])
+                {
+                    seam = mesh.vertices[face.vertices[vertex]];
+                    break;
+                }
+            }
+        }
+        const auto distance = std::hypot(center.x - seam.x, center.y - seam.y);
+        const auto inset = std::max(profile.agentRadius, profile.weldTolerance * 4.0F);
+        return distance > inset ? Interpolate(seam, center, inset / distance) : center;
+    }
+
+    /** Retract unmatched CELL seams while preserving every shared interior edge.
+     * An interior fan keeps the original floor plane and exact matched portal
+     * endpoints. Only the wedges facing an unlinked seam are omitted; adjacent
+     * triangles keep their shared edges, so no T-junctions are introduced.
+     */
+    template <class Border> void RetractUnlinkedBorders(CandidateNavMesh &candidate, const Border &border)
+    {
+        const auto original = candidate.mesh.polygons;
+        std::vector<std::vector<std::uint32_t>> children(original.size());
+        std::vector<std::array<std::uint32_t, 3>> edgeChildren(original.size());
+        std::vector<NavPolygon> polygons;
+        std::vector<std::size_t> sources;
+        std::vector<std::vector<std::size_t>> contributors;
+        std::size_t retracted{};
+        std::set<std::pair<std::uint32_t, std::uint8_t>> linkedEdges;
+        for (const auto &link : candidate.borderLinks)
+        {
+            linkedEdges.emplace(link.polygon, link.edge);
+        }
+        for (std::uint32_t index{}; index < original.size(); ++index)
+        {
+            const auto &face = original[index];
+            std::array<bool, 3> unmatched{};
+            for (std::uint8_t edge{}; edge < 3; ++edge)
+            {
+                unmatched[edge] = face.neighbors[edge] == NoNeighbor &&
+                                  border(candidate.mesh.vertices[face.vertices[edge]],
+                                         candidate.mesh.vertices[face.vertices[(edge + 1) % 3]],
+                                         candidate.profile.weldTolerance) >= 0 &&
+                                  !linkedEdges.contains({index, edge});
+            }
+            edgeChildren[index].fill(NoNeighbor);
+            const bool split = std::any_of(unmatched.begin(), unmatched.end(), [](bool value) { return value; });
+            auto center = NoNeighbor;
+            if (split)
+            {
+                center = static_cast<std::uint32_t>(candidate.mesh.vertices.size());
+                candidate.mesh.vertices.push_back(BorderFanCenter(candidate.mesh, face, unmatched, candidate.profile));
+            }
+            for (std::uint8_t edge{}; edge < (split ? 3 : 1); ++edge)
+            {
+                if (unmatched[edge])
+                {
+                    ++retracted;
+                    continue;
+                }
+                const auto child = static_cast<std::uint32_t>(polygons.size());
+                children[index].push_back(child);
+                auto replacement = face;
+                if (split)
+                {
+                    replacement.vertices = {face.vertices[edge], face.vertices[(edge + 1) % 3], center};
+                    edgeChildren[index][edge] = child;
+                }
+                else
+                {
+                    edgeChildren[index].fill(child);
+                }
+                polygons.push_back(replacement);
+                sources.push_back(candidate.polygonSourceTriangles[index]);
+                contributors.push_back(candidate.polygonContributingTriangles[index]);
+            }
+        }
+        if (!retracted)
+        {
+            return;
+        }
+        candidate.mesh.polygons = std::move(polygons);
+        candidate.polygonSourceTriangles = std::move(sources);
+        candidate.polygonContributingTriangles = std::move(contributors);
+        for (auto &link : candidate.borderLinks)
+        {
+            const auto polygon = link.polygon;
+            link.polygon = edgeChildren[polygon][link.edge];
+            if (children[polygon].size() != 1 ||
+                original[polygon].vertices != candidate.mesh.polygons[link.polygon].vertices)
+            {
+                link.edge = 0;
+            }
+        }
+        for (auto &door : candidate.exits)
+        {
+            if (!door.polygon)
+            {
+                continue;
+            }
+            const auto &choices = children[*door.polygon];
+            door.polygon.reset();
+            auto best = std::numeric_limits<float>::max();
+            for (const auto child : choices)
+            {
+                const auto distance =
+                    DoorDistanceSquared(door.position, candidate.mesh, candidate.mesh.polygons[child]);
+                if (distance < best)
+                {
+                    best = distance;
+                    door.polygon = child;
+                }
+            }
+            if (!door.polygon)
+            {
+                door.region.reset();
+            }
+        }
+        for (auto &region : candidate.regions)
+        {
+            std::vector<std::uint32_t> revised;
+            for (const auto polygon : region.polygons)
+            {
+                revised.insert(revised.end(), children[polygon].begin(), children[polygon].end());
+            }
+            region.polygons = std::move(revised);
+        }
+        candidate.warnings.push_back(
+            std::format("Retracted {} unmatched exterior seam edges into the selected CELL.", retracted));
+        BuildAdjacency(candidate.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
+    }
+
+    /** Retain shared-edge components with real portals or matched doors.
+     * Stitching can join regions and seam retraction can split them. Flood the
+     * final adjacency rather than trusting provisional region anchors, then
+     * compact polygon/source indices and rebuild region/door membership.
+     */
+    void RetainConnectedBorderRegions(CandidateNavMesh &candidate)
+    {
+        const auto count = candidate.mesh.polygons.size();
+        std::vector<std::uint32_t> originalRegion(count, NoNeighbor);
+        for (std::uint32_t index{}; index < candidate.regions.size(); ++index)
+        {
+            const auto &region = candidate.regions[index];
+            for (const auto polygon : region.polygons)
+            {
+                originalRegion[polygon] = index;
+            }
+        }
+        std::vector<bool> anchored(count);
+        for (const auto &link : candidate.borderLinks)
+        {
+            anchored[link.polygon] = true;
+        }
+        for (const auto &door : candidate.exits)
+        {
+            if (door.polygon)
+            {
+                anchored[*door.polygon] = true;
+            }
+        }
+        std::vector<std::uint32_t> remap(count, NoNeighbor);
+        std::vector<bool> seen(count);
+        std::vector<CandidateRegion> regions;
+        for (std::uint32_t start{}; start < count; ++start)
+        {
+            if (seen[start])
+            {
+                continue;
+            }
+            CandidateRegion region;
+            std::set<std::uint32_t> sourceRegions;
+            bool connected{};
+            std::queue<std::uint32_t> pending;
+            pending.push(start);
+            seen[start] = true;
+            while (!pending.empty())
+            {
+                const auto polygon = pending.front();
+                pending.pop();
+                region.polygons.push_back(polygon);
+                connected = connected || anchored[polygon];
+                const auto &face = candidate.mesh.polygons[polygon];
+                region.area +=
+                    Area2(candidate.mesh.vertices[face.vertices[0]], candidate.mesh.vertices[face.vertices[1]],
+                          candidate.mesh.vertices[face.vertices[2]]) *
+                    0.5F;
+                const auto &sources = candidate.polygonContributingTriangles[polygon];
+                region.sourceTriangles.insert(region.sourceTriangles.end(), sources.begin(), sources.end());
+                if (originalRegion[polygon] != NoNeighbor)
+                {
+                    sourceRegions.insert(originalRegion[polygon]);
+                }
+                for (const auto neighbor : face.neighbors)
+                {
+                    if (neighbor != NoNeighbor && !seen[neighbor])
+                    {
+                        seen[neighbor] = true;
+                        pending.push(neighbor);
+                    }
+                }
+            }
+            if (connected)
+            {
+                for (const auto source : sourceRegions)
+                {
+                    const auto &geometry = candidate.regions[source].geometrySources;
+                    region.geometrySources.insert(region.geometrySources.end(), geometry.begin(), geometry.end());
+                }
+                region.id = static_cast<std::uint32_t>(regions.size());
+                for (const auto polygon : region.polygons)
+                {
+                    remap[polygon] = 0;
+                }
+                for (auto *values : {&region.sourceTriangles, &region.geometrySources})
+                {
+                    std::sort(values->begin(), values->end());
+                    values->erase(std::unique(values->begin(), values->end()), values->end());
+                }
+                regions.push_back(std::move(region));
+            }
+        }
+        std::vector<NavPolygon> polygons;
+        std::vector<std::size_t> sources;
+        std::vector<std::vector<std::size_t>> contributors;
+        for (std::uint32_t polygon{}; polygon < count; ++polygon)
+        {
+            if (remap[polygon] == NoNeighbor)
+            {
+                continue;
+            }
+            remap[polygon] = static_cast<std::uint32_t>(polygons.size());
+            polygons.push_back(candidate.mesh.polygons[polygon]);
+            sources.push_back(candidate.polygonSourceTriangles[polygon]);
+            contributors.push_back(std::move(candidate.polygonContributingTriangles[polygon]));
+        }
+        for (auto &face : polygons)
+        {
+            for (auto &neighbor : face.neighbors)
+            {
+                if (neighbor != NoNeighbor)
+                {
+                    neighbor = remap[neighbor];
+                }
+            }
+        }
+        std::vector<std::uint32_t> polygonRegion(polygons.size(), NoNeighbor);
+        for (auto &region : regions)
+        {
+            for (auto &polygon : region.polygons)
+            {
+                polygon = remap[polygon];
+                polygonRegion[polygon] = region.id;
+            }
+        }
+        for (auto &link : candidate.borderLinks)
+        {
+            link.polygon = remap[link.polygon];
+            regions[polygonRegion[link.polygon]].reachesBorder = true;
+        }
+        for (auto &door : candidate.exits)
+        {
+            door.region.reset();
+            if (door.polygon && remap[*door.polygon] != NoNeighbor)
+            {
+                door.polygon = remap[*door.polygon];
+                door.region = polygonRegion[*door.polygon];
+                regions[*door.region].exitFormIds.push_back(door.referenceId);
+            }
+            else
+            {
+                door.polygon.reset();
+            }
+        }
+        candidate.statistics.rejectedUnreachable += count - polygons.size();
+        candidate.mesh.polygons = std::move(polygons);
+        candidate.polygonSourceTriangles = std::move(sources);
+        candidate.polygonContributingTriangles = std::move(contributors);
+        candidate.regions = std::move(regions);
+    }
+
+    /** Retract orphan seam vertices into their surviving incident fans.
+     * Portal endpoints are pinned by exact world coordinates. All welded uses
+     * move together so shared edges remain joined; progressively smaller moves
+     * are attempted when a nonplanar fan would invert or exceed walking slope.
+     * An unmovable vertex is retained for the final coverage check to reject.
+     */
+    template <class Border>
+    void RetractUnlinkedBorderVertices(CandidateNavMesh &candidate, const Border &border, bool retract = true)
+    {
+        std::map<Key, Vec3> pinned;
+        for (const auto &link : candidate.borderLinks)
+        {
+            const auto &face = candidate.mesh.polygons[link.polygon];
+            for (const auto index : {face.vertices[link.edge], face.vertices[(link.edge + 1) % 3]})
+            {
+                const auto point = candidate.mesh.vertices[index];
+                pinned.emplace(Quantize(point, candidate.profile.weldTolerance), point);
+            }
+        }
+        for (std::uint32_t vertex{}; vertex < candidate.mesh.vertices.size(); ++vertex)
+        {
+            const auto point = candidate.mesh.vertices[vertex];
+            const auto key = Quantize(point, candidate.profile.weldTolerance);
+            auto portalPoint = pinned.find(key);
+            if (portalPoint == pinned.end())
+            {
+                auto best = candidate.profile.stepHeight;
+                for (auto pointIt = pinned.begin(); pointIt != pinned.end(); ++pointIt)
+                {
+                    const auto other = pointIt->second;
+                    const auto height = std::abs(point.z - other.z);
+                    if (std::hypot(point.x - other.x, point.y - other.y) <= candidate.profile.weldTolerance &&
+                        height < best)
+                    {
+                        best = height;
+                        portalPoint = pointIt;
+                    }
+                }
+            }
+            if (border(point, point, candidate.profile.weldTolerance) < 0 ||
+                (portalPoint != pinned.end() && point.x == portalPoint->second.x && point.y == portalPoint->second.y &&
+                 point.z == portalPoint->second.z))
+            {
+                continue;
+            }
+            Vec3 center;
+            std::vector<Vec3> fanCenters;
+            std::size_t count{};
+            std::optional<std::pair<std::uint32_t, std::uint8_t>> incident;
+            for (std::uint32_t polygon{}; polygon < candidate.mesh.polygons.size(); ++polygon)
+            {
+                const auto &face = candidate.mesh.polygons[polygon];
+                const auto found = std::find(face.vertices.begin(), face.vertices.end(), vertex);
+                if (found != face.vertices.end())
+                {
+                    incident = {polygon, static_cast<std::uint8_t>(found - face.vertices.begin())};
+                }
+                if (std::any_of(
+                        face.vertices.begin(), face.vertices.end(), [&](auto index)
+                        { return Quantize(candidate.mesh.vertices[index], candidate.profile.weldTolerance) == key; }))
+                {
+                    const auto faceCenter =
+                        (candidate.mesh.vertices[face.vertices[0]] + candidate.mesh.vertices[face.vertices[1]] +
+                         candidate.mesh.vertices[face.vertices[2]]) /
+                        3.0F;
+                    center = center + faceCenter;
+                    fanCenters.push_back(faceCenter);
+                    ++count;
+                }
+            }
+            if (!count || !incident)
+            {
+                continue;
+            }
+            if (portalPoint != pinned.end())
+            {
+                // Welding recognizes near-coincident vertices, but serialized
+                // seams require the exact authored coordinate in every use.
+                auto revised = candidate;
+                if (AlignBorderEndpoints(revised, incident->first, incident->second, portalPoint->second, std::nullopt))
+                {
+                    candidate = std::move(revised);
+                }
+                continue;
+            }
+            if (!retract)
+            {
+                continue;
+            }
+            center = center / static_cast<float>(count);
+            // A nonplanar fan's average may increase its steepest slope. Individual
+            // floor centroids offer directions that preserve that slope envelope.
+            fanCenters.insert(fanCenters.begin(), center);
+            bool moved{};
+            for (const auto target : fanCenters)
+            {
+                const auto distance = std::hypot(target.x - point.x, target.y - point.y);
+                const auto inset = std::max(candidate.profile.agentRadius, candidate.profile.weldTolerance * 4.0F);
+                auto fraction = distance > inset ? std::min(0.5F, inset / distance) : 0.5F;
+                for (std::size_t attempt{}; attempt < 10; ++attempt, fraction *= 0.5F)
+                {
+                    const auto position = Interpolate(point, target, fraction);
+                    if (border(position, position, candidate.profile.weldTolerance) >= 0)
+                    {
+                        break;
+                    }
+                    auto revised = candidate;
+                    if (AlignBorderEndpoints(revised, incident->first, incident->second, position, std::nullopt))
+                    {
+                        candidate = std::move(revised);
+                        moved = true;
+                        break;
+                    }
+                }
+                if (moved)
+                {
+                    break;
+                }
+            }
+        }
+        for (auto &region : candidate.regions)
+        {
+            region.area = 0;
+            for (const auto polygon : region.polygons)
+            {
+                const auto &face = candidate.mesh.polygons[polygon];
+                region.area +=
+                    Area2(candidate.mesh.vertices[face.vertices[0]], candidate.mesh.vertices[face.vertices[1]],
+                          candidate.mesh.vertices[face.vertices[2]]) *
+                    0.5F;
+            }
+        }
+    }
+
+    /// Rebuild directed boundary loops after seam reshaping and component remapping.
+    void RebuildBorderContours(CandidateNavMesh &candidate)
+    {
+        candidate.contours.clear();
+        for (const auto &region : candidate.regions)
+        {
+            std::multimap<Key2, std::pair<std::uint32_t, Key2>> boundary;
+            for (const auto polygon : region.polygons)
+            {
+                const auto &face = candidate.mesh.polygons[polygon];
+                for (std::size_t edge{}; edge < 3; ++edge)
+                {
+                    if (face.neighbors[edge] == NoNeighbor)
+                    {
+                        const auto first = face.vertices[edge];
+                        const auto last = face.vertices[(edge + 1) % 3];
+                        boundary.emplace(Quantize2(candidate.mesh.vertices[first], candidate.profile.weldTolerance),
+                                         std::pair{first, Quantize2(candidate.mesh.vertices[last],
+                                                                    candidate.profile.weldTolerance)});
+                    }
+                }
+            }
+            while (!boundary.empty())
+            {
+                CandidateContour contour{.region = region.id};
+                const auto first = boundary.begin()->first;
+                auto current = first;
+                while (!boundary.empty())
+                {
+                    const auto next = boundary.find(current);
+                    if (next == boundary.end())
+                    {
+                        break;
+                    }
+                    contour.vertices.push_back(next->second.first);
+                    current = next->second.second;
+                    boundary.erase(next);
+                    if (current == first)
+                    {
+                        contour.closed = true;
+                        break;
+                    }
+                }
+                candidate.contours.push_back(std::move(contour));
+            }
+        }
+    }
+
+    /// Reject dangling, reused, or geometrically incompatible portals and any remaining open CELL seam.
+    template <class Border>
+    void ValidateStitchedBorders(CandidateNavMesh &candidate, const std::vector<NavMesh> &neighbors,
+                                 const Border &border)
+    {
+        std::set<std::pair<std::uint32_t, std::uint8_t>> sources;
+        std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint8_t>> targets;
+        std::set<std::tuple<float, float, float>> portalVertices;
+        const auto coordinate = [](Vec3 point) { return std::tuple{point.x, point.y, point.z}; };
+        const auto equal = [](Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; };
+        for (const auto &link : candidate.borderLinks)
+        {
+            const auto target = std::find_if(neighbors.begin(), neighbors.end(),
+                                             [&](const auto &mesh) { return mesh.id == link.neighborNavmeshId; });
+            if (link.polygon >= candidate.mesh.polygons.size() || link.edge >= 3 || link.neighborEdge >= 3 ||
+                target == neighbors.end() || link.neighborPolygon >= target->polygons.size())
+            {
+                candidate.topology.findings.push_back("border portal has an invalid destination");
+                continue;
+            }
+            const auto &sourceFace = candidate.mesh.polygons[link.polygon];
+            portalVertices.insert(coordinate(candidate.mesh.vertices[sourceFace.vertices[link.edge]]));
+            portalVertices.insert(coordinate(candidate.mesh.vertices[sourceFace.vertices[(link.edge + 1) % 3]]));
+            const auto &targetFace = target->polygons[link.neighborPolygon];
+            const auto first = targetFace.vertices[(link.neighborEdge + 1) % 3];
+            const auto last = targetFace.vertices[link.neighborEdge];
+            if (first >= target->vertices.size() || last >= target->vertices.size() ||
+                sourceFace.neighbors[link.edge] != NoNeighbor ||
+                !equal(candidate.mesh.vertices[sourceFace.vertices[link.edge]], target->vertices[first]) ||
+                !equal(candidate.mesh.vertices[sourceFace.vertices[(link.edge + 1) % 3]], target->vertices[last]))
+            {
+                candidate.topology.findings.push_back("border portal endpoints do not match the neighboring edge");
+            }
+            if (!sources.emplace(link.polygon, link.edge).second ||
+                !targets.emplace(link.neighborNavmeshId, link.neighborPolygon, link.neighborEdge).second)
+            {
+                candidate.topology.findings.push_back("border portal reuses a triangle edge");
+            }
+        }
+        for (std::uint32_t polygon{}; polygon < candidate.mesh.polygons.size(); ++polygon)
+        {
+            const auto &face = candidate.mesh.polygons[polygon];
+            for (std::uint8_t edge{}; edge < 3; ++edge)
+            {
+                if (face.neighbors[edge] == NoNeighbor && !sources.contains({polygon, edge}) &&
+                    border(candidate.mesh.vertices[face.vertices[edge]],
+                           candidate.mesh.vertices[face.vertices[(edge + 1) % 3]],
+                           candidate.profile.weldTolerance) >= 0)
+                {
+                    candidate.topology.findings.push_back(
+                        std::format("polygon {} has an unlinked CELL border edge", polygon));
+                }
+            }
+        }
+        for (const auto &vertex : candidate.mesh.vertices)
+        {
+            if (border(vertex, vertex, candidate.profile.weldTolerance) >= 0 &&
+                !portalVertices.contains(coordinate(vertex)))
+            {
+                candidate.topology.findings.push_back("CELL border vertex has no matched neighboring endpoint");
+            }
+        }
+        candidate.topology.valid = candidate.topology.findings.empty();
+    }
 } // namespace
 
 namespace navmesh::core
 {
     std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
-                                       const std::vector<NavMesh> &neighbors)
+                                       const std::vector<NavMesh> &neighbors, const std::vector<NavMesh> &authored)
     {
-        if (candidate.mesh.polygons.empty())
-        {
-            return 0;
-        }
         if (candidate.polygonSourceTriangles.size() != candidate.mesh.polygons.size() ||
             candidate.polygonContributingTriangles.size() != candidate.mesh.polygons.size())
         {
@@ -1840,25 +3201,17 @@ namespace navmesh::core
         const auto distance = [](Vec3 a, Vec3 b) { return std::hypot(std::hypot(a.x - b.x, a.y - b.y), a.z - b.z); };
         const auto border = [&](Vec3 a, Vec3 b, float tolerance)
         {
-            if (std::abs(a.x - cellBounds.min.x) <= tolerance && std::abs(b.x - cellBounds.min.x) <= tolerance)
-            {
-                return 0;
-            }
-            if (std::abs(a.x - cellBounds.max.x) <= tolerance && std::abs(b.x - cellBounds.max.x) <= tolerance)
-            {
-                return 1;
-            }
-            if (std::abs(a.y - cellBounds.min.y) <= tolerance && std::abs(b.y - cellBounds.min.y) <= tolerance)
-            {
-                return 2;
-            }
-            if (std::abs(a.y - cellBounds.max.y) <= tolerance && std::abs(b.y - cellBounds.max.y) <= tolerance)
-            {
-                return 3;
-            }
-            return -1;
+            // Near a CELL corner, a short edge can fall within the search halo
+            // of two sides. Its smallest perpendicular deviation selects the seam.
+            const std::array deviations{std::max(std::abs(a.x - cellBounds.min.x), std::abs(b.x - cellBounds.min.x)),
+                                        std::max(std::abs(a.x - cellBounds.max.x), std::abs(b.x - cellBounds.max.x)),
+                                        std::max(std::abs(a.y - cellBounds.min.y), std::abs(b.y - cellBounds.min.y)),
+                                        std::max(std::abs(a.y - cellBounds.max.y), std::abs(b.y - cellBounds.max.y))};
+            const auto closest = std::min_element(deviations.begin(), deviations.end());
+            return *closest <= tolerance ? static_cast<int>(closest - deviations.begin()) : -1;
         };
-        CoalesceGeneratedBorders(candidate, neighbors, border);
+        const auto required = ResolveAuthoredBorderPortals(authored, neighbors, border, candidate.profile, maximumGap);
+        CoalesceGeneratedBorders(candidate, neighbors, border, maximumGap);
         std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint8_t>> used;
         for (const auto &link : candidate.borderLinks)
         {
@@ -1972,13 +3325,52 @@ namespace navmesh::core
             }
         }
         StitchPartitionedBorders(candidate, neighbors, border, maximumGap);
-        // Endpoint alignment can leave unused source vertices. Compact indices while
-        // preserving every polygon and any contour whose vertices still belong to it.
         CompactBorderVertices(candidate);
+        RetractUnlinkedBorderVertices(candidate, border, false);
+        for (const auto &[destination, constraints] : required)
+        {
+            const auto [id, polygon, edge] = destination;
+            const auto neighbor =
+                std::find_if(neighbors.begin(), neighbors.end(), [&](const auto &mesh) { return mesh.id == id; });
+            if (std::none_of(candidate.borderLinks.begin(), candidate.borderLinks.end(),
+                             [&](const auto &link)
+                             {
+                                 return link.neighborNavmeshId == id && link.neighborPolygon == polygon &&
+                                        link.neighborEdge == edge;
+                             }))
+            {
+                (void)RetriangulateBorderPortal(candidate, *neighbor, polygon, edge, border, maximumGap,
+                                                constraints.depth, constraints.heightTolerance);
+            }
+        }
+        BuildAdjacency(candidate.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
+        RetractUnlinkedBorders(candidate, border);
+        RetainConnectedBorderRegions(candidate);
+        // Endpoint alignment and component filtering can leave unused source
+        // vertices. Compact them before validating incident-fan deformations.
+        CompactBorderVertices(candidate);
+        RetractUnlinkedBorderVertices(candidate, border);
+        RebuildBorderContours(candidate);
         // Neighboring bridges can share an edge even when they target separate NAVM triangles.
         BuildAdjacency(candidate.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
         candidate.statistics.outputPolygons = candidate.mesh.polygons.size();
         candidate.topology = ValidateCandidateTopology(candidate);
+        ValidateStitchedBorders(candidate, neighbors, border);
+        for (const auto &[destination, constraints] : required)
+        {
+            const auto [id, polygon, edge] = destination;
+            if (std::none_of(candidate.borderLinks.begin(), candidate.borderLinks.end(),
+                             [&](const auto &link)
+                             {
+                                 return link.neighborNavmeshId == id && link.neighborPolygon == polygon &&
+                                        link.neighborEdge == edge;
+                             }))
+            {
+                candidate.topology.valid = false;
+                candidate.topology.findings.push_back(
+                    std::format("Authored border portal {:08X}:{}:{} was not retained", id, polygon, edge));
+            }
+        }
         return candidate.borderLinks.size() - initialLinks;
     }
 

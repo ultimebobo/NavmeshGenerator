@@ -23,7 +23,7 @@ inside its owning group.
 | `Existing NAVM ...: ambiguous` | violet | polygons with conflicting support evidence |
 | `Existing NAVM ...: unsupported` | dark gray | unsupported or unknown classification |
 | `Existing NAVM ...: door_linked` / `Candidate NAVM: door_linked` | orange | triangles associated with an exit; this material takes priority over the analysis face color |
-| `Candidate NAVM` | blue-green | generated navigation connected to an entrance or exterior cell border |
+| `Candidate NAVM` | blue-green | generated navigation connected to an entrance or matched exterior portal |
 | `Candidate NAVM: water` | blue | generated triangles classified as water |
 | `Candidate NAVM: preferred_path` | yellow | generated triangles following authored preferred routes |
 | `Candidate NAVM: water_preferred_path` | teal | generated triangles with both independent tags |
@@ -47,6 +47,11 @@ connections share a single bar. Bars follow the consuming triangle’s edge endp
 including its slope and authored border drift. A bar requires both linked triangles to
 be displayed; unresolved destinations, invalid indices, and connections cut by
 scene bounds are omitted. Nearby unlinked edges do not produce bars.
+When a candidate is displayed, authored bars involving the working cell's
+original NAVMs are suppressed in both directions. Green bars at its seams follow
+the generated polygons and exact neighboring endpoints. Authored bars between
+unchanged neighboring NAVMs remain visible; inspection without a candidate keeps
+the authored connections.
 
 The GLB contains geometry, groups, and colors. Its adjacent
 `scene.glb.provenance.json` records the exported groups in display order, named

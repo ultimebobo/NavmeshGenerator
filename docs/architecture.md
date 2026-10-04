@@ -78,11 +78,27 @@ adjacent NAVM edges in the resolved load order and records reciprocal targets.
 The shared authored-border tolerance allows small deviations from nominal CELL
 bounds only at matched portal endpoints. Both generation and serialization
 preserve those endpoints and keep other generated vertices inside the target.
-Only components with a shared-edge path to a matched door or a boundary edge on
-the selected exterior CELL are retained. Filtering follows CELL clipping and
+Both application paths supply the selected cell's authored NAVMs to stitching.
+Resolved reciprocal edges identify required exterior crossings. A constrained
+boundary cavity repairs crossings that direct subdivision cannot retain, keeping
+its interior rim, other portals, source joins, and door anchors. Repair depth comes
+from the authored floor triangle; height matching accounts for authored endpoint
+drift. Dynamic programming chooses a triangulation within the greater of the
+configured walking slope and the existing cavity's generated slope envelope.
+Incident-fan endpoint alignment uses the same slope-envelope rule and pins saved
+portal endpoints. Cavity preparation aligns near-coincident endpoints and admits
+incident floor triangles whose vertices reach the authored repair band. When the
+unchanged rim needs seam height detail, a bounded interior sample supports the
+triangulation while preserving the complete portal. Unpaired nonplanar fans try
+individual floor-centroid directions, with a roundoff allowance in slope comparisons.
+Missing required crossings invalidate the final candidate;
+seam retraction cannot silently remove them.
+Generation provisionally retains components with a shared-edge path to a matched
+door or a boundary edge on the selected exterior CELL. Filtering follows CELL clipping and
 door matching, preserving source joins while compacting polygon, neighbor,
 region, door and vertex indices. Interiors without a matched door produce empty
-candidates. A border anchor does not require a saved neighboring portal.
+candidates. Final stitching retains only components connected to a real
+neighboring portal or matched door; reaching a border alone is insufficient.
 Stitching can subdivide a containing
 generated boundary edge to match smaller authored border edges without removing
 the remaining geometry. Collinear generated subdivisions can be coalesced through
@@ -90,6 +106,17 @@ validated boundary-fan retriangulation, preserving the interior rim and remappin
 source, region, contour, door, and portal indices. Inward authored offsets trim
 generated fans; outward offsets add connectors. Connections retain full authored endpoints and obey
 distance, height, slope, and welding constraints.
+Short corner seams select their nearest CELL side. Terminal endpoints can extend
+through their entire incident fans, preserving shared interior vertices and
+existing portal endpoints. Unmatched seam wedges retract through interior fans
+without changing shared interior edges. Final adjacency determines the surviving
+components. Unpaired border vertices move into their incident fans, with inward
+movement bounded by the agent footprint and weld tolerance; matched endpoints
+stay pinned. Every remaining border vertex equals a neighboring portal endpoint.
+Region, door, source and contour evidence is rebuilt or remapped.
+Stitch validation requires exact reversed neighboring endpoints, unique consuming
+edges, and a portal on every remaining CELL seam. Candidate cache fingerprints
+include the stitching implementation revision.
 The [glossary](glossary.md) explains these terms and why single-cell geometry
 replacement can require neighboring NAVM connection overrides.
 

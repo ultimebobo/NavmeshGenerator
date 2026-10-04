@@ -126,7 +126,8 @@ namespace navmesh::app::detail
                     options.partitioningAlgorithm, options.recastSettings);
                 if (input.bounds)
                 {
-                    (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent);
+                    (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent,
+                                                       result.cell->navMeshes);
                 }
                 result.generationSeconds =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();

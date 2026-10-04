@@ -54,6 +54,7 @@ namespace navmesh::core
         /// These exits also supply inspection markers without a candidate; ownership stays with the caller.
         const std::vector<CandidateExit> *candidateEntrances{};
         /// Generated exterior connections; invalid or unavailable destination triangles are omitted.
+        /// Displaying a candidate suppresses authored bars involving the selected cell's original NAVMs.
         const std::vector<CandidateBorderLink> *candidateBorderLinks{};
     };
     struct SceneExportResult

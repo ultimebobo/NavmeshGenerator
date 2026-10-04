@@ -84,7 +84,22 @@ mesh is clipped to the selected CELL after Recast construction. This preserves
 walkable seams where supported terrain or collision continues across the border.
 
 With an adjacent NAVM, stitching matches complete authored boundary edges at
-compatible heights. Compatible collinear generated subdivisions are coalesced
+compatible heights. Selected-cell authored external links also define required
+crossings, resolved through neighboring return entries or a geometric edge match.
+When direct subdivision cannot retain a crossing, stitching replaces a connected
+boundary cavity with a triangulation constrained by the complete neighboring edge
+and the untouched interior rim. Its repair depth follows the authored floor
+triangle, with height matching accounting for authored endpoint drift. Dynamic
+programming considers alternative diagonals and bounds replacement slopes by the
+configured limit or the existing generated cavity's slope envelope, whichever is
+greater. Near-coincident endpoints align through their incident fans before cavity
+construction. Removed seam height detail can become a bounded interior sample
+when rim-only triangulation cannot preserve the floor's slope envelope. Cavity
+growth includes incident triangles reaching the repair band through a vertex;
+their centroids need not be inside it. Source contributors, region membership, door anchors, and other portals
+are remapped transactionally. Missing required crossings fail final validation
+and prevent export, including when no candidate floor survives.
+Compatible collinear generated subdivisions are coalesced
 by retriangulating their incident fans while preserving the interior rim and
 horizontal footprint. Mixed regions or flags, existing portal triangles, invalid
 topology, and nonwalkable replacements prevent coalescing.
@@ -95,17 +110,31 @@ to avoid collapsed connector triangles. Extensions obey distance, step, slope,
 and welding constraints. Inward authored offsets trim generated fans; outward
 offsets add connectors. Matched endpoints preserve the exact authored edge,
 including bounded deviations from the nominal CELL border. Other generated
-vertices stay inside the CELL. Border-reaching regions remain present in candidate
-JSON, OBJ, GLB, and plugin output even without a matched neighboring portal;
-no portal is invented across unsupported gaps.
+vertices stay inside the CELL. Terminal seam endpoints extend through their
+complete incident fans when movement and topology permit, preserving shared
+interior vertices. Short corner edges select their nearest CELL side, and one
+triangle can consume portals on multiple sides. Unmatched CELL seam wedges
+retract through interior fans, preserving their floor plane and shared interior
+edges. Unpaired border vertices move inward with the agent footprint and weld
+tolerance bounding the displacement. Matched endpoints remain pinned. Each
+nonplanar fan can try individual floor-centroid directions when its average would
+increase the slope envelope. Fan slope comparisons allow floating-point roundoff.
+Every remaining border vertex must equal a neighboring portal endpoint.
+Final shared-edge components survive only with a real neighboring portal
+or matched door. Region, source, door, vertex and portal indices are compacted;
+contours are rebuilt from the final boundaries. Stitch validation requires exact
+reversed endpoint equality, unique consuming edges and complete coverage of every
+remaining CELL seam. No portal is invented across unsupported gaps.
 Entrance positions appear as orange markers, including unmatched entrances.
 See the [glossary](glossary.md) for the Creation Kit border-bar interpretation
 and the distinction between neighboring geometry and saved return links.
 
 With `--skip-existing-navmesh`, only cells without winning NAVM records are
 generated. The same retention and stitching rules apply. Matched authored
-neighbors receive reciprocal links while retaining their geometry; unmatched
-borders, including between newly covered cells, remain unlinked.
+neighbors receive reciprocal links while retaining their geometry. Without a
+matched door or authored-neighbor portal, an uncovered candidate is empty and
+plugin writing is skipped. Batch candidates are finalized against the authored
+snapshot before generated-to-generated portal identities are reconciled.
 
 Source-triangle provenance is recovered by the closest source height at each
 generated triangle's XY centroid. This is an approximate audit join after

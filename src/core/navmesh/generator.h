@@ -57,7 +57,8 @@ namespace navmesh::core
          * of climb and vertical voxel size. Contour error is refined if a retained voxel
          * region would collapse. Obstacle-only sources cannot supply walkable floors. Retain only
          * walkable components with a shared-edge path to a matched door or exterior
-         * boundary edge. Border anchors do not require an authored neighboring portal.
+         * boundary edge as provisional anchors. Exterior application paths finalize
+         * reachability with StitchCandidateBorders against available neighboring NAVMs.
          * @param scene Geometry with complete triangle provenance in Skyrim world coordinates.
          * @param profile Agent dimensions and movement constraints in Skyrim world units.
          * @param cellBounds Optional exterior area in Skyrim world coordinates; absent for interiors.

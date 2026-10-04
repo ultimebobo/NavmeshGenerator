@@ -565,6 +565,14 @@ namespace navmesh::core
             meshById.emplace(mesh.id, &mesh);
         }
         std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t>> authoredPairs;
+        const bool showCandidateLinks =
+            options.candidateNavmesh && Contains(options.layers, SceneLayer::CandidateNavmesh);
+        const auto isReplaced = [&](std::uint32_t id)
+        {
+            return showCandidateLinks && metadata.selectedCell &&
+                   std::any_of(metadata.selectedCell->navMeshes.begin(), metadata.selectedCell->navMeshes.end(),
+                               [&](const auto &mesh) { return mesh.id == id; });
+        };
         const auto appendLink = [&](const NavMesh &source, std::uint32_t sourcePolygon, std::uint8_t sourceEdge,
                                     std::uint32_t targetId, std::uint32_t targetPolygon, bool generated)
         {
@@ -609,7 +617,7 @@ namespace navmesh::core
             {
                 for (const auto &link : mesh.externalLinks)
                 {
-                    if (link.edge < 3)
+                    if (link.edge < 3 && !isReplaced(mesh.id) && !isReplaced(link.navmeshId))
                     {
                         appendLink(mesh, link.polygon, link.edge, link.navmeshId, link.targetPolygon, false);
                     }

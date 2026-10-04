@@ -137,8 +137,8 @@ include every cell's geometry, door table and portal entries. Any failure occurs
 before the temporary plugin is finalized. See [batch rebuilding](batch-rebuilding.md).
 
 `--skip-existing-navmesh` selects uncovered targets and protects all cells owning
-winning NAVM records. New NAVM records may retain border-reaching regions without
-authored portal matches. Matched borders still receive reciprocal authored-neighbor
-links without replacing that neighbor's geometry. Unmatched borders remain
-unlinked, including between newly covered cells. NAVI and the other connection
+winning NAVM records. New NAVM records retain only components reaching matched
+doors or real authored-neighbor portals. Matched borders receive reciprocal authored-neighbor
+links without replacing that neighbor's geometry. Unmatched generated seams
+retract into the target CELL; isolated candidates are skipped. NAVI and the other connection
 limitations above apply to new identities as well.

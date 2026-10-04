@@ -63,7 +63,8 @@ namespace navmesh::core
         std::vector<std::uint32_t> polygons;
         std::vector<std::size_t> sourceTriangles;
         std::vector<std::size_t> geometrySources;
-        /// True when this region has a boundary edge on the selected exterior bounds.
+        /// Before stitching, marks a boundary edge on the selected exterior bounds.
+        /// After stitching, marks a real neighboring portal in this connected component.
         bool reachesBorder{};
         /// Placed DOOR reference IDs whose world positions reach this region.
         std::vector<std::uint32_t> exitFormIds;
@@ -152,18 +153,34 @@ namespace navmesh::core
      * @param candidate Generated mesh and complete source evidence to reshape in place.
      * @param cellBounds Selected exterior CELL in Skyrim world coordinates.
      * @param neighbors Existing NAVMs in adjacent cells of the same worldspace.
-     * @return Number of reciprocal border portals added.
+     * @param authored Winning selected-cell NAVMs. Their resolved exterior portals are required
+     * crossings, retaining the neighboring edge's exact position and destination.
+     * Required crossings that cannot be repaired invalidate the candidate, even when empty.
+     * @return Number of reciprocal border portals added. candidate.topology reports
+     * dangling targets, endpoint mismatches, reused portals, unmatched border vertices
+     * or remaining open CELL seams.
      * @warning Complete authored edges at compatible heights are joined; containing generated
      * edges may be subdivided and compatible collinear generated subdivisions coalesced.
      * Inward offsets trim boundary fans; outward extensions obey distance, step, slope, and welding limits. Authored
      * border drift within AuthoredBorderTolerance is preserved at matched portal endpoints.
-     * Valid unlinked regions are retained. Boundary preparation can retriangulate compatible
+     * Unmatched CELL seam wedges and unpaired vertices are retracted into the cell.
+     * The agent footprint and weld tolerance bound the inward movement.
+     * Only shared-edge components
+     * with a real border portal or matched door survive; a border alone is not an anchor.
+     * Terminal endpoint alignment moves complete incident fans while pinning existing portals.
+     * Required portal cavities preserve their interior rim and other portals. Authored floor
+     * triangles bound repair depth and height drift. Cavity triangulation and fan alignment
+     * respect the greater of the configured slope and the affected generated floor's slope envelope.
+     * Near-coincident endpoints align through their fans. Removed seam height detail may become
+     * a bounded interior sample when the unchanged rim needs it to meet that slope envelope.
+     * Boundary preparation can retriangulate compatible
      * fans even without a final match. Geometry, region membership, source joins, contour,
      * door and portal indices, and topology are updated consistently; neighbors are unchanged.
      * @throws std::invalid_argument when polygon source evidence is incomplete.
      */
     [[nodiscard]] std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
-                                                     const std::vector<NavMesh> &neighbors);
+                                                     const std::vector<NavMesh> &neighbors,
+                                                     const std::vector<NavMesh> &authored = {});
     /// Check candidate polygon topology without modifying its geometry.
     [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh &candidate);
     /// Write the candidate and its source evidence as JSON; returns false on output failure.

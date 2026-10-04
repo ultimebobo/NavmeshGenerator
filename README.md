@@ -69,6 +69,17 @@ and candidate previews include `scene.glb`, which you can open in a compatible
 explain warnings, skipped areas, and export results. Batch output depends on the
 selected output policy.
 
+Generated border portals use the neighboring NAVM's exact edge endpoints.
+Border repair aligns nearby endpoints and keeps interior floor-height detail
+when needed to preserve the surrounding slopes, including with finer contours.
+Existing exterior crossings from the selected cell are required constraints:
+regeneration retains their locations and destinations. Boundary cavities are
+retriangulated when a direct match cannot retain a crossing; unresolved required
+crossings fail validation and prevent plugin export.
+Unmatched seam wedges retract into the working cell, and components without a
+real neighboring link or a matched door are removed. Scene previews show the
+generated connection bars in place of links involving the original cell NAVMs.
+
 Install a generated patch through MO2 and load it after the plugins it depends
 on. A **Copy selected plugin** export replaces the selected plugin; use it with
 the original mod's assets and language files.

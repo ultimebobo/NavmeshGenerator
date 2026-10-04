@@ -18,6 +18,7 @@ this reference.
 - `navmesh::core::WriteCombinedGlb`: ordered scene groups, separate selected-cell
   originals, door-linked face materials, exit markers, and authored/generated
   connection bars along recorded portal edges. Selection omits bars without both displayed endpoint triangles.
+  Candidate display suppresses authored links involving the selected cell's original NAVMs.
 - `navmesh::skyrim::DecodeNavmeshConnections`: bounded inspection decoding
   of consumed external entries and door associations, retaining raw plugin bytes.
 - `navmesh::core::SharedBytes`: immutable shared byte ownership and bounded slices
@@ -45,10 +46,19 @@ this reference.
   `GeometrySource::navigationObstacle` excludes tagged solids from walkable floors
   while retaining obstruction evidence. Skyrim extraction tags landscape rock assets.
   Candidate warnings identify adaptive voxel width and climb quantization.
-- `navmesh::core::StitchCandidateBorders`: preserves unlinked regions and matches
-  authored border edges, coalescing compatible generated boundary subdivisions
-  and splitting containing edges with consistent region, source, contour, door,
+- `navmesh::core::StitchCandidateBorders`: matches complete neighboring edges and
+  accepts selected-cell authored NAVMs as required crossing constraints. Missing
+  crossings are repaired by constrained cavity retriangulation with stable source,
+  region, door, and portal joins; unresolved crossings invalidate the candidate.
+  Near-coincident endpoints align through complete fans, and bounded interior
+  height samples preserve the unchanged rim's slope envelope when needed.
+  It retains only components connected to real portals or matched doors and retracts
+  unmatched CELL seam wedges while preserving shared interior edges. Border
+  preparation coalesces compatible generated boundary subdivisions and splits
+  containing edges with consistent region, source, contour, door,
   and portal joins. Inward offsets trim the candidate; outward offsets extend it.
+  Terminal endpoint alignment updates complete incident fans. Final validation
+  checks exact reversed endpoint equality, unique portals and complete seam coverage.
 - `navmesh::core::AuthoredBorderTolerance`: shared world-unit bound for authored
   portal drift from exterior CELL borders, used by stitching and the guarded writer.
 - `navmesh::skyrim`: plugin/load-order reading, guarded NAVM override

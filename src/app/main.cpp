@@ -362,6 +362,25 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             return 2;
         }
     }
+    else if (options.generateCandidate && !options.plugin.empty())
+    {
+        // Standalone previews need the same resolved CELL ownership, terrain
+        // halo and neighboring NAVMs as the shared load-order generation path.
+        if (options.data.empty())
+        {
+            options.data = std::filesystem::absolute(options.plugin).parent_path();
+        }
+        try
+        {
+            resolved = navmesh::skyrim::ResolveLoadOrder(
+                {.dataDirectory = options.data, .plugins = {std::filesystem::absolute(options.plugin)}});
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << "Preview plugin resolution failed: " << error.what() << "\n";
+            return 2;
+        }
+    }
     if (resolved)
     {
         std::size_t unsupported{};
@@ -788,12 +807,13 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             {
                 return 3;
             }
-            if (resolved && analysisConfig.cellBounds)
+            if (analysisConfig.cellBounds)
             {
                 update(86, "Matching adjacent NAVM borders");
                 std::vector<navmesh::core::NavMesh> adjacent;
-                const auto *selectedRecord = resolved->FindWinning(cell->id);
-                for (const auto &other : resolved->cells)
+                const auto &borderSnapshot = *resolved;
+                const auto *selectedRecord = borderSnapshot.FindWinning(cell->id);
+                for (const auto &other : borderSnapshot.cells)
                 {
                     if (!other.exteriorCoordinates || !cell->exteriorCoordinates || other.id == cell->id)
                     {
@@ -805,21 +825,15 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                     {
                         continue;
                     }
-                    const auto *otherRecord = resolved->FindWinning(other.id);
+                    const auto *otherRecord = borderSnapshot.FindWinning(other.id);
                     if (selectedRecord && otherRecord &&
                         otherRecord->worldspaceFormId == selectedRecord->worldspaceFormId)
                     {
                         adjacent.insert(adjacent.end(), other.navMeshes.begin(), other.navMeshes.end());
                     }
                 }
-                const auto links =
-                    navmesh::core::StitchCandidateBorders(*candidate, *analysisConfig.cellBounds, adjacent);
-                if (!links && std::any_of(candidate->regions.begin(), candidate->regions.end(),
-                                          [](const auto &region) { return region.reachesBorder; }))
-                {
-                    candidate->warnings.push_back(
-                        "No exterior border edge matched an adjacent NAVM; cross-cell navigation is unlinked.");
-                }
+                (void)navmesh::core::StitchCandidateBorders(*candidate, *analysisConfig.cellBounds, adjacent,
+                                                            cell->navMeshes);
             }
             navmesh::core::TagCandidateTriangles(*candidate, cell->navMeshes, cell->waterHeight, options.tagTriangles);
         }
@@ -898,7 +912,20 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         return 2;
     }
     // Serialization requires a valid candidate and retains the resolved source master ordering.
-    if (options.generatePlugin)
+    if (options.generatePlugin && candidate->mesh.polygons.empty())
+    {
+        std::ofstream generationReport(options.output / "generation-report.json", std::ios::trunc);
+        generationReport << "{\n  \"metadata\": " << navmesh::reproducibility::ToJson(metadata, "    ") << ",\n";
+        generationReport << std::format("  \"form_id\":\"{:08X}\",\"status\":\"skipped_empty_candidate\"\n}}\n",
+                                        cell->id);
+        if (!generationReport)
+        {
+            std::cerr << "Cannot write generation-report.json.\n";
+            return 2;
+        }
+        std::cout << "No generated component reaches a matched door or neighboring NAVM; plugin writing skipped.\n";
+    }
+    else if (options.generatePlugin)
     {
         std::vector<std::filesystem::path> inputPaths;
         if (mo2Input)
