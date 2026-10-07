@@ -548,7 +548,8 @@ namespace
         ImGui::TextUnformatted("Neighboring cell radius");
         ImGui::SetNextItemWidth(-1);
         ImGui::InputInt("##neighboring", &options.neighboringCellRadius);
-        Help("Scene neighborhood and batch impact halo in CELL units. Generation remains clipped to each target cell.");
+        Help("Geometry input neighborhood in CELL units. Batch targets follow changed terrain or collision; generation "
+             "remains clipped to each target cell.");
         const auto integers = IntegerFields(options);
         const char *labels[] = {"Cache disk budget (MiB)", "Working memory budget (MiB)", "Generation workers"};
         const char *hints[] = {"Generated cache retention only. Zero retains none after safe consumption.",
@@ -603,6 +604,12 @@ namespace
         if (ImGui::Combo("##scope", &scope, "Cell\0Plugin\0Load order\0"))
         {
             options.rebuildScope = static_cast<RebuildScope>(scope);
+        }
+        if (options.rebuildScope != RebuildScope::Cell)
+        {
+            Help("Generate navigation for cells affected by terrain, water or collision, including new worldspaces "
+                 "and cells without navmesh. Water-only changes require supported terrain or model collision. "
+                 "Enable Skip cells with existing navmesh to preserve authored cells.");
         }
         if (options.rebuildScope == RebuildScope::Cell)
         {

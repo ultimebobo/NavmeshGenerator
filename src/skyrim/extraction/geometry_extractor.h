@@ -47,6 +47,8 @@ namespace navmesh::skyrim
         std::size_t referencesWithModels{};
         std::size_t modelsLoaded{};
         std::size_t modelsMissing{};
+        /// True when every required archive lookup completed; absent models are trustworthy only then.
+        bool archiveSearchComplete{true};
         std::size_t invalidVertices{};
         std::size_t invalidIndices{};
         std::size_t modelsExcluded{};
@@ -69,6 +71,8 @@ namespace navmesh::skyrim
     {
         std::unordered_map<std::string, std::filesystem::path> looseModels;
         std::vector<std::filesystem::path> archives;
+        /// Optional loose asset roots in increasing priority, used to find a replacement's preceding provider.
+        std::vector<std::filesystem::path> looseRoots;
     };
 
     /// Cache counters in bytes and operation counts for one coherent input snapshot.
@@ -110,7 +114,8 @@ namespace navmesh::skyrim
     /// @param assets Optional MO2 loose winners and archive paths.
     /// @param modelCache Optional run-scoped model and placement cache, shared safely by workers.
     /// @param navigationOnly Materialize supported collision and coverage without render display meshes.
-    /// @return Extracted geometry with per-reference failures; navigationOnly excludes render-only support.
+    /// @return Geometry and per-reference failures, with archiveSearchComplete distinguishing absence from lookup failure.
+    /// navigationOnly excludes render-only support.
     /// Landscape rock assets are tagged as navigation obstacles while retaining their collision geometry.
     [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path &dataDirectory, const core::Cell &cell,
                                                      const std::filesystem::path &cacheDirectory = {},

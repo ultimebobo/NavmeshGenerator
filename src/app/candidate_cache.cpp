@@ -23,7 +23,7 @@ namespace navmesh::app::detail
     namespace
     {
         // Private cache layout is deliberately versioned, distinct from supported inspection/export formats.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-5/recast-pipeline-11";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-6/recast-pipeline-17";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)
@@ -82,7 +82,7 @@ namespace navmesh::app::detail
         }
         template <class Archive> void Fields(Archive &a, core::CandidateBorderLink &v)
         {
-            a(v.polygon, v.edge, v.neighborNavmeshId, v.neighborPolygon, v.neighborEdge);
+            a(v.polygon, v.edge, v.neighborNavmeshId, v.neighborPolygon, v.neighborEdge, v.generatedNeighborCell);
         }
         template <class Archive> void Fields(Archive &a, core::CandidateContour &v)
         {

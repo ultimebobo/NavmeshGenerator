@@ -53,14 +53,21 @@ NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --reb
 NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-load-order --generate-plugin --output "<new output folder>"
 ```
 
-Plugin scope finds cells possibly affected by that plugin's edit history;
+Plugin scope finds cells with terrain, water or collision changes in that plugin's edit history;
 load-order scope considers changes after the first active baseline plugin and
 MO2 model replacements. Selection includes historical moved/deleted placements,
-changed base-object uses, persistent references and exterior impact halos.
+changed base-object uses and persistent references. Visual-only assets and NAVM-only
+edits do not select rebuilding targets. Actual changed collision triangles determine
+exterior coverage; unchanged collision and metadata do not enlarge the scope.
+New terrain and collision select uncovered cells, including new worldspaces and
+submerged heightfields. Water-only changes require supported winning terrain or
+exact model collision coverage; empty water planes do not become targets.
+Existing NAVM is not required for generation in any scope.
 Generation uses winning geometry from the full load order and neighboring cells,
 while each generated NAVM stays clipped to its own target CELL. Oversized model
-bounds extend the geometry suppliers and impact footprint; unknown bounds use
-conservative worldspace coverage.
+bounds extend geometry suppliers. Neighboring-cell radius controls generation
+inputs without adding unchanged cells to the regeneration scope. Required model
+evidence that cannot be read stops collision selection with a diagnostic.
 
 The load order is resolved once, navigation-equivalent overrides are excluded,
 and bounded caches reuse terrain, models, placements, and generated candidates.
@@ -72,8 +79,13 @@ gzip candidate JSON or `--batch-output full` for candidate JSON/OBJ beneath
 candidate inspection. `--estimate-only` samples the selected scope before a full
 rebuild and caches the sampled work. Shared cache location and disk retention,
 working-memory admission, and worker settings are exposed and persisted in the
-desktop UI; see [performance improvements](performance-improvements.md). Cells without existing NAVM or a nonempty candidate are
-reported as skipped. Incompatible generated border partitions stop patch writing.
+desktop UI; see [performance improvements](performance-improvements.md).
+Every selected live batch cell generates navigation, including cells with no NAVM.
+Workers retain every surviving walkable component until all targets are ready;
+shared generated seams then receive matching partitions and reciprocal links.
+Only untouched neighbors provide authored border constraints. Valid empty targets
+clear replaced navigation where no supported floor survives. Topology and linking
+failures stop export with a CELL-specific diagnostic.
 See [batch rebuilding](batch-rebuilding.md) for the baseline contract,
 outputs, caching and writer limitations.
 
@@ -101,7 +113,7 @@ also apply to the copy; retained records do not imply rebuilt navigation data.
 
 Enable **Skip cells with existing navmesh** in the Windows UI, or add
 `--skip-existing-navmesh` to a generation command, to fill uncovered selected
-cells while preserving authored navigation. The setting is optional and saved
+cells when explicitly enabled. The setting is optional and saved
 with the other UI options. It applies to Cell, Plugin, and Load order scopes and
 requires resolved MO2 or load-order input. Any winning NAVM record protects its
 cell, including empty, unsupported, and deleted records. Batch reports identify
@@ -114,9 +126,9 @@ NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --reb
 
 Uncovered cells receive new plugin-owned NAVM records. Matched borders can add
 reciprocal links to authored neighbors while retaining their vertices and
-triangles. Unmatched generated seam wedges retract into the selected CELL.
-Components without a real portal or matched door are removed; empty candidates
-are reported as skipped without writing a patch.
+triangles. Batch scopes also link new cells to each other's generated meshes and
+retain unanchored walkable floors. In Cell scope, unmatched seam wedges retract,
+components without a portal or door are removed, and empty candidates are skipped.
 
 ## Mod Organizer 2 input
 
@@ -162,7 +174,8 @@ The combined-scene workflow, material legend, provenance joins, and Online 3D Vi
 
 To generate an inspection candidate from the selected cell, add `--generate-candidate`. Candidate generation uses the human navigation profile. Recast rasterizes supported terrain and collision, filters slopes and clearance, erodes walkable spans by the profile's agent radius, and creates polygonal regions. Region partitioning defaults to watershed; choose `--partitioning-algorithm monotone` or `--partitioning-algorithm layers` to use Recast's other strategies. The Windows UI provides the same selector and saves it with the other options. The selected strategy is recorded in `candidate-navm.json`. Voxel resolution adapts to the extracted area's size. Contours use the configured simplification error and edge subdivision settings, and Recast builds triangles directly to avoid long triangle fans from larger polygons. Regions below the profile's minimum region area are removed; watershed and monotone can merge small adjacent regions, while layers does not use the merge threshold. Candidate output is clipped to the selected exterior CELL independently of its neighboring geometry suppliers, with bounded extensions at matched authored border portal endpoints. Generation provisionally retains shared-edge components reaching a matched door or the selected exterior CELL border. Final stitching retains only components reaching a real neighboring portal or matched door. Unreachable roof and stone-top islands are removed regardless of area; surfaces merely near a border do not qualify. Interiors without a matched door produce empty candidates. Filtering preserves source evidence and remaps geometry and door indices, with discarded triangles recorded in `rejected_unreachable`. Exterior rasterization includes a supported neighboring halo before the generated mesh is clipped to the selected CELL, so radius erosion does not treat the CELL seam as an obstacle. With a resolved load order and a selected exterior cell, matching adjacent NAVM edges are joined to the candidate border and recorded in `border_links`. Stitching can coalesce compatible collinear generated subdivisions and split containing edges to match the neighbor's complete edges. Terminal seam endpoints extend through their incident fans, and unmatched seam wedges retract into the CELL. Every remaining seam must have a unique portal with exact reversed neighboring endpoints. Inward offsets trim generated fans and outward offsets use bounded extensions; distance, height, slope, and topology constrain the result. Candidate triangles and orange entrance markers appear in the scene GLB. Source-triangle joins are approximate because voxelization does not retain input triangle IDs. See [the current algorithm and historical comparison](candidate-surface-algorithm.md) for scope and limits.
 
-To write a plugin, use a resolved MO2 profile or the developer load-order route, select a cell or batch rebuild scope, and add `--generate-plugin`. The desktop UI has the same **Write plugin** option; neighboring geometry remains available during generation. The writer puts the generated geometry in the selected cell's largest existing NAVM and replaces its other existing NAVMs with empty overrides. It retains their group hierarchy and includes the source plugins and their masters as dependencies. Parent CELL and worldspace records remain supplied by the load order. Install the generated ESP after its source plugins. It is ESL-flagged when its master table and newly allocated identities fit the light format, even when a source is a regular ESP. Matched entrances become NAVM door links, and matched cell-border edges become reciprocal external links in overrides of the adjacent NAVMs. Each portal matches a complete authored edge; containing generated edges can be subdivided to fit it. Small authored deviations from the nominal CELL boundary are accepted within a shared tolerance; matched endpoints preserve the exact neighboring edge, and other generated vertices stay inside the CELL. Every authored NAVM with an incoming portal to replaced geometry receives an override. Those entries are removed and retained portal indices are remapped before matched borders receive fresh reciprocal links to generated triangles. Unmatched incoming edges remain open boundaries. Read-back validation checks portal indices and emitted destination triangle ranges. Components without real neighboring portals or matched doors are removed. Empty single-cell plugin candidates complete with skipped_empty_candidate in generation-report.json and no patch. Scene previews replace authored bars involving the original cell NAVMs with generated bars. Other authored connections, cover data, NAVI, and teleport-door XNDP references are not rebuilt; those can still prevent NPC navigation. Inspect the plugin in independent tooling and validate navigation on a disposable game profile before use.
+To write a plugin, use a resolved MO2 profile or the developer load-order route, select a cell or batch rebuild scope, and add `--generate-plugin`. The desktop UI has the same **Write plugin** option; neighboring geometry remains available during generation. The writer puts the generated geometry in the selected cell's largest existing NAVM and replaces its other existing NAVMs with empty overrides. It retains their group hierarchy and includes the source plugins and their masters as dependencies. Parent CELL and worldspace records remain supplied by the load order. Install the generated ESP after its source plugins. It is ESL-flagged when its master table and newly allocated identities fit the light format, even when a source is a regular ESP. Matched entrances become NAVM door links, and matched cell-border edges become reciprocal external links in overrides of the adjacent NAVMs. In Cell scope, each portal matches a complete authored edge; containing generated edges can be subdivided to fit it. Small authored deviations from the nominal CELL boundary are accepted within a shared tolerance; matched endpoints preserve the exact neighboring edge, and other generated vertices stay inside the CELL. Every authored NAVM with an incoming portal to replaced geometry receives an override. Those entries are removed and retained portal indices are remapped before matched borders receive fresh reciprocal links to generated triangles. Unmatched incoming edges remain open boundaries. Read-back validation checks portal indices and emitted destination triangle ranges. Cell-scope components without real neighboring portals or matched doors are removed.
+Batch scopes retain all surviving floors and join generated neighbors after all cells are ready. Empty single-cell plugin candidates complete with skipped_empty_candidate in generation-report.json and no patch. Scene previews replace authored bars involving the original cell NAVMs with generated bars. Other authored connections, cover data, NAVI, and teleport-door XNDP references are not rebuilt; those can still prevent NPC navigation. Inspect the plugin in independent tooling and validate navigation on a disposable game profile before use.
 
 Record the command inputs using [docs/run-manifest.example.json](run-manifest.example.json) before a benchmark. The current CLI does not consume this file; map its fields to the existing command-line flags so milestone 0 does not alter parser input behavior.
 

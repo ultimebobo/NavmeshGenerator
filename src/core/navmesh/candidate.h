@@ -89,6 +89,9 @@ namespace navmesh::core
         std::uint32_t neighborNavmeshId{};
         std::uint32_t neighborPolygon{};
         std::uint8_t neighborEdge{};
+        /// Resolved destination CELL for a generated neighbor, including cells without an authored NAVM.
+        /// When set, the writer allocates/resolves that cell's output primary NAVM instead of neighborNavmeshId.
+        std::optional<std::uint32_t> generatedNeighborCell;
     };
     struct CandidateContour
     {
@@ -156,6 +159,9 @@ namespace navmesh::core
      * @param authored Winning selected-cell NAVMs. Their resolved exterior portals are required
      * crossings, retaining the neighboring edge's exact position and destination.
      * Required crossings that cannot be repaired invalidate the candidate, even when empty.
+     * @param deferUnlinkedBorders Preserve unpaired seams and all components for batch linking.
+     * In this mode only existing matched portals are validated; authored crossing repair
+     * and final seam/reachability filtering are deferred.
      * @return Number of reciprocal border portals added. candidate.topology reports
      * dangling targets, endpoint mismatches, reused portals, unmatched border vertices
      * or remaining open CELL seams.
@@ -163,26 +169,33 @@ namespace navmesh::core
      * edges may be subdivided and compatible collinear generated subdivisions coalesced.
      * Inward offsets trim boundary fans; outward extensions obey distance, step, slope, and welding limits. Authored
      * border drift within AuthoredBorderTolerance is preserved at matched portal endpoints.
-     * Unmatched CELL seam wedges and unpaired vertices are retracted into the cell.
+     * With immediate linking, unmatched CELL seam wedges and unpaired vertices retract into the cell.
      * The agent footprint and weld tolerance bound the inward movement.
-     * Only shared-edge components
-     * with a real border portal or matched door survive; a border alone is not an anchor.
+     * Immediate linking retains only shared-edge components
+     * with a real border portal or matched door; a border alone is not an anchor.
      * Terminal endpoint alignment moves complete incident fans while pinning existing portals.
      * Required portal cavities preserve their interior rim and other portals. Authored floor
      * triangles bound repair depth and height drift. Cavity triangulation and fan alignment
      * respect the greater of the configured slope and the affected generated floor's slope envelope.
      * Near-coincident endpoints align through their fans. Removed seam height detail may become
      * a bounded interior sample when the unchanged rim needs it to meet that slope envelope.
-     * Boundary preparation can retriangulate compatible
-     * fans even without a final match. Geometry, region membership, source joins, contour,
+     * Boundary preparation can retriangulate compatible fans even without a final match.
+     * Subdivision commits only when every existing portal survives; incompatible proposals are discarded.
+     * Geometry, region membership, source joins, contour,
      * door and portal indices, and topology are updated consistently; neighbors are unchanged.
      * @throws std::invalid_argument when polygon source evidence is incomplete.
      */
     [[nodiscard]] std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
                                                      const std::vector<NavMesh> &neighbors,
-                                                     const std::vector<NavMesh> &authored = {});
+                                                     const std::vector<NavMesh> &authored = {},
+                                                     bool deferUnlinkedBorders = false);
     /// Check candidate polygon topology without modifying its geometry.
     [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh &candidate);
+    /** Rebuild adjacency, boundary contours, region areas, output counts and topology after mesh edits.
+     * @param candidate World-space mesh with complete polygon evidence and region membership.
+     * Polygon and vertex identities are preserved; portal and door indices are not remapped.
+     */
+    void RefreshCandidateTopology(CandidateNavMesh &candidate);
     /// Write the candidate and its source evidence as JSON; returns false on output failure.
     [[nodiscard]] bool WriteCandidateJson(const std::filesystem::path &path, const CandidateNavMesh &candidate,
                                           const Scene &scene, const std::string &metadataJson);

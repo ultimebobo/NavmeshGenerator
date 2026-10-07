@@ -45,14 +45,16 @@ heterogeneous scenes. Cached samples can be reused by the later rebuild.
 Each resolved origin records whether its navigation inputs differ from the
 preceding version. Display names and editor IDs, worldspace map/height-summary
 data, and LAND color/texture data do not trigger generation. LAND height samples,
-reference placement and ownership, base-object geometry, navigation records,
-deletion/disable flags, and unknown fields remain conservative dependencies.
-Resolved identities are compared where raw plugin-local IDs differ. Historical
-placements and base bounds remain available for move/deletion impact selection.
+reference placement, base-model history and deletion/disable state provide collision
+comparison inputs. Batch selection excludes NAVM-only edits and metadata without
+changed terrain, water or supported collision. Resolved identities are compared
+where raw plugin-local IDs differ. Historical rotation, scale, model paths and state
+remain available for move/deletion collision comparisons.
 
 Archive model indexes identify the winning changed NIF names, excluding loose
-winners. An index failure retains the conservative archive-impact fallback.
-Oversized or unknown model bounds retain conservative coverage. Geometry suppliers
+winners. An index failure compares collision for all model uses. Actual transformed
+collision triangles determine rebuilding footprints without whole-cell halos; visual-only
+and collision-equivalent replacements are excluded. Geometry suppliers
 use winning bounds, and placements whose conservative world-space sphere misses
 the target are excluded before requesting or decoding a NIF. Unknown bounds and
 direct model overrides remain included.
@@ -84,8 +86,10 @@ directory membership revisions. Input reports reference these shared catalogs
 instead of duplicating every winner in compact or plugin-only runs.
 
 Candidate fingerprints include actual ordered support geometry and provenance,
-generation settings, exits, bounds, authored neighboring geometry/portals, and
-the running executable identity. Incompatible or corrupt cache entries trigger
+generation settings, exits, bounds, untouched authored neighboring geometry/portals, and
+the running executable identity. Disk-cache retention and report checkpoints run
+periodically during generation, with final retention on every exit; completing a
+CELL does not traverse the entire growing disk cache. Incompatible or corrupt cache entries trigger
 generation. Both source-triangle and geometry-source evidence tables are
 compacted and written to private gzip cache data. Inspection audits are pinned
 through reconciliation/export and staging links or copies are removed on exit.
@@ -99,14 +103,14 @@ deleted automatically. Requested plugin copies still contain the complete source
 
 The working-memory setting controls cache retention and admission estimates,
 rather than enforcing a process RAM cap. Resolved records, run-scoped BSA directory indexes, and compact candidate
-meshes required for global border validation/writing remain resident; unusually
+meshes and compact source joins required for global seam refinement/writing remain resident; unusually
 large vertical-span workloads can exceed the admission estimate. A task exceeding
 the estimated work budget runs alone. Plugin source records are read by byte range;
 complete source buffers are required only for byte-preserving plugin copies.
 
 ## Reports and verification
 
-`batch-report.json` checkpoints each completed target and records input identity
+`batch-report.json` periodically checkpoints completed targets and records input identity
 and diagnostics, selection counts by record type, equivalent-record exclusions,
 base-object and asset uses, supplier/reference/model counts, extraction and
 generation timings, cache hits, archive metadata/payload bytes read, peak admitted

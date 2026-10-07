@@ -31,15 +31,26 @@ this reference.
   caching, and atomic extracted-file publication without a Python runtime.
 - `navmesh::skyrim` asset-cache helpers: shared archive snapshot identity,
   winning changed-model lookup, and eviction confined to generated files.
-- `navmesh::app::detail::BuildBatchCandidate`: isolated generation/reuse,
-  validation, evidence compaction, and audit spooling.
+- `navmesh::app::detail::BuildBatchCandidate`: one isolated worker's all-walkable
+  generation, untouched-neighbor stitching, validation, compact evidence and audit cache.
+- `navmesh::app::detail::ReconcileBatchBorders`: dispatches complete generated candidates
+  to neutral batch seam refinement using winning CELL ownership.
+- `navmesh::core::StitchGeneratedCandidates`, `GeneratedCellCandidate`: common seam
+  partitions, shared corner heights, stable provenance/door joins and exact reciprocal
+  portals between generated CELLs, including targets without authored NAVM.
+- `navmesh::core::TriangulateDetailSamples`: constrained boundary triangulation and
+  insertion of floor-height samples when a Recast detail patch overlaps itself;
+  preserves hull segments and every sample position without authored geometry.
+- `navmesh::core::RefreshCandidateTopology`: rebuilds internal adjacency, region areas
+  and boundary loops after geometry refinement without changing polygon identities.
 - `navmesh::app::detail` candidate-cache/artifact helpers: input fingerprints,
   bounded private gzip reads/writes and streaming public gzip JSON.
 - `navmesh::core::CandidateGenerator`: interchangeable scene-to-candidate
   interface. `RecastCandidateGenerator` is the application implementation and
   links against the Recast Navigation submodule under `lib/recastnavigation`.
   It clips output after exterior-halo rasterization and retains only shared-edge
-  components reaching a matched door or an exterior boundary edge. Vertical
+  components reaching a matched door or an exterior boundary edge under Anchored retention;
+  AllWalkable retains all surviving floor components for batch linking. Vertical
   collision faces contribute obstruction evidence; height-detail triangles
   follow the compact heightfield with movement-bounded error. Convex contour
   patches merge before sampling; collapsed regions trigger contour refinement.
@@ -59,6 +70,8 @@ this reference.
   and portal joins. Inward offsets trim the candidate; outward offsets extend it.
   Terminal endpoint alignment updates complete incident fans. Final validation
   checks exact reversed endpoint equality, unique portals and complete seam coverage.
+  Deferred batch mode preserves unlinked borders and unanchored components while
+  matching only untouched authored neighbors.
 - `navmesh::core::AuthoredBorderTolerance`: shared world-unit bound for authored
   portal drift from exterior CELL borders, used by stitching and the guarded writer.
 - `navmesh::skyrim`: plugin/load-order reading, guarded NAVM override
@@ -84,6 +97,17 @@ this reference.
   cell and load-order listings, and console analysis summaries.
 - `navmesh::skyrim::CellImpactIndex`: affected-cell discovery, historical
   reference footprints, worldspace coordinate indexing and geometry suppliers.
+- `navmesh::skyrim::SelectCollisionAffectedCells`, `CollisionImpactInput`:
+  terrain/water and collision-based batch target selection. Historical placement
+  and base-model states are compared through shared extraction; only changed
+  collision triangles select exterior footprints. Missing models supply no
+  collision and are recorded for operator warnings; unreadable models and
+  incomplete archive searches stop selection. The spatial index supplies horizontal bounds queries while exact
+  triangle/cell intersection excludes empty corners and vertical-only extent.
+  New terrain and collision can select uncovered cells, including new worldspaces
+  and submerged terrain. Water-only impacts require supported winning geometry.
+  `ImpactSelectionStatistics` records unique overlapping input contributions and
+  water owners without supported geometry.
 - `navmesh::skyrim::WriteNavmeshOverrides`: combined batch serialization
   of existing overrides and new plugin-owned NAVMs, with generated-to-generated
   and authored-neighbor reciprocal portal checks.

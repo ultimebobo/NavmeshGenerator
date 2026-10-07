@@ -19,6 +19,16 @@ namespace navmesh::skyrim
         std::size_t baseObjectUses{};
         /// Winning placements selected by loose/indexed archive assets or archive fallback.
         std::size_t assetUses{};
+        /// Reference transitions whose supported placed collision was compared.
+        std::size_t collisionComparisons{};
+        /// Compared transitions with identical collision geometry and ownership.
+        std::size_t equivalentCollisionComparisons{};
+        /// Unique targets selected by terrain, water classification or placed collision; categories can overlap.
+        std::size_t terrainCells{}, waterCells{}, collisionCells{};
+        /// Water-changing owners without supported winning geometry or an independent terrain/collision impact.
+        std::size_t ignoredWaterCells{};
+        /// Unique absent current model paths, normalized to lowercase meshes/ paths; they supply no collision.
+        std::set<std::string> missingModels;
     };
 
     /** Spatial/dependency index shared by all targets in one resolved run.
@@ -49,6 +59,14 @@ namespace navmesh::skyrim
         /// Existing exterior cells within a Chebyshev radius, including the target.
         /// Interior targets return only themselves; negative radius throws.
         [[nodiscard]] std::vector<const core::Cell *> Neighbors(const core::Cell &cell, int radius) const;
+        /** Find CELLs touched by placed collision bounds without a whole-cell halo.
+         * @param origin Historical placement providing CELL/worldspace ownership.
+         * @param bounds Finite collision bounds in Skyrim world units; Z does not expand exterior coverage.
+         * @return Intersecting exterior CELLs in the origin's worldspace, or its interior owner.
+         * Invalid bounds or unresolved ownership return no cells. Boundary contact includes both sides.
+         */
+        [[nodiscard]] std::vector<const core::Cell *> IntersectingCells(const RecordOrigin &origin,
+                                                                        const core::AABB &bounds) const;
         /// Geometry source cells for a target halo, including oversized model bounds
         /// and distant persistent placements. Unknown model bounds conservatively
         /// include source cells throughout the worldspace.

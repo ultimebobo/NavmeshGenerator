@@ -318,6 +318,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             }
         }
         modelAssets.archives = std::move(mo2Input->archivePaths);
+        modelAssets.looseRoots = std::move(mo2Input->looseAssetRoots);
         mo2Input->looseAssetWinners.clear();
         mo2Input->looseAssetWinners.shrink_to_fit();
         mo2Input->enabledMods.clear();

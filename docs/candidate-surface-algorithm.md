@@ -30,7 +30,9 @@ traversable climb and other movement limits. The shared CLI/UI advanced settings
 configure requested horizontal and vertical voxel sizes, contour simplification
 error, optional maximum edge length and merge-area multiplier. Contour error is
 an upper bound: if simplification collapses a surviving voxel region, construction
-retries at finer tolerance until every retained region has a contour. Recast
+retries the complete contour set at finer tolerance until every retained region
+has a contour. Neighboring regions share one simplification pass, preserving their
+common interfaces without overlapping coarse and fine boundaries. Recast
 merges convex contour polygons before height sampling and triangulates the
 result for the neutral mesh. Disconnected
 regions below the profile's minimum area are removed. Watershed and monotone
@@ -70,7 +72,7 @@ These optional checks consume locally supplied game-data exports. The source
 assets are not committed; the synthetic fixtures provide portable regression
 coverage.
 
-After polygon construction and CELL clipping, the active generator retains only
+After polygon construction and CELL clipping, single-cell generation retains only
 shared-edge components reaching a matched door or a boundary edge on the selected
 exterior CELL. Door matching selects the closest compatible triangle within the
 horizontal and vertical reach derived from the movement profile and voxel sizes.
@@ -98,7 +100,10 @@ when rim-only triangulation cannot preserve the floor's slope envelope. Cavity
 growth includes incident triangles reaching the repair band through a vertex;
 their centroids need not be inside it. Source contributors, region membership, door anchors, and other portals
 are remapped transactionally. Missing required crossings fail final validation
-and prevent export, including when no candidate floor survives.
+and prevent that candidate's plugin export, including when no candidate floor survives.
+Single-cell generation fails export on invalid topology. Plugin and load-order
+batches use complete generated candidates for rebuilding neighbors and stop export
+on invalid topology.
 Compatible collinear generated subdivisions are coalesced
 by retriangulating their incident fans while preserving the interior rim and
 horizontal footprint. Mixed regions or flags, existing portal triangles, invalid
@@ -106,7 +111,9 @@ topology, and nonwalkable replacements prevent coalescing.
 A containing generated edge can be split into smaller
 segments to match authored partitions, retaining its remaining triangles and
 updating region, provenance, and door joins. Near-coincident endpoints are aligned
-to avoid collapsed connector triangles. Extensions obey distance, step, slope,
+to avoid collapsed connector triangles. Subdivision commits only when every
+existing portal survives; incompatible proposals leave the candidate unchanged.
+Extensions obey distance, step, slope,
 and welding constraints. Inward authored offsets trim generated fans; outward
 offsets add connectors. Matched endpoints preserve the exact authored edge,
 including bounded deviations from the nominal CELL border. Other generated
@@ -129,12 +136,29 @@ Entrance positions appear as orange markers, including unmatched entrances.
 See the [glossary](glossary.md) for the Creation Kit border-bar interpretation
 and the distinction between neighboring geometry and saved return links.
 
-With `--skip-existing-navmesh`, only cells without winning NAVM records are
-generated. The same retention and stitching rules apply. Matched authored
-neighbors receive reciprocal links while retaining their geometry. Without a
-matched door or authored-neighbor portal, an uncovered candidate is empty and
-plugin writing is skipped. Batch candidates are finalized against the authored
-snapshot before generated-to-generated portal identities are reconciled.
+Plugin and load-order scopes retain all surviving Recast floor components, including
+isolated interiors and exterior borders awaiting generated neighbors. Only untouched
+cells supply authored border edges; batch stitching preserves unpaired seams
+and unanchored components. The complete generated set supplies common
+seam partitions, compatible shared heights and reciprocal generated triangle indices.
+Shared corner heights are planned together; established portal endpoints remain pinned.
+Linking repeats until corner welding exposes no new compatible shared intervals.
+Different authored corner heights use separate vertices and climb-compatible internal
+edges. Thin float-coordinate strips use boundary triangulation when an interior
+centroid cannot be represented.
+Triangle subdivision preserves regions, flags, source joins and door anchors. Exact
+XY edge matching and mutual nearest-height adjacency distinguish thin edges and
+stacked floors; contour tracing follows incident triangle adjacency.
+
+`--skip-existing-navmesh` protects cells with winning NAVM records. Other selected
+cells still retain every walkable component and link to each other's generated mesh,
+including when the plugin starts without navmesh. Valid empty targets remain completed
+replacements when source geometry contains no supported walkable floor.
+
+Recast height-detail patches are checked before the compact heightfield is released.
+An overlapping patch is retriangulated with its original boundary and floor samples;
+valid patches keep their triangulation. Exact sampled endpoints remain shared with
+neighboring patches. Repair does not reuse authored geometry.
 
 Source-triangle provenance is recovered by the closest source height at each
 generated triangle's XY centroid. This is an approximate audit join after

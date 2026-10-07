@@ -492,7 +492,11 @@ namespace
                 character = '\\';
             }
         }
-        return normalized.rfind("effects\\", 0) == 0;
+        if (normalized.starts_with("meshes\\"))
+        {
+            normalized.erase(0, 7);
+        }
+        return normalized.starts_with("effects\\");
     }
     [[nodiscard]] bool IsFilteredReference(const navmesh::core::Reference &reference)
     {
@@ -506,6 +510,8 @@ namespace
         auto path = reference.modelPath;
         std::transform(path.begin(), path.end(), path.begin(),
                        [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::replace(path.begin(), path.end(), '/', '\\');
+        path.insert(path.begin(), '\\');
         return path.find("\\effects\\") != std::string::npos || path.find("\\animated\\") != std::string::npos ||
                path.find("\\fx\\") != std::string::npos;
     }
@@ -518,15 +524,11 @@ namespace
         return key;
     }
 
-    void ExtractBsaModels(const std::filesystem::path &dataDirectory, const std::filesystem::path &cacheDirectory,
+    bool ExtractBsaModels(const std::filesystem::path &dataDirectory, const std::filesystem::path &cacheDirectory,
                           const navmesh::core::Cell &cell, const navmesh::skyrim::ModelAssetSources *assets,
                           const std::function<bool(const std::filesystem::path &)> &alreadyDecoded,
                           const std::function<bool(const std::set<std::string> &)> &extract)
     {
-        if (cacheDirectory.empty())
-        {
-            return;
-        }
         std::set<std::string> requested;
         for (const auto &reference : cell.references)
         {
@@ -556,12 +558,18 @@ namespace
         }
         if (requested.empty())
         {
-            return;
+            return true;
+        }
+        if (cacheDirectory.empty())
+        {
+            return false;
         }
         if (!extract(requested))
         {
             std::cerr << "BSA model extraction incomplete; see archive diagnostics.\n";
+            return false;
         }
+        return true;
     }
 } // namespace
 
@@ -746,7 +754,7 @@ namespace navmesh::skyrim
             return (cacheDirectory / relative).lexically_normal().generic_string() +
                    (navigationOnly ? ":navigation-snapshot" : ":display-snapshot");
         };
-        ExtractBsaModels(
+        output.archiveSearchComplete = ExtractBsaModels(
             dataDirectory, cacheDirectory, cell, assets, [&](const auto &relative)
             { return snapshotOwned && cache.impl_->ContainsReadableModel(cachedKey(relative)); },
             [&](const auto &requested)
@@ -791,7 +799,7 @@ namespace navmesh::skyrim
                 output.references.push_back(std::move(report));
                 continue;
             }
-            if (IsFilteredReference(reference))
+            if (IsFilteredReference(reference) || IsVisualEffectModel(reference.modelPath))
             {
                 report.failure = "excluded by navigation policy (effect, furniture, animated, or actor reference)";
                 output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
@@ -825,12 +833,15 @@ namespace navmesh::skyrim
             if (nifGeometry.version.empty() || mesh.vertices.empty() || mesh.triangles.empty())
             {
                 const auto exists = std::filesystem::exists(modelPath);
-                const auto status = !exists                       ? core::GeometryCoverage::Missing
+                const bool unavailableLooseWinner = assets && looseWinner != assets->looseModels.end() && !exists;
+                const auto status = unavailableLooseWinner        ? core::GeometryCoverage::Unreadable
+                                    : !exists                     ? core::GeometryCoverage::Missing
                                     : nifGeometry.version.empty() ? core::GeometryCoverage::Unreadable
                                                                   : core::GeometryCoverage::Unsupported;
                 report.failure =
                     status == core::GeometryCoverage::Missing
                         ? (assets ? "model not found in MO2 loose assets or enabled BSAs" : "missing loose NIF")
+                    : unavailableLooseWinner                       ? "MO2 loose model provider is unavailable"
                     : status == core::GeometryCoverage::Unreadable ? "NIF could not be read"
                                                                    : "NIF contains no supported triangle geometry";
                 if (status == core::GeometryCoverage::Unsupported)
@@ -846,17 +857,6 @@ namespace navmesh::skyrim
                     ++output.modelsMissing;
                 }
                 output.scene.coverage.push_back({status, std::move(source), report.failure});
-                output.references.push_back(std::move(report));
-                continue;
-            }
-            if (IsVisualEffectModel(reference.modelPath))
-            {
-                report.failure = "excluded visual effect from support geometry";
-                report.vertices = mesh.vertices.size();
-                report.triangles = mesh.triangles.size();
-                ++output.modelsLoaded;
-                output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
-                ++output.modelsExcluded;
                 output.references.push_back(std::move(report));
                 continue;
             }

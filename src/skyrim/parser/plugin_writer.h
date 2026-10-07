@@ -19,12 +19,15 @@ namespace navmesh::skyrim
      * @param outputDirectory Writable output folder; existing plugins are refused.
      * @param inputPlugins Active physical plugin paths in load order.
      * @param resolved Winning records from the same input snapshot.
-     * @param replacements Unique cells with nonempty, valid candidates. Border links
-     * between rebuilt cells must target their generated primary NAVM triangles.
+     * @param replacements Unique cells with valid candidates, including empty meshes
+     * when no walkable floor survives. Generated border links identify destination CELLs
+     * and generated triangles; all primary NAVM identities are allocated before writing.
+     * Each generated portal must have exact reversed endpoints and a unique return link.
      * Matched authored portal endpoints may extend beyond nominal CELL bounds by
      * core::AuthoredBorderTolerance; other candidate vertices must stay inside.
      * Cells without any winning NAVM receive a plugin-owned identity and temporary
-     * CELL child placement; unsupported existing records cannot be treated as uncovered.
+     * CELL child placement with a serialized PathingCell type tag for Creation Kit loading;
+     * unsupported existing records cannot be treated as uncovered.
      * Authored incoming links to replaced geometry are removed from all source NAVMs;
      * matched borders receive fresh reciprocal links. Unrelated portals are retained.
      * @param writtenPath Receives the finalized plugin path on success.

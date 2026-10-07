@@ -17,6 +17,8 @@ namespace
 {
     using Bytes = std::vector<std::uint8_t>;
     using navmesh::skyrim::ResolvedRecord;
+    /// Skyrim's serialized PathingCell type tag; zero denotes a null object to the CK stream reader.
+    constexpr std::uint32_t PathingCellCrc = 0xA5E9A03CU;
     constexpr std::uint32_t PathingDoorCrc = 0xE48B73F3U;
 
     void U16(Bytes &b, std::uint16_t n)
@@ -403,7 +405,7 @@ namespace
         const std::map<std::uint32_t, std::vector<std::pair<std::uint16_t, std::uint32_t>>> &doorsByMesh,
         const std::vector<std::pair<std::uint32_t, std::uint32_t>> &expectedCells,
         const std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t>> &expectedLinks,
-        bool copiedPlugin = false)
+        const std::set<std::uint32_t> &newNavmeshIds, bool copiedPlugin = false)
     {
         std::vector<ResolvedRecord> records;
         std::vector<std::string> masters;
@@ -426,19 +428,49 @@ namespace
         {
             return false;
         }
+        // Index emitted identities once; whole-plugin rebuilds may allocate a
+        // NAVM for every live CELL, including cells without source navigation.
+        std::map<std::uint32_t, const ResolvedRecord *> recordsByMesh;
+        std::map<std::uint32_t, const navmesh::core::NavMesh *> expectedByMesh;
+        std::map<std::uint32_t, std::uint32_t> owners(expectedCells.begin(), expectedCells.end());
+        std::multimap<std::uint32_t, std::tuple<std::uint16_t, std::uint32_t, std::uint16_t>> linksByMesh;
+        for (const auto &record : records)
+        {
+            if (record.type == "NAVM")
+            {
+                recordsByMesh.emplace(record.winning.formId, &record);
+            }
+        }
+        for (const auto &[id, mesh] : expected)
+        {
+            expectedByMesh.emplace(id, &mesh);
+        }
+        for (const auto &[id, index, target, polygon] : expectedLinks)
+        {
+            linksByMesh.emplace(id, std::tuple{index, target, polygon});
+        }
         for (const auto &[originalId, mesh] : expected)
         {
-            const auto it = std::find_if(records.begin(), records.end(), [&](const auto &record)
-                                         { return record.type == "NAVM" && record.winning.formId == originalId; });
-            const auto owner = std::find_if(expectedCells.begin(), expectedCells.end(),
-                                            [&](const auto &item) { return item.first == originalId; });
-            if (it == records.end() || owner == expectedCells.end() || it->cellFormId != owner->second || !it->raw ||
-                !it->navm || !it->navm->supported || it->navm->vertexCount != mesh.vertices.size() ||
-                it->navm->triangleCount != mesh.polygons.size())
+            const auto record = recordsByMesh.find(originalId);
+            const auto owner = owners.find(originalId);
+            if (record == recordsByMesh.end() || owner == owners.end())
+            {
+                return false;
+            }
+            const auto *it = record->second;
+            if (it->cellFormId != owner->second || !it->raw || !it->navm || !it->navm->supported ||
+                it->navm->vertexCount != mesh.vertices.size() || it->navm->triangleCount != mesh.polygons.size())
             {
                 return false;
             }
             const auto &data = it->raw->decodedPayload;
+            // A fresh NAVM must instantiate its location object before the CK
+            // consumes world/CELL fields. A null type tag shifts every later array.
+            if (newNavmeshIds.contains(originalId) &&
+                Get32(data, static_cast<std::size_t>(it->navm->header.offset) + 4) != PathingCellCrc)
+            {
+                return false;
+            }
             for (std::size_t i{}; i < mesh.vertices.size(); ++i)
             {
                 if (std::memcmp(data.data() + it->navm->vertices.offset + i * 12, &mesh.vertices[i], 12) != 0)
@@ -504,9 +536,8 @@ namespace
                     const auto offset = trailing + 4 + index * 10;
                     const auto targetId = Get32(data, offset + 4);
                     const auto targetTriangle = static_cast<std::uint16_t>(data[offset + 8] | data[offset + 9] << 8);
-                    const auto target = std::find_if(expected.begin(), expected.end(),
-                                                     [&](const auto &item) { return item.first == targetId; });
-                    if (target != expected.end() && targetTriangle >= target->second.polygons.size())
+                    const auto target = expectedByMesh.find(targetId);
+                    if (target != expectedByMesh.end() && targetTriangle >= target->second->polygons.size())
                     {
                         return false;
                     }
@@ -539,20 +570,19 @@ namespace
                     return false;
                 }
             }
-            for (const auto &[meshId, externalIndex, targetId, targetTriangle] : expectedLinks)
+            const auto [firstLink, lastLink] = linksByMesh.equal_range(originalId);
+            for (auto link = firstLink; link != lastLink; ++link)
             {
-                if (meshId == originalId)
+                const auto &[externalIndex, targetId, targetTriangle] = link->second;
+                if (externalIndex >= externalCount)
                 {
-                    if (externalIndex >= externalCount)
-                    {
-                        return false;
-                    }
-                    const auto offset = trailing + 4 + externalIndex * 10;
-                    if (Get32(data, offset) != 0 || Get32(data, offset + 4) != targetId ||
-                        static_cast<std::uint16_t>(data[offset + 8] | data[offset + 9] << 8) != targetTriangle)
-                    {
-                        return false;
-                    }
+                    return false;
+                }
+                const auto offset = trailing + 4 + externalIndex * 10;
+                if (Get32(data, offset) != 0 || Get32(data, offset + 4) != targetId ||
+                    static_cast<std::uint16_t>(data[offset + 8] | data[offset + 9] << 8) != targetTriangle)
+                {
+                    return false;
                 }
             }
         }
@@ -615,9 +645,9 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     {
         const auto &cell = *replacement.cell;
         const auto &candidate = *replacement.candidate;
-        if (!candidate.topology.valid || candidate.mesh.vertices.empty() || candidate.mesh.polygons.empty())
+        if (!candidate.topology.valid || (candidate.mesh.vertices.empty() != candidate.mesh.polygons.empty()))
         {
-            return fail("Generated NAVM is empty or has invalid topology.");
+            return fail("Generated NAVM has inconsistent geometry or invalid topology.");
         }
         if (candidate.mesh.vertices.size() > 65535 || candidate.mesh.polygons.size() > 65535)
         {
@@ -710,6 +740,45 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             if (link.polygon >= candidate.mesh.polygons.size() || link.edge >= 3 || link.neighborEdge >= 3)
             {
                 return fail("A border portal names an invalid triangle edge.");
+            }
+            if (link.generatedNeighborCell)
+            {
+                const auto other = byCell.find(*link.generatedNeighborCell);
+                const auto *owner = resolved.FindWinning(*link.generatedNeighborCell);
+                if (other == byCell.end() || !owner || !selectedCellRecord ||
+                    owner->worldspaceFormId != selectedCellRecord->worldspaceFormId || !cell.exteriorCoordinates ||
+                    !other->second->cell->exteriorCoordinates ||
+                    std::abs((*cell.exteriorCoordinates)[0] - (*other->second->cell->exteriorCoordinates)[0]) +
+                            std::abs((*cell.exteriorCoordinates)[1] - (*other->second->cell->exteriorCoordinates)[1]) !=
+                        1)
+                {
+                    return fail("Generated border does not target an adjacent rebuilt CELL in the same worldspace.");
+                }
+                const auto &target = *other->second->candidate;
+                if (link.neighborPolygon >= target.mesh.polygons.size())
+                {
+                    return fail("Generated border targets an invalid neighboring triangle.");
+                }
+                const auto &face = candidate.mesh.polygons.at(link.polygon);
+                const auto &reverseFace = target.mesh.polygons.at(link.neighborPolygon);
+                const auto a = candidate.mesh.vertices.at(face.vertices[link.edge]);
+                const auto b = candidate.mesh.vertices.at(face.vertices[(link.edge + 1) % 3]);
+                const auto c = target.mesh.vertices.at(reverseFace.vertices[link.neighborEdge]);
+                const auto d = target.mesh.vertices.at(reverseFace.vertices[(link.neighborEdge + 1) % 3]);
+                if (a.x != d.x || a.y != d.y || a.z != d.z || b.x != c.x || b.y != c.y || b.z != c.z ||
+                    std::none_of(target.borderLinks.begin(), target.borderLinks.end(),
+                                 [&](const auto &reverse)
+                                 {
+                                     return reverse.generatedNeighborCell == cell.id &&
+                                            reverse.polygon == link.neighborPolygon &&
+                                            reverse.edge == link.neighborEdge &&
+                                            reverse.neighborPolygon == link.polygon &&
+                                            reverse.neighborEdge == link.edge;
+                                 }))
+                {
+                    return fail("Generated CELL border has no exact reciprocal edge.");
+                }
+                continue;
             }
             const auto *record = resolved.FindWinning(link.neighborNavmeshId);
             if (!record || record->type != "NAVM" || !record->raw || !record->navm || !record->navm->supported ||
@@ -1055,6 +1124,31 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t>> expectedLinks;
     std::map<std::uint32_t, std::vector<std::pair<std::uint16_t, std::uint32_t>>> doorsByMesh;
     std::map<std::uint32_t, std::uint32_t> outputPrimaryByCell;
+    std::set<std::uint32_t> newNavmeshIds;
+    // Allocate every output identity before encoding any external table. A new
+    // cell can link to another new cell regardless of serialization order.
+    for (const auto &replacement : replacements)
+    {
+        const auto &cell = *replacement.cell;
+        if (cell.navMeshes.empty())
+        {
+            const auto identity = selfIndex << 24 | nextObjectId++;
+            outputPrimaryByCell.emplace(cell.id, identity);
+            newNavmeshIds.insert(identity);
+        }
+        else
+        {
+            const auto primary =
+                std::max_element(cell.navMeshes.begin(), cell.navMeshes.end(),
+                                 [](const auto &a, const auto &b) { return a.polygons.size() < b.polygons.size(); });
+            const auto identity = RebaseResolvedFormId(resolved, masters, primary->id);
+            if (!identity)
+            {
+                return fail("Cannot rebase a generated primary NAVM identity.");
+            }
+            outputPrimaryByCell.emplace(cell.id, *identity);
+        }
+    }
     for (const auto &replacement : replacements)
     {
         const auto &cell = *replacement.cell;
@@ -1068,7 +1162,9 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         std::vector<std::pair<std::uint32_t, std::uint16_t>> outgoing;
         for (const auto &link : candidate.borderLinks)
         {
-            const auto target = RebaseResolvedFormId(resolved, masters, link.neighborNavmeshId);
+            const auto target = link.generatedNeighborCell
+                                    ? std::optional<std::uint32_t>{outputPrimaryByCell.at(*link.generatedNeighborCell)}
+                                    : RebaseResolvedFormId(resolved, masters, link.neighborNavmeshId);
             if (!target)
             {
                 return fail("Cannot rebase a neighboring NAVM FormID.");
@@ -1100,7 +1196,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                 // Encode the same world-space location prefix as authored NAVM.
                 // CELL group labels remain source-local until placement is rebased below.
                 U32(nvnm, 12);
-                U32(nvnm, 0);
+                U32(nvnm, PathingCellCrc);
                 const auto world = navm->worldspaceFormId
                                        ? RebaseResolvedFormId(resolved, masters, *navm->worldspaceFormId)
                                        : std::optional<std::uint32_t>{0};
@@ -1271,7 +1367,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             }
             Set32(bytes, 4, static_cast<std::uint32_t>(payload.size()));
             Set32(bytes, 8, Get32(bytes, 8) & ~(0x40000U | 0x20U));
-            const auto rebasedId = newNavmesh ? std::optional<std::uint32_t>{selfIndex << 24 | nextObjectId++}
+            const auto rebasedId = newNavmesh ? std::optional<std::uint32_t>{outputPrimaryByCell.at(cell.id)}
                                               : RebaseFormId(source, masters, Get32(bytes, 12));
             if (!rebasedId)
             {
@@ -1600,7 +1696,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             return fail("Cannot write generated plugin.");
         }
     }
-    if (!ReadBack(temporary, emittedMasters, light, expected, doorsByMesh, expectedCells, expectedLinks,
+    if (!ReadBack(temporary, emittedMasters, light, expected, doorsByMesh, expectedCells, expectedLinks, newNavmeshIds,
                   copy.has_value()))
     {
         std::filesystem::remove(temporary);

@@ -28,7 +28,7 @@ with all offsets relative to the start of NVNM data:
 | Offset | Field | Status |
 | ---: | --- | --- |
 | `0x00` | little-endian NVNM version | Read; only version 12's prefix is marked supported. |
-| `0x04..0x07` | NVNM location field | Read as raw bytes and preserved by the writer. |
+| `0x04..0x07` | PathingCell type CRC | Preserved for authored overrides; fresh NAVMs write the required non-null PathingCell tag. |
 | `0x08..0x0b` | Worldspace FormID | Preserved by the reader; the writer encodes the selected worldspace or zero for an interior. |
 | `0x0c..0x0f` | Exterior grid Y/X or interior CELL FormID | Preserved by the reader; the writer encodes the selected CELL. |
 | `0x10` | `uint32` vertex count | Bounds checked. |
@@ -96,6 +96,11 @@ the selected exterior cell when applicable, apart from bounded extensions at
 matched authored border portal endpoints. Unresolved source dependencies are
 rejected. An uncovered CELL receives a new plugin-owned NAVM identity, a fresh
 NVNM location prefix, and placement in the winning CELL's temporary child group.
+The fresh location prefix includes the PathingCell type CRC before its worldspace
+and CELL fields. Creation Kit uses that tag to instantiate the location object;
+a null tag leaves those fields unread and misaligns the geometry arrays. Writer
+read-back verifies the tag on every newly allocated NAVM, for patches and source
+copies as well as interior and exterior cells.
 The master table includes the CELL source and its dependencies; parent CELL
 payloads are not copied. New identities are allocated consecutively above the
 reserved local range, and TES4 HEDR records the next available identity. The ESP

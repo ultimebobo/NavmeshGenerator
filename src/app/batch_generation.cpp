@@ -1,6 +1,7 @@
 #include "app/batch_generation.h"
 
 #include "app/candidate_cache.h"
+#include "core/navmesh/batch_stitching.h"
 #include "core/navmesh/generator.h"
 #include "core/navmesh/triangle_tagging.h"
 #include "core/reproducibility/export_metadata.h"
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <format>
 #include <map>
+#include <limits>
 
 namespace navmesh::app::detail
 {
@@ -79,6 +81,7 @@ namespace navmesh::app::detail
             }
             return pinned;
         }
+
     } // namespace
 
     std::size_t EstimateGenerationBytes(const core::Scene &scene, std::optional<core::AABB> bounds)
@@ -123,11 +126,11 @@ namespace navmesh::app::detail
                 const auto started = std::chrono::steady_clock::now();
                 result.candidate = core::RecastCandidateGenerator{}.Generate(
                     input.geometry.scene, options.navigationProfile, input.bounds, std::move(input.exits),
-                    options.partitioningAlgorithm, options.recastSettings);
-                if (input.bounds)
+                    options.partitioningAlgorithm, options.recastSettings, core::CandidateRetention::AllWalkable);
+                core::RefreshCandidateTopology(result.candidate);
+                if (input.bounds && !input.adjacent.empty())
                 {
-                    (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent,
-                                                       result.cell->navMeshes);
+                    (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent, {}, true);
                 }
                 result.generationSeconds =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
@@ -135,7 +138,8 @@ namespace navmesh::app::detail
                                             options.tagTriangles);
                 if (!result.candidate.topology.valid)
                 {
-                    throw std::runtime_error("Candidate topology validation failed");
+                    result.diagnostics = result.candidate.topology.findings;
+                    throw std::runtime_error("Candidate topology validation failed: " + result.diagnostics.front());
                 }
                 evidence = CompactEvidence(result.candidate, input.geometry.scene);
                 if (!StoreCandidate(result.auditPath, result.candidate, evidence))
@@ -160,11 +164,10 @@ namespace navmesh::app::detail
                              .geometryTriangles = input.geometry.scene.mesh.triangles.size(),
                              .terrainSupported = input.geometry.terrainSupported,
                              .collisionGeometrySupported = input.geometry.collisionModelsLoaded != 0},
-                .warnings = {"Batch candidates use neighboring geometry but remain clipped to their target CELL.",
-                             "Generation eligibility and empty candidates are recorded in batch-report.json."}};
+                .warnings = {"Batch candidates are linked after every target has been generated.",
+                             "Empty candidates have no supported walkable floor; authored geometry is not reused."}};
             result.metadata = reproducibility::ToJson(metadata, "    ");
-            result.status = result.candidate.mesh.polygons.empty() ? "skipped_empty_candidate" : "generated";
-            ReleaseCandidateAudit(result.candidate);
+            result.status = "generated";
         }
         catch (const std::exception &error)
         {
@@ -172,5 +175,36 @@ namespace navmesh::app::detail
             result.error = std::format("CELL {:08X}: {}", result.cell->id, error.what());
         }
         return result;
+    }
+
+    std::string ReconcileBatchBorders(std::vector<BatchCellResult> &results, const skyrim::ResolvedLoadOrder &resolved)
+    {
+        std::vector<core::GeneratedCellCandidate> exterior;
+        for (auto &result : results)
+        {
+            if (result.status != "generated" || !result.cell->exteriorCoordinates)
+            {
+                continue;
+            }
+            const auto *record = resolved.FindWinning(result.cell->id);
+            if (!record || !record->worldspaceFormId)
+            {
+                return "Generated exterior CELL has no resolved worldspace";
+            }
+            const auto [x, y] = *result.cell->exteriorCoordinates;
+            const core::AABB bounds{.min = {x * 4096.0F, y * 4096.0F, std::numeric_limits<float>::lowest()},
+                                    .max = {(static_cast<float>(x) + 1) * 4096.0F,
+                                            (static_cast<float>(y) + 1) * 4096.0F, std::numeric_limits<float>::max()}};
+            exterior.push_back({result.cell->id, *record->worldspaceFormId, bounds, &result.candidate});
+        }
+        try
+        {
+            (void)core::StitchGeneratedCandidates(exterior);
+        }
+        catch (const std::exception &error)
+        {
+            return error.what();
+        }
+        return {};
     }
 } // namespace navmesh::app::detail

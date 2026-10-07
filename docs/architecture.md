@@ -69,8 +69,12 @@ sources; the neutral rasterizer retains their solids but excludes their tops eve
 when low-obstacle promotion or terrain overlap could make them walkable. Height
 detail samples the surviving compact heightfield with movement-bounded error;
 convex contour polygons merge before sampling. Contour construction refines the
-requested error when a retained voxel region would collapse. Final output remains triangles;
+requested error when a retained voxel region would collapse. Every region uses
+the same refinement pass so shared boundaries partition the compact spans without overlap. Final output remains triangles;
 shared detail-patch vertices are joined before neutral adjacency is built.
+`core/navmesh/detail_triangulation` repairs overlapping sampled patches through
+boundary ear clipping and incremental sample insertion. It preserves the original
+hull and sampled floor heights; the Recast adapter owns patch decoding and replacement.
 Detail triangles are clipped to the target CELL in the project's neutral model for JSON, OBJ, and the
 `Candidate NAVM` GLB layer. Eligible generated geometry can enter the guarded
 plugin writer. The application then matches selected exterior boundary edges to
@@ -78,7 +82,7 @@ adjacent NAVM edges in the resolved load order and records reciprocal targets.
 The shared authored-border tolerance allows small deviations from nominal CELL
 bounds only at matched portal endpoints. Both generation and serialization
 preserve those endpoints and keep other generated vertices inside the target.
-Both application paths supply the selected cell's authored NAVMs to stitching.
+Single-cell generation supplies the selected cell's authored NAVMs to stitching.
 Resolved reciprocal edges identify required exterior crossings. A constrained
 boundary cavity repairs crossings that direct subdivision cannot retain, keeping
 its interior rim, other portals, source joins, and door anchors. Repair depth comes
@@ -93,7 +97,7 @@ triangulation while preserving the complete portal. Unpaired nonplanar fans try
 individual floor-centroid directions, with a roundoff allowance in slope comparisons.
 Missing required crossings invalidate the final candidate;
 seam retraction cannot silently remove them.
-Generation provisionally retains components with a shared-edge path to a matched
+Single-cell generation provisionally retains components with a shared-edge path to a matched
 door or a boundary edge on the selected exterior CELL. Filtering follows CELL clipping and
 door matching, preserving source joins while compacting polygon, neighbor,
 region, door and vertex indices. Interiors without a matched door produce empty
@@ -130,6 +134,8 @@ NAVM source plugin's master order and group hierarchy, writes an override for
 every existing NAVM in the selected cell, and verifies each with the direct
 reader. Generated geometry occupies the largest original NAVM; the others get
 empty geometry. Parent CELL and worldspace records remain in the load order.
+New NAVMs serialize a non-null PathingCell type tag so Creation Kit consumes the
+location fields before the geometry arrays; read-back checks each new identity's tag.
 The writer always emits an ESP and sets its ESL flag when the override-only
 records and master table fit the light format. Matched door triangles are
 serialized in the generated NAVM. Matched exterior borders add external portals
@@ -239,13 +245,21 @@ share the cache root and preserve virtual winner priority. `ModelGeometryCache` 
 immutable decoded and placed geometry under one byte budget. `GeometryExtraction`
 and `TerrainExtraction` keep support geometry solely in their scene meshes.
 
-`app/batch_generation` owns one isolated Recast task, candidate validation,
-authored stitching, evidence compaction, and spooling. `app/candidate_cache` owns
-the versioned private gzip layout and dependency fingerprint, bounded reads,
-and cache compatibility checks. `app/candidate_artifacts` streams public JSON into
-gzip while preserving its schema. `app/batch_runner` owns sampling, admission,
-ordered collection/checkpoints, global border reconciliation, export policy, and
-combined writing. Active audit pins survive cache eviction until export completes.
+`app/batch_generation` owns one isolated all-walkable Recast task, validation,
+untouched-neighbor stitching and compact evidence spooling. `core/navmesh/batch_stitching`
+is independent of plugin I/O: it plans seam intersections and corner heights across
+all generated candidates, refines triangles while preserving joins, revisits
+intervals made reachable by corner welding, and adds exact
+reciprocal links addressed by opaque CELL keys. It retains unanchored floors and
+never substitutes authored meshes from rebuilding targets. Invalid topology or
+refinement prevents export. Authored border subdivision commits only when all
+consumed portals survive. `app/candidate_cache` stores candidates before generated
+seam refinement with bounded reads and a versioned dependency fingerprint. Compact
+source joins remain in memory for subsequent splitting; inspection evidence is
+loaded from pinned gzip audits. `app/candidate_artifacts` streams public JSON into
+gzip. `app/batch_runner` owns selection, sampling, admission, ordered checkpoints,
+complete-set reconciliation, artifact policy and combined writing. The writer
+allocates all primary NAVM identities before resolving generated CELL destinations.
 See [performance settings and limits](performance-improvements.md).
 
 ## Affected-cell batch rebuilding
@@ -254,11 +268,26 @@ The resolver retains compact placement evidence for every record origin and
 builds a FormID lookup index. `CellImpactIndex` indexes exterior cells by
 worldspace and coordinates, buckets persistent references by physical position,
 and follows changed base records to their placed uses. Plugin/load-order scopes
-select conservative affected targets and model-bound influence halos. The shared
+provide geometry suppliers and conservative record-impact discovery for diagnostics.
+`skyrim/extraction/collision_impact` selects batch regeneration targets by comparing
+historical supported collision triangles, terrain heights and effective water.
+It reconstructs placement state and base models at plugin cutoffs, uses the shared
+NIF cache, and queries exact horizontal triangle/cell intersections. Visual-only,
+NAVM-only and collision-equivalent edits do not expand the regeneration scope.
+Added terrain and collision select uncovered cells, including new worldspaces
+and submerged heightfields. Water-only transitions require supported winning
+terrain or exact placed collision coverage because water is a tagging input.
+NAVM presence is independent of impact selection. Selection diagnostics
+distinguish these contributions and worldspaces. Missing model paths from a
+completed provider search supply no collision and are reported with a warning.
+Unreadable models and incomplete archive searches stop selection.
+Geometry suppliers and neighboring connection overrides remain independent of
+regeneration targets. The shared
 runner resolves inputs once, extracts in target order, and admits independent
 generation tasks within worker and estimated-byte limits. Bounded terrain,
 model-local and transformed-placement caches reuse geometry. Candidate audit
-evidence is compacted, spooled to private gzip data, and released from RAM. The batch writer serializes all replacements together and
+evidence is compacted and spooled to private gzip data; compact joins remain available
+for seam subdivision while input scene triangles are released. The batch writer serializes all replacements together and
 verifies reciprocal generated triangle targets before finalizing one ESP.
 Selection and output contracts are in [batch rebuilding](batch-rebuilding.md).
 

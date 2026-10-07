@@ -6,8 +6,10 @@
 #include "app/batch_generation.h"
 #include <future>
 #include "skyrim/extraction/asset_cache.h"
+#include "skyrim/extraction/collision_impact.h"
 #include <chrono>
 #include "core/navmesh/generator.h"
+#include "core/navmesh/triangle_tagging.h"
 #include "skyrim/extraction/terrain_extractor.h"
 #include "skyrim/parser/affected_cells.h"
 #include "skyrim/parser/plugin_writer.h"
@@ -90,6 +92,29 @@ namespace
         return left.size() == right.size() &&
                std::equal(left.begin(), left.end(), right.begin(),
                           [](unsigned char a, unsigned char b) { return std::tolower(a) == std::tolower(b); });
+    }
+
+    /// Probe only lower-priority roots after finding the current winning provider; archives remain the fallback.
+    std::optional<std::filesystem::path> PreviousLooseModel(const std::string &logical,
+                                                            const std::filesystem::path &current,
+                                                            const navmesh::skyrim::ModelAssetSources &assets)
+    {
+        bool foundCurrent{};
+        for (auto root = assets.looseRoots.rbegin(); root != assets.looseRoots.rend(); ++root)
+        {
+            if (!foundCurrent)
+            {
+                const auto relative = current.lexically_relative(*root);
+                foundCurrent = !relative.empty() && !relative.is_absolute() && *relative.begin() != "..";
+                continue;
+            }
+            const auto candidate = *root / logical;
+            if (std::filesystem::is_regular_file(candidate))
+            {
+                return candidate;
+            }
+        }
+        return std::nullopt;
     }
 
 } // namespace
@@ -198,20 +223,77 @@ namespace navmesh::app::detail
             archiveModelsChanged =
                 !skyrim::ChangedArchiveModels(options.data, *assets, assetCache, changedArchives, changedModels);
         }
+        // Model replacements compare against the remaining asset providers; unique added paths have no prior collider.
+        skyrim::ModelAssetSources previousAssets;
+        if (assets)
+        {
+            previousAssets = *assets;
+            for (const auto &model : changedModels)
+            {
+                previousAssets.looseModels.erase(model);
+                if (options.rebuildScope == app::RebuildScope::Plugin && assets->looseModels.contains(model))
+                {
+                    if (const auto previous = PreviousLooseModel(model, assets->looseModels.at(model), *assets))
+                    {
+                        previousAssets.looseModels.emplace(model, *previous);
+                    }
+                }
+            }
+            std::erase_if(previousAssets.archives,
+                          [&](const auto &archive) { return changedArchives.contains(archive); });
+        }
+        const auto previousAssetCache =
+            skyrim::ModelAssetCacheDirectory(options.data, assets ? &previousAssets : nullptr, options.assetCache);
         skyrim::ImpactSelectionStatistics selectionStatistics;
-        auto targets = index.AffectedCells(
-            options.rebuildScope == app::RebuildScope::Plugin ? options.affectedPlugin : "",
-            options.neighboringCellRadius, changedModels, archiveModelsChanged, &selectionStatistics);
+        if (progress)
+        {
+            progress(30, "Selecting cells with changed terrain or collision");
+        }
+        std::vector<const core::Cell *> targets;
+        std::string selectionError;
+        try
+        {
+            targets = skyrim::SelectCollisionAffectedCells(
+                resolved, index,
+                {.plugin = options.rebuildScope == app::RebuildScope::Plugin ? options.affectedPlugin : "",
+                 .dataDirectory = options.data,
+                 .cacheDirectory = assetCache,
+                 .previousCacheDirectory = previousAssetCache,
+                 .assets = assets,
+                 .previousAssets = assets ? &previousAssets : nullptr,
+                 .changedModels = changedModels,
+                 .archiveModelsChanged = archiveModelsChanged,
+                 .terrainOnly = options.terrainOnly,
+                 .cancelled = cancelled},
+                modelCache, selectionStatistics);
+        }
+        catch (const std::runtime_error &error)
+        {
+            selectionError = error.what();
+        }
         const auto selectedCells = targets.size();
+        std::map<std::optional<std::uint32_t>, std::size_t> selectedWorlds;
+        for (const auto *cell : targets)
+        {
+            const auto *record = resolved.FindWinning(cell->id);
+            ++selectedWorlds[record ? record->worldspaceFormId : std::nullopt];
+        }
         const auto eligible = [&](const core::Cell *cell)
         {
             const auto *record = resolved.FindWinning(cell->id);
-            return (options.skipExistingNavmesh ? !existingNavmeshCells.contains(cell->id)
-                                                : !cell->navMeshes.empty()) &&
+            return (!options.skipExistingNavmesh || !existingNavmeshCells.contains(cell->id)) &&
                    !(record && record->raw && (record->raw->flags & 0x20U));
         };
         const auto fullEligibleCells =
             static_cast<std::size_t>(std::count_if(targets.begin(), targets.end(), eligible));
+        std::set<std::uint32_t> rebuildingCells;
+        for (const auto *cell : targets)
+        {
+            if (eligible(cell))
+            {
+                rebuildingCells.insert(cell->id);
+            }
+        }
         if (options.estimateOnly)
         {
             std::map<int, std::vector<const core::Cell *>> strata;
@@ -288,13 +370,23 @@ namespace navmesh::app::detail
                 }
             }
         } cleanup{auditDirectory, options.output};
-        const auto batchMetadata = reproducibility::ToJson(
-            reproducibility::ExportMetadata{
-                .inputPlugin = options.affectedPlugin,
-                .warnings = {"Load-order scope treats plugins after the first active baseline plugin as changes.",
-                             "Skipped targets and writer limitations are recorded in the batch report and "
-                             "docs/batch-rebuilding.md."}},
-            "    ");
+        auto metadata = reproducibility::ExportMetadata{
+            .inputPlugin = options.affectedPlugin,
+            .warnings = {"Load-order scope treats plugins after the first active baseline plugin as changes.",
+                         "Skipped targets and writer limitations are recorded in the batch report and "
+                         "docs/batch-rebuilding.md."}};
+        const auto missingModelWarning =
+            selectionStatistics.missingModels.empty()
+                ? std::string{}
+                : std::format("Warning: {} missing NIF model paths supply no collision; see "
+                              "selection_missing_models in batch-report.json.",
+                              selectionStatistics.missingModels.size());
+        if (!missingModelWarning.empty())
+        {
+            metadata.warnings.push_back(missingModelWarning);
+            std::cerr << missingModelWarning << '\n';
+        }
+        const auto batchMetadata = reproducibility::ToJson(metadata, "    ");
         const auto summaryPath = options.output / "batch-report.json";
         // Rewrite the batch status report at checkpoints so failures and cancellation retain useful evidence.
         const auto summary = [&](const std::string &state, const std::string &error = "")
@@ -335,6 +427,33 @@ namespace navmesh::app::detail
                                "asset_uses\":{},\"archive_impact_fallback\":{},\n",
                                selectionStatistics.equivalentRecords, selectionStatistics.baseObjectUses,
                                selectionStatistics.assetUses, archiveModelsChanged ? "true" : "false");
+            out << std::format(
+                "  \"selection_collision_comparisons\":{},\"selection_equivalent_collision_comparisons\":{},\n",
+                selectionStatistics.collisionComparisons, selectionStatistics.equivalentCollisionComparisons);
+            out << "  \"selection_missing_models\":[";
+            bool firstMissing = true;
+            for (const auto &path : selectionStatistics.missingModels)
+            {
+                out << (firstMissing ? "" : ",") << "\"" << JsonEscape(path) << "\"";
+                firstMissing = false;
+            }
+            out << "],\n";
+            out << std::format(
+                "  \"selection_terrain_cells\":{},\"selection_water_cells\":{},\"selection_collision_cells\":{},\n"
+                "  \"selection_ignored_water_cells\":{},\n",
+                selectionStatistics.terrainCells, selectionStatistics.waterCells, selectionStatistics.collisionCells,
+                selectionStatistics.ignoredWaterCells);
+            out << "  \"selection_worldspaces\":[";
+            bool firstWorld = true;
+            for (const auto &[worldId, count] : selectedWorlds)
+            {
+                const auto *world = worldId ? resolved.FindWinning(*worldId) : nullptr;
+                out << std::format("{}{{\"form_id\":{},\"editor_id\":\"{}\",\"cells\":{}}}", firstWorld ? "" : ",",
+                                   worldId ? std::format("\"{:08X}\"", *worldId) : "null",
+                                   world ? JsonEscape(world->editorId) : "", count);
+                firstWorld = false;
+            }
+            out << "],\n";
             out << "  \"archive_io\": {";
             bool firstArchiveCount = true;
             for (const auto &[key, count] : ReadArchiveCounters(assetCache))
@@ -391,12 +510,16 @@ namespace navmesh::app::detail
                 out << std::format("    "
                                    "{{\"form_id\":\"{:08X}\",\"status\":\"{}\",\"polygons\":{},\"supplier_cells\":{},"
                                    "\"references\":{},\"unique_models\":{},\"extraction_seconds\":{},\"generation_"
-                                   "seconds\":{},\"candidate_reused\":{}}}{}\n",
+                                   "seconds\":{},\"candidate_reused\":{},\"diagnostics\":[",
                                    results[i].cell->id, JsonEscape(results[i].status),
                                    results[i].candidate.mesh.polygons.size(), results[i].supplierCells,
                                    results[i].references, results[i].models, results[i].extractionSeconds,
-                                   results[i].generationSeconds, results[i].reused ? "true" : "false",
-                                   i + 1 == results.size() ? "" : ",");
+                                   results[i].generationSeconds, results[i].reused ? "true" : "false");
+                for (std::size_t finding{}; finding < results[i].diagnostics.size(); ++finding)
+                {
+                    out << (finding ? "," : "") << "\"" << JsonEscape(results[i].diagnostics[finding]) << "\"";
+                }
+                out << "]}" << (i + 1 == results.size() ? "" : ",") << '\n';
             }
             const auto stats = modelCache.Statistics();
             const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
@@ -439,7 +562,8 @@ namespace navmesh::app::detail
                     {
                         return false;
                     }
-                    audit.borderLinks = result.candidate.borderLinks;
+                    audit = result.candidate;
+                    audit.warnings.insert(audit.warnings.end(), result.diagnostics.begin(), result.diagnostics.end());
                     if (options.batchOutput == "compact")
                     {
                         if (!WriteCompressedCandidateJson(directory / "candidate-navm.json.gz", audit, evidence,
@@ -472,9 +596,26 @@ namespace navmesh::app::detail
             std::cerr << error << '\n';
             return 2;
         };
+        if (stop())
+        {
+            summary("cancelled");
+            return 3;
+        }
+        if (!selectionError.empty())
+        {
+            return fail(selectionError);
+        }
         if (!summary("running"))
         {
             return fail("Cannot write batch-report.json");
+        }
+        const auto selectionStatus =
+            std::format("Selected {} cells; {} eligible for NAVM generation", selectedCells, fullEligibleCells) +
+            (missingModelWarning.empty() ? "" : "; " + missingModelWarning);
+        std::cout << selectionStatus << '\n';
+        if (progress)
+        {
+            progress(30, selectionStatus);
         }
         struct Pending
         {
@@ -483,6 +624,7 @@ namespace navmesh::app::detail
         };
         std::deque<Pending> pending;
         std::size_t pendingBytes{};
+        auto lastCheckpoint = std::chrono::steady_clock::now();
         const auto collect = [&]() -> int
         {
             auto job = std::move(pending.front());
@@ -494,15 +636,30 @@ namespace navmesh::app::detail
             {
                 return fail(result.error);
             }
+            if (!result.diagnostics.empty())
+            {
+                std::cerr << std::format("CELL {:08X}: {}; see batch-report.json for validation findings\n",
+                                         result.cell->id, result.status);
+            }
             ++completedCells;
             candidateHits += result.reused ? 1 : 0;
-            generatedPolygons += result.candidate.mesh.polygons.size();
+            if (result.status == "generated")
+            {
+                generatedPolygons += result.candidate.mesh.polygons.size();
+            }
             extractionSeconds += result.extractionSeconds;
             generationSeconds += result.generationSeconds;
-            skyrim::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL, true);
-            if (!summary("running"))
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastCheckpoint >= std::chrono::seconds(1))
             {
-                return fail("Cannot checkpoint batch progress");
+                // Cache retention scans owned files. Report checkpoints amortize
+                // that traversal across completed CELLs.
+                skyrim::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL, true);
+                if (!summary("running"))
+                {
+                    return fail("Cannot checkpoint batch progress");
+                }
+                lastCheckpoint = now;
             }
             if (stop())
             {
@@ -528,11 +685,6 @@ namespace navmesh::app::detail
             if (options.skipExistingNavmesh && existingNavmeshCells.contains(cell.id))
             {
                 result.status = "skipped_existing_navm";
-                continue;
-            }
-            if (!options.skipExistingNavmesh && cell.navMeshes.empty())
-            {
-                result.status = "skipped_no_existing_navm";
                 continue;
             }
             if (const auto *record = resolved.FindWinning(cell.id);
@@ -647,7 +799,8 @@ namespace navmesh::app::detail
             {
                 for (const auto *neighbor : index.Neighbors(cell, 1))
                 {
-                    if (!neighbor->exteriorCoordinates || neighbor->id == cell.id)
+                    if (!neighbor->exteriorCoordinates || neighbor->id == cell.id ||
+                        rebuildingCells.contains(neighbor->id))
                     {
                         continue;
                     }
@@ -717,60 +870,21 @@ namespace navmesh::app::detail
             }
             return 0;
         }
-        // Replace authored neighbor triangle identities with reciprocal generated
-        // edges. Endpoint equality is required; incompatible partitions fail closed.
+        // Refine shared seams only after the complete generated target set is available.
+        if (const auto error = ReconcileBatchBorders(results, resolved); !error.empty())
+        {
+            return fail(error);
+        }
         std::map<std::uint32_t, Result *> generatedByCell;
+        generatedPolygons = 0;
         for (auto &result : results)
         {
             if (result.status == "generated")
             {
+                core::TagCandidateTriangles(result.candidate, result.cell->navMeshes, result.cell->waterHeight,
+                                            options.tagTriangles);
                 generatedByCell.emplace(result.cell->id, &result);
-            }
-        }
-        const auto near = [](core::Vec3 a, core::Vec3 b)
-        { return std::abs(a.x - b.x) <= 1 && std::abs(a.y - b.y) <= 1 && std::abs(a.z - b.z) <= 1; };
-        for (auto &result : results)
-        {
-            for (auto &link : result.candidate.borderLinks)
-            {
-                const auto *record = resolved.FindWinning(link.neighborNavmeshId);
-                if (!record || !record->cellFormId)
-                {
-                    return fail("Border target has no CELL ownership");
-                }
-                const auto other = generatedByCell.find(*record->cellFormId);
-                if (other == generatedByCell.end())
-                {
-                    continue;
-                }
-                const auto &face = result.candidate.mesh.polygons.at(link.polygon);
-                const auto a = result.candidate.mesh.vertices.at(face.vertices[link.edge]);
-                const auto b = result.candidate.mesh.vertices.at(face.vertices[(link.edge + 1) % 3]);
-                bool matched{};
-                for (const auto &reverse : other->second->candidate.borderLinks)
-                {
-                    const auto &target = other->second->candidate.mesh.polygons.at(reverse.polygon);
-                    const auto c = other->second->candidate.mesh.vertices.at(target.vertices[reverse.edge]);
-                    const auto d = other->second->candidate.mesh.vertices.at(target.vertices[(reverse.edge + 1) % 3]);
-                    if (!near(a, d) || !near(b, c))
-                    {
-                        continue;
-                    }
-                    const auto &meshes = other->second->cell->navMeshes;
-                    link.neighborNavmeshId =
-                        std::max_element(meshes.begin(), meshes.end(), [](const auto &x, const auto &y)
-                                         { return x.polygons.size() < y.polygons.size(); })
-                            ->id;
-                    link.neighborPolygon = reverse.polygon;
-                    link.neighborEdge = reverse.edge;
-                    matched = true;
-                    break;
-                }
-                if (!matched)
-                {
-                    return fail(std::format("Generated border partitions do not match between CELL {:08X} and {:08X}",
-                                            result.cell->id, other->second->cell->id));
-                }
+                generatedPolygons += result.candidate.mesh.polygons.size();
             }
         }
         if (!exports())
@@ -813,10 +927,11 @@ namespace navmesh::app::detail
         {
             return fail("Cannot finalize batch-report.json");
         }
-        const auto status =
-            std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; generated polygons: {}",
-                        targets.size(), generatedByCell.size(), targets.size() - generatedByCell.size(),
-                        originalPolygons, generatedPolygons);
+        const auto status = std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; "
+                                        "generated polygons: {}",
+                                        targets.size(), generatedByCell.size(), targets.size() - generatedByCell.size(),
+                                        originalPolygons, generatedPolygons) +
+                            (missingModelWarning.empty() ? "" : "; " + missingModelWarning);
         std::cout << status << '\n';
         if (progress)
         {

@@ -533,6 +533,7 @@ namespace navmesh::skyrim
             roots.push_back(mod.path);
         }
         roots.push_back(overwrite);
+        result.looseAssetRoots = roots;
         for (const auto &root : roots)
         {
             catalogHash.Add("\n" + PathUtf8(root));

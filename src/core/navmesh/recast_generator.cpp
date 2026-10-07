@@ -1,5 +1,7 @@
 #include "core/navmesh/generator.h"
 
+#include "core/navmesh/detail_triangulation.h"
+
 #include <Recast.h>
 #include <RecastAlloc.h>
 #include <algorithm>
@@ -8,6 +10,7 @@
 #include <format>
 #include <limits>
 #include <map>
+#include <set>
 #include <memory>
 #include <queue>
 #include <stdexcept>
@@ -363,62 +366,12 @@ namespace
         return true;
     }
 
-    /** Transfer only absent regions from a finer contour set, preserving existing coarse boundaries.
-     * Recast owns each contour's vertex buffers independently. Moving those pointers into
-     * the enlarged target array requires clearing the donor before either owner is released.
-     */
-    void AppendMissingRegionContours(rcContourSet &target, rcContourSet &refined)
-    {
-        std::vector<bool> represented(static_cast<std::size_t>(std::numeric_limits<unsigned short>::max()) + 1);
-        for (int index{}; index < target.nconts; ++index)
-        {
-            if (target.conts[index].nverts >= 3)
-            {
-                represented[target.conts[index].reg] = true;
-            }
-        }
-        std::vector<int> missing;
-        for (int index{}; index < refined.nconts; ++index)
-        {
-            const auto &contour = refined.conts[index];
-            if (contour.nverts >= 3 && !represented[contour.reg])
-            {
-                missing.push_back(index);
-            }
-        }
-        if (missing.empty())
-        {
-            return;
-        }
-        const auto count = static_cast<std::size_t>(target.nconts) + missing.size();
-        auto *combined = static_cast<rcContour *>(rcAlloc(count * sizeof(rcContour), RC_ALLOC_PERM));
-        if (!combined)
-        {
-            throw std::runtime_error("Recast contour refinement allocation failed");
-        }
-        std::copy_n(target.conts, target.nconts, combined);
-        auto destination = target.nconts;
-        for (const auto index : missing)
-        {
-            auto &contour = refined.conts[index];
-            combined[destination++] = contour;
-            contour.verts = nullptr;
-            contour.rverts = nullptr;
-            contour.nverts = 0;
-            contour.nrverts = 0;
-        }
-        rcFree(target.conts);
-        target.conts = combined;
-        target.nconts = destination;
-    }
-
     /// Refine contour tolerance until every retained voxel region survives, never exceeding the requested error.
     [[nodiscard]] RecastOwner<rcContourSet, rcFreeContourSet> BuildRegionContours(rcContext &context,
                                                                                   rcCompactHeightfield &compact,
                                                                                   const rcConfig &config)
     {
         auto error = config.maxSimplificationError;
-        RecastOwner<rcContourSet, rcFreeContourSet> contours(nullptr, rcFreeContourSet);
         while (true)
         {
             RecastOwner<rcContourSet, rcFreeContourSet> refined(rcAllocContourSet(), rcFreeContourSet);
@@ -426,17 +379,11 @@ namespace
             {
                 throw std::runtime_error("Recast contour construction failed");
             }
-            if (!contours)
+            // Every neighboring region must use the same simplification pass:
+            // their shared interfaces form one partition of the compact spans.
+            if (HasAllRegionContours(compact, *refined))
             {
-                contours = std::move(refined);
-            }
-            else
-            {
-                AppendMissingRegionContours(*contours, *refined);
-            }
-            if (HasAllRegionContours(compact, *contours))
-            {
-                return contours;
+                return refined;
             }
             if (error == 0)
             {
@@ -446,10 +393,207 @@ namespace
         }
     }
 
+    /** Recast detail patches may share a boundary, but cannot reuse a directed
+     * edge after winding normalization. Check exact sampled coordinates before
+     * releasing the compact heightfield so an invalid triangulation can be rebuilt.
+     */
+    bool HasValidDetailEdges(const rcPolyMeshDetail &detail)
+    {
+        using Point = std::array<float, 3>;
+        std::set<std::pair<Point, Point>> edges;
+        for (int patchIndex{}; patchIndex < detail.nmeshes; ++patchIndex)
+        {
+            const auto *patch = detail.meshes + patchIndex * 4;
+            for (unsigned int triangle{}; triangle < patch[3]; ++triangle)
+            {
+                const auto *indices = detail.tris + (patch[2] + triangle) * 4;
+                std::array<Point, 3> points;
+                for (std::size_t corner{}; corner < 3; ++corner)
+                {
+                    const auto *point = detail.verts + (patch[0] + indices[corner]) * 3;
+                    points[corner] = {point[0], point[2], point[1]};
+                }
+                const auto area = (points[1][0] - points[0][0]) * (points[2][1] - points[0][1]) -
+                                  (points[1][1] - points[0][1]) * (points[2][0] - points[0][0]);
+                if (area == 0)
+                {
+                    return false;
+                }
+                if (area < 0)
+                {
+                    std::swap(points[1], points[2]);
+                }
+                for (std::size_t edge{}; edge < 3; ++edge)
+                {
+                    if (!edges.emplace(points[edge], points[(edge + 1) % 3]).second)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Rebuild only overlapping detail patches by inserting their existing samples
+     * into a constrained boundary triangulation. Original contour order and boundary
+     * sample projection recover the hull; shared endpoints and floor heights remain unchanged.
+     */
+    void RepairDetailTriangles(rcPolyMeshDetail &detail, const rcPolyMesh &polygons)
+    {
+        std::vector<unsigned char> triangles;
+        for (int patchIndex{}; patchIndex < detail.nmeshes; ++patchIndex)
+        {
+            auto *patch = detail.meshes + patchIndex * 4;
+            std::vector<Vec3> points;
+            for (unsigned int vertex{}; vertex < patch[1]; ++vertex)
+            {
+                const auto *point = detail.verts + (patch[0] + vertex) * 3;
+                points.push_back({point[0], point[2], point[1]});
+            }
+            std::set<std::pair<unsigned int, unsigned int>> edges;
+            std::set<std::uint32_t> boundarySamples;
+            bool valid = true;
+            bool hasFloorArea = false;
+            for (unsigned int triangle{}; triangle < patch[3]; ++triangle)
+            {
+                const auto *face = detail.tris + (patch[2] + triangle) * 4;
+                const auto area = Cross(points[face[0]], points[face[1]], points[face[2]]);
+                valid = valid && area != 0;
+                hasFloorArea = hasFloorArea || area != 0;
+                for (unsigned int edge{}; edge < 3; ++edge)
+                {
+                    auto first = face[edge];
+                    auto last = face[(edge + 1) % 3];
+                    if (area < 0)
+                    {
+                        std::swap(first, last);
+                    }
+                    valid = edges.emplace(first, last).second && valid;
+                    if ((face[3] >> (edge * 2)) & 1U)
+                    {
+                        boundarySamples.insert(first);
+                        boundarySamples.insert(last);
+                    }
+                }
+            }
+            const auto oldOffset = patch[2];
+            const auto oldCount = patch[3];
+            patch[2] = static_cast<unsigned int>(triangles.size() / 4);
+            if (valid)
+            {
+                triangles.insert(triangles.end(), detail.tris + oldOffset * 4,
+                                 detail.tris + (oldOffset + oldCount) * 4);
+                continue;
+            }
+            if (!hasFloorArea)
+            {
+                // A collapsed XY patch has no floor footprint to serialize.
+                patch[3] = 0;
+                continue;
+            }
+            // Detail vertices begin with the original convex polygon vertices.
+            // Order edge samples by projection on that polygon, rather than
+            // trusting an overlapping triangulation's boundary edge table.
+            const auto *polygon = polygons.polys + patchIndex * polygons.nvp * 2;
+            std::vector<std::uint32_t> corners;
+            for (int vertex{}; vertex < polygons.nvp && polygon[vertex] != RC_MESH_NULL_IDX; ++vertex)
+            {
+                corners.push_back(static_cast<std::uint32_t>(vertex));
+            }
+            double area{};
+            for (std::size_t index = 2; index < corners.size(); ++index)
+            {
+                area += Cross(points[corners[0]], points[corners[index - 1]], points[corners[index]]);
+            }
+            if (area < 0)
+            {
+                std::reverse(corners.begin(), corners.end());
+            }
+            std::map<std::size_t, std::vector<std::pair<double, std::uint32_t>>> samplesByEdge;
+            for (const auto sample : boundarySamples)
+            {
+                if (sample < corners.size())
+                {
+                    continue;
+                }
+                auto nearest = std::numeric_limits<double>::max();
+                std::size_t selected{};
+                double parameter{};
+                for (std::size_t edge{}; edge < corners.size(); ++edge)
+                {
+                    const auto a = points[corners[edge]];
+                    const auto b = points[corners[(edge + 1) % corners.size()]];
+                    const double dx = static_cast<double>(b.x) - a.x;
+                    const double dy = static_cast<double>(b.y) - a.y;
+                    const double px = static_cast<double>(points[sample].x) - a.x;
+                    const double py = static_cast<double>(points[sample].y) - a.y;
+                    const auto lengthSquared = dx * dx + dy * dy;
+                    if (lengthSquared == 0)
+                    {
+                        continue;
+                    }
+                    const auto fraction = std::clamp((px * dx + py * dy) / lengthSquared, 0.0, 1.0);
+                    const auto distance =
+                        (px - fraction * dx) * (px - fraction * dx) + (py - fraction * dy) * (py - fraction * dy);
+                    if (distance < nearest)
+                    {
+                        nearest = distance;
+                        selected = edge;
+                        parameter = fraction;
+                    }
+                }
+                samplesByEdge[selected].emplace_back(parameter, sample);
+            }
+            std::vector<std::uint32_t> boundary;
+            for (std::size_t edge{}; edge < corners.size(); ++edge)
+            {
+                boundary.push_back(corners[edge]);
+                auto &samples = samplesByEdge[edge];
+                std::sort(samples.begin(), samples.end());
+                for (const auto &[parameter, sample] : samples)
+                {
+                    boundary.push_back(sample);
+                }
+            }
+            std::map<std::uint32_t, std::uint32_t> hull;
+            for (std::size_t edge{}; edge < boundary.size(); ++edge)
+            {
+                hull.emplace(boundary[edge], boundary[(edge + 1) % boundary.size()]);
+            }
+            const auto repaired = TriangulateDetailSamples(points, boundary);
+            patch[3] = static_cast<unsigned int>(repaired.size());
+            for (const auto &face : repaired)
+            {
+                unsigned char flags{};
+                for (unsigned int edge{}; edge < 3; ++edge)
+                {
+                    const auto found = hull.find(face[edge]);
+                    if (found != hull.end() && found->second == face[(edge + 1) % 3])
+                    {
+                        flags |= 1U << (edge * 2);
+                    }
+                }
+                triangles.insert(triangles.end(),
+                                 {static_cast<unsigned char>(face[0]), static_cast<unsigned char>(face[1]),
+                                  static_cast<unsigned char>(face[2]), flags});
+            }
+        }
+        auto *replacement = static_cast<unsigned char *>(rcAlloc(triangles.size(), RC_ALLOC_PERM));
+        if (!replacement && !triangles.empty())
+        {
+            throw std::runtime_error("Recast repaired height detail allocation failed");
+        }
+        std::copy(triangles.begin(), triangles.end(), replacement);
+        rcFree(detail.tris);
+        detail.tris = replacement;
+        detail.ntris = static_cast<int>(triangles.size() / 4);
+    }
+
     /// Own all Recast intermediates; retain height samples in a detail mesh or throw a stage-specific error.
     [[nodiscard]] RecastOwner<rcPolyMeshDetail, rcFreePolyMeshDetail> BuildRecastDetailMesh(
         const RecastInput &input, const rcConfig &config, RegionPartitioningAlgorithm partitioningAlgorithm,
-        CandidateStatistics &statistics)
+        CandidateStatistics &statistics, std::vector<std::string> &warnings)
     {
         const auto &vertices = input.vertices;
         const auto &triangles = input.triangles;
@@ -553,6 +697,12 @@ namespace
                                               config.detailSampleMaxError, *detail))
         {
             throw std::runtime_error("Recast height detail construction failed");
+        }
+        if (!HasValidDetailEdges(*detail))
+        {
+            RepairDetailTriangles(*detail, *polyMesh);
+            warnings.push_back(
+                "Recast retriangulated overlapping height detail while retaining its boundary and floor samples.");
         }
         // Detail vertices are already Recast world coordinates. Recast adds one
         // vertical voxel to every detail vertex; remove that offset to retain
@@ -914,7 +1064,8 @@ namespace navmesh::core
                                                         std::optional<AABB> cellBounds,
                                                         std::vector<CandidateExit> exits,
                                                         RegionPartitioningAlgorithm partitioningAlgorithm,
-                                                        const RecastSettings &settings) const
+                                                        const RecastSettings &settings,
+                                                        CandidateRetention retention) const
     {
         if (!scene.HasCompleteTriangleProvenance())
         {
@@ -994,7 +1145,8 @@ namespace navmesh::core
         }
 
         // Voxelize, partition, and restore a neutral mesh before attaching evidence.
-        const auto detailMesh = BuildRecastDetailMesh(input, config, partitioningAlgorithm, result.statistics);
+        const auto detailMesh =
+            BuildRecastDetailMesh(input, config, partitioningAlgorithm, result.statistics, result.warnings);
         result.mesh = ConvertRecastMesh(*detailMesh);
         if (cellBounds)
         {
@@ -1007,7 +1159,10 @@ namespace navmesh::core
         // bounds cannot keep a disconnected interior component alive.
         BuildCandidateRegions(result, scene, cellBounds, profile.weldTolerance);
         MatchExits(result, profile.agentRadius * 4 + config.cs * 2, profile.stepHeight + config.ch * 2);
-        RetainReachableRegions(result);
+        if (retention == CandidateRetention::Anchored)
+        {
+            RetainReachableRegions(result);
+        }
         result.statistics.polygonsBeforeSimplification = result.mesh.polygons.size();
         result.statistics.outputPolygons = result.mesh.polygons.size();
         result.warnings.push_back("Recast source-triangle provenance is matched by nearest surface after voxelization; "

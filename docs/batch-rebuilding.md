@@ -58,22 +58,44 @@ conservatively include all model-bearing reference locations.
 
 ## Impact selection and geometry inputs
 
-The index examines navigation-changing CELL, LAND, NAVM, placed-reference and
-worldspace edits. Equivalent navigation inputs, display names, editor IDs,
-worldspace map/height-summary metadata and LAND color/texture edits are excluded.
-Unknown fields and ownership changes remain conservative dependencies.
-Changed base records select their placed uses, including untouched references.
-Moved or deleted references select historical and winning locations. Exterior
+Selection compares supported terrain heights, effective water inputs and placed
+collision across the selected record transitions. CELL ownership/display fields,
+worldspace metadata, LAND color/texture edits and NAVM-only edits do not select
+regeneration targets. Changed base records compare collision at their placed uses,
+including untouched references. Render-only models, effects, excluded actor/furniture
+classes and unchanged collision triangles do not expand selection.
+Moved, disabled or deleted colliders select their changed historical and winning locations. Exterior
 positions, including negative coordinates, determine physical cell ownership;
 persistent references stored in a distant parent CELL are bucketed by their
 world position. Worldspace identities keep overlapping coordinate grids separate.
 Interiors remain independent targets.
 
-An exterior target includes an adjacent impact halo, extended by the requested
-`--neighboring-cell-radius`. Placed-object OBND bounds and historical reference
-scales conservatively extend the footprint for oversized models. The bound uses
-a rotation-independent enclosing sphere. Missing model bounds select the whole
-worldspace because a finite influence radius cannot be justified.
+Exterior impact uses the horizontal projection of changed collision triangles,
+including their historical rotation and scale. Height-only model extent does not
+expand horizontal coverage. Triangle/cell intersection excludes empty corners of
+triangle bounds. Terrain changes select their owning CELL; no whole-cell impact
+halo is added. `--neighboring-cell-radius` controls geometry suppliers without
+expanding regeneration targets. Models absent after a completed loose-asset and
+archive search supply no collision. Selection continues with a warning and lists
+unique missing paths in `selection_missing_models` in `batch-report.json`.
+Unreadable models and incomplete archive searches stop selection.
+Model replacements compare winning collision against the preceding available asset
+providers; added model paths have no prior collider. Archive-index failures compare
+all model uses rather than select every model's bounding sphere.
+
+New terrain and collision select cells without requiring authored NAVM. This
+includes new worldspaces and submerged LAND heightfields: seabed terrain remains
+a collision input, and generation can classify its triangles as water. Large
+plugins can therefore contain much more supported terrain than their visible
+landmass or authored navigation covers. These rules apply equally to Plugin
+and Load order scope.
+
+Water changes independently select cells with supported winning terrain or placed
+collision. Water classifies generated triangles and does not supply a floor.
+Supplier bounds discover candidate models, but exact collision triangles establish
+their CELL coverage. Cells already selected by terrain or collision use their
+winning water data. Empty water grids do not become targets from water metadata
+alone. NAVM presence does not determine terrain, water or collision eligibility.
 
 Generation loads neighboring geometry, including references whose model bounds
 reach the target from farther away. Missing model bounds conservatively include
@@ -92,7 +114,11 @@ geometry. Their source cells do not expand the scene's terrain or NAVM coverage.
 statuses, polygon totals, extraction count, geometry-cache reuse, and whether
 `copy_plugin` was selected. It also checkpoints per-cell timing and supplier
 counts, selection diagnostics, archive I/O, worker admission, cache reuse, and
-terminal output bytes. `full` output writes candidate JSON/OBJ beneath
+terminal output bytes. Selection counters distinguish unique terrain, water and
+collision targets, water owners without supported geometry, and
+selected counts by worldspace. Categories overlap when multiple inputs affect a
+cell; ignored contributions can still be selected by another input.
+`full` output writes candidate JSON/OBJ beneath
 `cells/<resolved FormID>/`, OBJ metadata, and the complete winning-record table.
 `compact` writes streaming gzip candidate JSON and references shared input
 catalogs. `plugin_only` retains reports and the requested plugin. `auto` selects
@@ -100,42 +126,43 @@ plugin-only output for writing or estimates, and full output for inspection.
 Source-triangle and geometry-source evidence are compacted together. Batch runs
 omit the large per-cell scene and discrepancy exports.
 
-Without `--skip-existing-navmesh`, cells without an existing NAVM are reported
-as skipped. With that option, any winning NAVM record protects its CELL and is
-reported as `skipped_existing_navm` before geometry extraction. Empty,
-unsupported, and deleted NAVM records also protect their authored identities.
+Every selected live cell generates a candidate, including cells without an existing
+NAVM. With `--skip-existing-navmesh`, any winning NAVM record protects its CELL and
+is reported as `skipped_existing_navm` before extraction. Empty, unsupported and
+deleted NAVM records also protect their identities when that option is enabled.
 The Windows UI exposes and persists **Skip cells with existing navmesh**.
-Uncovered selected cells generate candidates and receive new plugin-owned NAVM
-identities when writing a patch. New records use the winning CELL's hierarchy
-and its temporary child group. The report records `skip_existing_navmesh`.
-Deleted cells and empty candidates are explicitly reported as skipped.
-Unsupported candidates or source layouts stop the batch with an error. A plugin
-is written only after all eligible candidates have been generated. When no
-eligible replacements exist, the report is produced without a patch.
+Deleted CELLs are skipped. Valid empty candidates are completed replacements when
+no supported walkable floor survives; they clear replaced authored geometry rather
+than inventing a floor. Input, extraction, topology, refinement and writer failures
+stop the batch with a diagnostic and prevent publishing a partial patch.
 
-The combined ESP overrides each eligible cell's existing NAVMs. Generated
-geometry occupies that cell's largest source NAVM and the others become empty.
-Generated-to-generated borders are redirected to generated triangle indices
-and must have matching full edges and reciprocal targets. Incompatible border
-partitions fail the batch before a final ESP is created. Adjacent cells outside
-the rebuilding set keep their geometry and receive reciprocal portal overrides
-where required. Each cell's authored exterior crossings constrain generation;
-missing required crossings fail candidate validation before batch reconciliation
-or plugin writing. Candidate cache inputs include these selected-cell portals.
-Existing output plugins are refused. Every emitted NAVM is read
-back before the temporary file is finalized.
+Generation and border linking are separate stages. Workers retain all surviving
+walkable components without requiring authored portals or door anchors. Authored
+NAVMs from other rebuilding targets never constrain their geometry. Borders into
+untouched cells are matched to authored edges while preserving those endpoints.
+After every target is ready, `core/navmesh/batch_stitching` intersects neighboring
+candidate seam partitions, splits triangles with stable evidence and door joins,
+and welds compatible heights within movement limits. Corner endpoints are planned
+together. Linking revisits intervals made compatible by corner welding while
+keeping existing portal endpoints pinned; different authored corner heights remain pinned and connect through
+climb-compatible internal edges. Missing or unreachable
+neighbor floors leave valid candidate geometry intact. Compatible shared edges
+receive exact reversed endpoints and unique reciprocal generated triangle targets.
 
-In uncovered-cell mode, authored neighbor vertices and triangles are preserved;
-matched borders may add reciprocal portal links to them. Generated navigation
-retains only components reaching a matched door or a real neighboring portal
-after stitching against the authored snapshot. Unmatched seam wedges retract
-into the CELL, and isolated candidates are skipped. Surviving navigation still
-requires independent connection review. The generated ESP is light-flagged only when its
-master table and newly allocated identities fit the light format.
+The combined plugin overrides each target's existing NAVMs. Generated geometry
+occupies its largest source NAVM and the others become empty. Uncovered targets
+receive new plugin-owned NAVMs in their winning CELL hierarchy. The writer allocates
+all primary identities together, then resolves generated CELL destinations to those
+identities, including pairs where neither cell had authored navmesh. Untouched
+neighbors preserve their vertices and triangles and receive reciprocal portal
+overrides where required. Existing incoming links to replaced triangles are cleared
+and matched borders receive fresh return links. Every emitted NAVM is read back
+before the temporary plugin is finalized. Existing output plugins are refused.
+The patch is light-flagged only when its dependencies and allocated identities fit
+that format. Copy mode retains the selected source format and dependency limits.
 
 The existing writer limitations still apply: NAVI, teleport-door XNDP, cover and
-unmatched authored links are not rebuilt. Inspect the patch independently before
-using it in a disposable game profile.
+unmatched authored links are not rebuilt.
 
 ## Performance and verification
 
@@ -150,7 +177,7 @@ into winners incrementally. LAND uses a direct CELL index. Targets run in spatia
 order; winning placements are bounds-filtered before NIF extraction, and bounded
 model-local/placement caches reuse geometry. Independent generation tasks obey
 worker and estimated-byte admission limits. Compact candidate audit data is spooled
-to gzip and released from memory. Border reconciliation and guarded plugin writing
+to gzip; compact joins remain resident for seam refinement. Border reconciliation and guarded plugin writing
 remain global ordered stages. Input plugin records are read by range.
 
 `--estimate-only` samples eligible interior/exterior and density strata and stops
@@ -171,6 +198,7 @@ python tools/test_batch_rebuild.py ./build/windows/x64/releasedbg/NavmeshGenerat
 
 Fixtures exercise LAND edits without CELL overrides, plugin and load-order
 selection, geometry-cache reuse, single-cell clipping with neighboring input,
-combined patch serialization, reciprocal generated borders, historical moves,
+combined patch serialization, complete shared-floor seam coverage and reciprocal
+generated borders, historical moves,
 persistent placements, oversized models and invalid selections. The Windows
 executable is built; validation invokes only the CLI.

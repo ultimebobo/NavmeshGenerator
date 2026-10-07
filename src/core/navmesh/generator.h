@@ -4,6 +4,14 @@
 
 namespace navmesh::core
 {
+    /// Reachability policy for standalone inspection or a batch whose neighbors are generated later.
+    enum class CandidateRetention
+    {
+        /// Keep components with a door or exterior boundary anchor.
+        Anchored,
+        /// Keep every surviving Recast floor component for subsequent batch linking.
+        AllWalkable
+    };
     /** Validate finite movement, voxel and contour controls before generation or cache lookup.
      * Distances use Skyrim world units; region area uses square units and slope uses degrees.
      * @param profile Nonnegative radius, step and area; positive height, clearance and weld tolerance.
@@ -23,7 +31,7 @@ namespace navmesh::core
         Layers
     };
 
-    /// Replaceable algorithm boundary for neutral, inspection-only navmesh generation.
+    /// Replaceable algorithm boundary for neutral navmesh generation.
     class CandidateGenerator
     {
       public:
@@ -36,15 +44,17 @@ namespace navmesh::core
          * @param exits Enabled door positions in Skyrim world coordinates.
          * @param partitioningAlgorithm Recast region strategy; defaults to watershed.
          * @param settings Voxel and contour controls; horizontal resolution adapts to scene extent.
-         * @return Candidate mesh and evidence; every polygon has a shared-edge path to a
-         * matched door or exterior boundary edge. Empty when no component is anchored.
+         * @param retention Retain all walkable components when neighboring candidates are not yet available.
+         * @return Candidate mesh and evidence. Anchored retains components reaching a door
+         * or exterior boundary; AllWalkable retains every surviving floor component.
+         * Empty when no floor survives the selected retention policy.
          * Throws on invalid input or a build failure.
          */
         [[nodiscard]] virtual CandidateNavMesh Generate(
             const Scene &scene, const NavigationProfile &profile, std::optional<AABB> cellBounds,
             std::vector<CandidateExit> exits,
             RegionPartitioningAlgorithm partitioningAlgorithm = RegionPartitioningAlgorithm::Watershed,
-            const RecastSettings &settings = {}) const = 0;
+            const RecastSettings &settings = {}, CandidateRetention retention = CandidateRetention::Anchored) const = 0;
     };
 
     /// Recast Navigation implementation of the neutral candidate generator.
@@ -57,22 +67,24 @@ namespace navmesh::core
          * of climb and vertical voxel size. Contour error is refined if a retained voxel
          * region would collapse. Obstacle-only sources cannot supply walkable floors. Retain only
          * walkable components with a shared-edge path to a matched door or exterior
-         * boundary edge as provisional anchors. Exterior application paths finalize
-         * reachability with StitchCandidateBorders against available neighboring NAVMs.
+         * boundary edge as provisional anchors under Anchored retention. AllWalkable
+         * keeps unanchored floors for whole-batch stitching.
          * @param scene Geometry with complete triangle provenance in Skyrim world coordinates.
          * @param profile Agent dimensions and movement constraints in Skyrim world units.
          * @param cellBounds Optional exterior area in Skyrim world coordinates; absent for interiors.
          * @param exits Enabled placed DOOR references in Skyrim world coordinates.
          * @param partitioningAlgorithm Recast region strategy; defaults to watershed.
          * @param settings Voxel and contour controls; invalid settings throw before voxel allocation.
+         * @param retention AllWalkable keeps unanchored floors for subsequent batch linking.
          * @return Candidate mesh and evidence, with warnings for adaptive horizontal
-         * resolution and downward climb quantization; empty when no component is anchored;
+         * resolution and downward climb quantization; empty when no floor survives retention;
          * throws on invalid input or a Recast build failure.
          */
         [[nodiscard]] CandidateNavMesh Generate(
             const Scene &scene, const NavigationProfile &profile, std::optional<AABB> cellBounds,
             std::vector<CandidateExit> exits,
             RegionPartitioningAlgorithm partitioningAlgorithm = RegionPartitioningAlgorithm::Watershed,
-            const RecastSettings &settings = {}) const override;
+            const RecastSettings &settings = {},
+            CandidateRetention retention = CandidateRetention::Anchored) const override;
     };
 } // namespace navmesh::core

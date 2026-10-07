@@ -69,16 +69,32 @@ and candidate previews include `scene.glb`, which you can open in a compatible
 explain warnings, skipped areas, and export results. Batch output depends on the
 selected output policy.
 
+Plugin and Load order scopes rebuild cells with changed supported terrain,
+water inputs, or placed collision. Visual effects, render-only models and
+NAVM-only edits do not select regeneration targets. Collision footprints use
+transformed triangles, so tall model bounds do not spread vertically into the
+horizontal cell grid. Neighboring geometry supplies input without enlarging the
+rebuild scope; neighboring NAVMs can receive reciprocal connection updates while
+retaining their authored geometry.
+New terrain and collision remain eligible without existing navmesh, including
+new worldspaces and submerged terrain. Water-only changes select cells with
+supported terrain or model collision; an empty water plane does not supply a floor.
+Missing NIFs warn and supply no collision; the batch report lists their paths.
+Unreadable models and incomplete archive searches stop selection.
+
 Generated border portals use the neighboring NAVM's exact edge endpoints.
 Border repair aligns nearby endpoints and keeps interior floor-height detail
 when needed to preserve the surrounding slopes, including with finer contours.
-Existing exterior crossings from the selected cell are required constraints:
+In Cell scope, existing exterior crossings are required constraints:
 regeneration retains their locations and destinations. Boundary cavities are
 retriangulated when a direct match cannot retain a crossing; unresolved required
-crossings fail validation and prevent plugin export.
-Unmatched seam wedges retract into the working cell, and components without a
-real neighboring link or a matched door are removed. Scene previews show the
-generated connection bars in place of links involving the original cell NAVMs.
+crossings invalidate the candidate. Cell-scope plugin export stops on an invalid
+candidate. Plugin and Load order batches regenerate every selected live cell,
+including cells without existing NAVM. All walkable candidates are retained until neighboring
+candidates are available. Shared seams receive matching partitions and reciprocal
+links; only untouched cells supply authored border constraints. The dedicated
+skip-existing option protects authored cells. Invalid topology stops export with
+its CELL and finding; it never substitutes authored navigation.
 
 Install a generated patch through MO2 and load it after the plugins it depends
 on. A **Copy selected plugin** export replaces the selected plugin; use it with
@@ -86,6 +102,8 @@ the original mod's assets and language files.
 
 Input plugins and MO2 profile files are left untouched. Existing output plugins
 are not overwritten, so choose a new output folder when repeating an export.
+New NAVMs for cells without authored navigation include the PathingCell type tag
+required by Creation Kit, and plugin verification checks that tag before finalizing.
 
 ## Current limitations
 

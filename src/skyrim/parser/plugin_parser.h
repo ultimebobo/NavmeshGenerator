@@ -92,6 +92,22 @@ namespace navmesh::skyrim
         /// Whether this version changes navigation inputs relative to its predecessor.
         /// New records and manually supplied origins conservatively default to true.
         bool navigationChanged{true};
+        /// Reference DATA angles in radians, using the Skyrim placement convention.
+        core::Vec3 rotation;
+        /// Model asset named by this version; empty means no reference-local or base model.
+        std::string modelPath;
+        /// Header state at this version; deleted/initially disabled placements supply no collision.
+        bool deleted{}, initiallyDisabled{};
+        /// CELL water enable flag and finite explicit CELL/WRLD water height in Skyrim world Z units.
+        bool hasWater{};
+        std::optional<float> waterHeight;
+        /// CELLs without an explicit height inherit their worldspace's water surface.
+        bool usesWorldWater{true};
+        /// Resolved parent worldspace and water-inheritance flag at this WRLD version.
+        std::optional<std::uint32_t> parentWorldFormId;
+        bool inheritsParentWater{};
+        /// Shared decoded VHGT bytes for this LAND version, including inherited height evidence.
+        core::SharedBytes terrainHeights;
     };
     struct NavmLayout
     {

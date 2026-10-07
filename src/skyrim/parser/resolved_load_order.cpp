@@ -797,13 +797,49 @@ namespace navmesh::skyrim
                 {
                     record.winning.position =
                         core::Vec3{(*record.transform)[0], (*record.transform)[1], (*record.transform)[2]};
+                    record.winning.rotation = {(*record.transform)[3], (*record.transform)[4], (*record.transform)[5]};
                 }
                 record.winning.scale = record.referenceScale.value_or(1.0F);
                 record.winning.hasModel = record.modelPath && !record.modelPath->empty();
+                record.winning.modelPath = record.modelPath.value_or("");
                 if (record.raw)
                 {
+                    record.winning.deleted = (record.raw->flags & (1U << 5)) != 0;
+                    record.winning.initiallyDisabled = (record.raw->flags & (1U << 11)) != 0;
                     for (const auto &sub : record.raw->subrecords)
                     {
+                        if (record.type == "LAND" && sub.type == "VHGT")
+                        {
+                            record.winning.terrainHeights = sub.data;
+                        }
+                        if (record.type == "WRLD" && sub.type == "WNAM" && sub.data.size() >= 4)
+                        {
+                            record.winning.parentWorldFormId = resolve(i, U32(sub.data, 0));
+                        }
+                        if (record.type == "WRLD" && sub.type == "PNAM" && sub.data.size() >= 2)
+                        {
+                            record.winning.inheritsParentWater = (U16(sub.data, 0) & (1U << 3)) != 0;
+                        }
+                        if (record.type == "CELL" && sub.type == "DATA" && !sub.data.empty())
+                        {
+                            record.winning.hasWater = (sub.data[0] & 2U) != 0;
+                        }
+                        if ((record.type == "CELL" && sub.type == "XCLW") ||
+                            (record.type == "WRLD" && sub.type == "DNAM"))
+                        {
+                            const auto offset = record.type == "WRLD" ? 4U : 0U;
+                            record.winning.usesWorldWater = false;
+                            if (sub.data.size() >= offset + sizeof(float))
+                            {
+                                float height{};
+                                std::memcpy(&height, sub.data.data() + offset, sizeof(height));
+                                record.winning.usesWorldWater = std::isfinite(height) && height <= -2147483648.0F;
+                                if (std::isfinite(height) && !record.winning.usesWorldWater)
+                                {
+                                    record.winning.waterHeight = height;
+                                }
+                            }
+                        }
                         if (sub.type == "OBND" && sub.data.size() == 12)
                         {
                             std::array<std::int16_t, 6> bounds{};
@@ -839,6 +875,7 @@ namespace navmesh::skyrim
                             if (inherited != result.records[found->second].raw->subrecords.end())
                             {
                                 record.raw->subrecords.push_back(*inherited);
+                                record.winning.terrainHeights = inherited->data;
                             }
                         }
                     }

@@ -165,6 +165,42 @@ namespace navmesh::skyrim
         }
         return result;
     }
+    std::vector<const core::Cell *> CellImpactIndex::IntersectingCells(const RecordOrigin &origin,
+                                                                       const core::AABB &bounds) const
+    {
+        const auto *physical = PhysicalCell(origin);
+        if (!physical || !bounds.IsValid() || !std::isfinite(bounds.min.x) || !std::isfinite(bounds.min.y) ||
+            !std::isfinite(bounds.max.x) || !std::isfinite(bounds.max.y))
+        {
+            return {};
+        }
+        if (!physical->exteriorCoordinates || !worlds_.contains(physical->id))
+        {
+            return {physical};
+        }
+        // Query the horizontal projection of actual collision; vertical size does not enlarge the grid footprint.
+        const auto world = worlds_.at(physical->id);
+        const auto lowX =
+            static_cast<std::int32_t>(std::clamp(std::ceil(static_cast<double>(bounds.min.x) / 4096) - 1,
+                                                 static_cast<double>(std::numeric_limits<std::int32_t>::min()),
+                                                 static_cast<double>(std::numeric_limits<std::int32_t>::max())));
+        std::vector<const core::Cell *> result;
+        for (auto entry = exterior_.lower_bound({world, lowX, std::numeric_limits<std::int32_t>::min()});
+             entry != exterior_.end(); ++entry)
+        {
+            const auto &[key, cell] = *entry;
+            const auto [owner, x, y] = key;
+            if (owner != world || static_cast<double>(x) * 4096 > bounds.max.x)
+            {
+                break;
+            }
+            if ((static_cast<double>(y) + 1) * 4096 >= bounds.min.y && static_cast<double>(y) * 4096 <= bounds.max.y)
+            {
+                result.push_back(cell);
+            }
+        }
+        return result;
+    }
     std::vector<const core::Cell *> CellImpactIndex::Footprint(const RecordOrigin &origin, int radius) const
     {
         const auto *physical = PhysicalCell(origin);

@@ -31,6 +31,9 @@ namespace navmesh::skyrim
         std::vector<EnabledMod> enabledMods;
         std::vector<std::filesystem::path> pluginPaths;
         std::vector<VirtualFile> looseAssetWinners;
+        /// Loose asset roots in increasing MO2 priority, including game Data and overwrite.
+        /// Retained to recover the preceding provider of a selected model replacement without rescanning catalogs.
+        std::vector<std::filesystem::path> looseAssetRoots;
         /// Physical winning BSAs from game Data and enabled mods, in increasing MO2 priority.
         std::vector<std::filesystem::path> archivePaths;
         std::vector<Diagnostic> diagnostics;

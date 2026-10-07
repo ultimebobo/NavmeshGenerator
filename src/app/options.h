@@ -48,7 +48,7 @@ namespace navmesh::app
         core::NavigationProfile navigationProfile;
         /// Recast voxel and contour controls; validated before input resolution and cache reuse.
         core::RecastSettings recastSettings;
-        /// Exterior geometry/impact halo in CELL units; generation always includes
+        /// Exterior geometry input halo in CELL units; generation always includes
         /// adjacent geometry and remains clipped to each selected CELL.
         int neighboringCellRadius{};
         /// Batch artifacts: auto uses plugin_only for plugin writing/estimates and full for inspection.

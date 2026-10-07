@@ -42,6 +42,10 @@
 
 #include <zlib.h>
 
+#ifdef _WIN32
+#include <crtdbg.h>
+#endif
+
 namespace
 {
     void Require(const bool condition, const std::source_location location = std::source_location::current()) { if (!condition) { std::fprintf(stderr, "Requirement failed at %s:%u\n", location.file_name(), location.line()); std::abort(); } }
@@ -257,8 +261,14 @@ namespace
         std::vector<std::uint8_t> cells;
         PutRecord(cells, "CELL", 0x100, CellPayload("UncoveredInteriorA"));
         PutRecord(cells, "CELL", 0x101, CellPayload("UncoveredInteriorB"));
+        std::vector<std::uint8_t> hedr;
+        PutFloat(hedr, 1.7F);
+        PutU32(hedr, 2);
+        PutU32(hedr, 0x800);
+        std::vector<std::uint8_t> header;
+        PutText(header, "HEDR", hedr);
         std::vector<std::uint8_t> plugin;
-        PutRecord(plugin, "TES4", 0, {}, 0x80U);
+        PutRecord(plugin, "TES4", 0, header, 0x80U);
         PutGroup(plugin, 0x4c4c4543, 0, cells);
         const auto source = root / "InteriorSource.esp";
         {
@@ -289,10 +299,11 @@ namespace
             Require(navm && navm->raw && navm->navm && navm->winning.plugin == "generated-navmesh.esp");
             Require(patched.FindWinning(cell.id)->winning.plugin == "InteriorSource.esp");
             const auto offset = static_cast<std::size_t>(navm->navm->header.offset);
-            std::uint32_t world{}, interior{};
+            std::uint32_t pathingCell{}, world{}, interior{};
+            std::memcpy(&pathingCell, navm->raw->decodedPayload.data() + offset + 4, sizeof(pathingCell));
             std::memcpy(&world, navm->raw->decodedPayload.data() + offset + 8, sizeof(world));
             std::memcpy(&interior, navm->raw->decodedPayload.data() + offset + 12, sizeof(interior));
-            Require(world == 0 && interior == cell.id);
+            Require(pathingCell == 0xA5E9A03CU && world == 0 && interior == cell.id);
             Require(cell.navMeshes[0].vertices.size() == 3 && cell.navMeshes[0].polygons.size() == 1);
         }
         auto invalid = candidate;
@@ -300,6 +311,81 @@ namespace
         Require(!WriteNavmeshOverride(root / "invalid", {source}, resolved, resolved.cells.front(), invalid, target,
                                       error));
         Require(!std::filesystem::exists(root / "invalid" / "generated-navmesh.esp"));
+
+        // Source-copy export uses the same non-null location object for new identities.
+        Require(WriteNavmeshOverrides(root / "copy", {source}, resolved, {{&resolved.cells[0], &candidate}}, target,
+                                      error, "InteriorSource.esp"));
+        const auto copied = ResolveLoadOrder({.dataDirectory = root, .plugins = {target}});
+        const auto copiedCell = std::find_if(copied.cells.begin(), copied.cells.end(),
+                                             [&](const auto &cell) { return cell.id == resolved.cells[0].id; });
+        Require(copiedCell != copied.cells.end() && copiedCell->navMeshes.size() == 1);
+        const auto *copiedNavm = copied.FindWinning(copiedCell->navMeshes[0].id);
+        Require(copiedNavm && copiedNavm->navm && copiedNavm->raw);
+        std::uint32_t copiedPathingCell{};
+        std::memcpy(&copiedPathingCell, copiedNavm->raw->decodedPayload.data() + copiedNavm->navm->header.offset + 4,
+                    sizeof(copiedPathingCell));
+        Require(copiedPathingCell == 0xA5E9A03CU);
+    }
+
+    void TestNewExteriorNavmeshRecord()
+    {
+        using namespace navmesh::skyrim;
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-new-exterior-record-test";
+        std::filesystem::remove_all(root);
+        std::filesystem::create_directories(root);
+        // An uncovered exterior has world/grid fields instead of an interior
+        // FormID. A large candidate also exercises the extended NVNM envelope.
+        std::vector<std::uint8_t> exteriorCells;
+        PutRecord(exteriorCells, "CELL", 0x100, CellPayload("UncoveredExterior", true));
+        std::vector<std::uint8_t> worldChildren;
+        PutGroup(worldChildren, 0, 4, exteriorCells);
+        std::vector<std::uint8_t> worlds;
+        PutRecord(worlds, "WRLD", 0x400, {});
+        PutGroup(worlds, 0x400, 1, worldChildren);
+        std::vector<std::uint8_t> exteriorPlugin;
+        PutRecord(exteriorPlugin, "TES4", 0, {});
+        PutGroup(exteriorPlugin, 0x444c5257, 0, worlds);
+        const auto exteriorSource = root / "ExteriorSource.esp";
+        {
+            std::ofstream file(exteriorSource, std::ios::binary);
+            file.write(reinterpret_cast<const char *>(exteriorPlugin.data()),
+                       static_cast<std::streamsize>(exteriorPlugin.size()));
+        }
+        const auto exteriorOrder = ResolveLoadOrder({.dataDirectory = root, .plugins = {exteriorSource}});
+        Require(exteriorOrder.cells.size() == 1 && exteriorOrder.cells[0].navMeshes.empty());
+        navmesh::core::CandidateNavMesh large;
+        navmesh::core::NavPolygon triangle;
+        triangle.neighbors.fill(std::numeric_limits<std::uint32_t>::max());
+        for (std::uint32_t index{}; index < 1600; ++index)
+        {
+            const float x = 12 * 4096.0F + 100 + (index % 40) * 8;
+            const float y = -4 * 4096.0F + 100 + (index / 40) * 8;
+            large.mesh.vertices.insert(large.mesh.vertices.end(), {{x, y, 0}, {x + 2, y, 0}, {x, y + 2, 0}});
+            auto face = triangle;
+            face.vertices = {index * 3, index * 3 + 1, index * 3 + 2};
+            large.mesh.polygons.push_back(face);
+        }
+        std::filesystem::path target;
+        std::string error;
+        Require(WriteNavmeshOverride(root / "exterior", {exteriorSource}, exteriorOrder, exteriorOrder.cells[0], large,
+                                     target, error));
+        const auto exteriorPatched = ResolveLoadOrder({.dataDirectory = root, .plugins = {exteriorSource, target}});
+        const auto *exteriorNavm = exteriorPatched.FindWinning(exteriorPatched.cells[0].navMeshes[0].id);
+        Require(exteriorNavm && exteriorNavm->navm && exteriorNavm->raw);
+        const auto &nvnm = exteriorNavm->raw->subrecords.front();
+        Require(nvnm.type == "NVNM" && nvnm.extendedSize);
+        const auto &bytes = nvnm.data;
+        std::uint32_t exteriorPathingCell{}, exteriorWorld{}, vertexCount{}, triangleCount{};
+        std::memcpy(&exteriorPathingCell, bytes.data() + 4, sizeof(exteriorPathingCell));
+        std::memcpy(&exteriorWorld, bytes.data() + 8, sizeof(exteriorWorld));
+        std::int16_t gridY{}, gridX{};
+        std::memcpy(&gridY, bytes.data() + 12, sizeof(gridY));
+        std::memcpy(&gridX, bytes.data() + 14, sizeof(gridX));
+        Require(exteriorPathingCell == 0xA5E9A03CU && exteriorWorld == 0x400 && gridX == 12 && gridY == -4);
+        std::memcpy(&vertexCount, bytes.data() + 16, sizeof(vertexCount));
+        Require(vertexCount == large.mesh.vertices.size());
+        std::memcpy(&triangleCount, bytes.data() + 20 + vertexCount * 12, sizeof(triangleCount));
+        Require(triangleCount == large.mesh.polygons.size());
     }
 
     void TestReciprocalCellTransitions(float borderDrift = 0.0F, bool linkSecondary = false)
@@ -2290,6 +2376,8 @@ namespace
 }
 
 void TestPerformanceCaches();
+void TestGeneratedBatchTopology();
+void TestCollisionImpactSelection();
 void TestTriangleTagging();
 
 void TestDesktopOptionsAndRecastSettings();
@@ -2298,6 +2386,29 @@ void ExportNavigationObstacleFixture(const std::filesystem::path &directory);
 
 int main(int argc, char **argv)
 {
+#ifdef _WIN32
+    // CLI regressions report assertion failures to stderr without opening an interactive CRT dialog.
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+#endif
+    if (argc > 1 && std::string_view(argv[1]) == "--collision-impact-only")
+    {
+        TestCollisionImpactSelection();
+        return 0;
+    }
+    if (argc > 1 && std::string_view(argv[1]) == "--writer-only")
+    {
+        TestNavmeshOverrideWriter();
+        TestNewNavmeshRecords();
+        TestNewExteriorNavmeshRecord();
+        TestReciprocalCellTransitions();
+        TestReciprocalCellTransitions(2.5F, true);
+        return 0;
+    }
+    TestGeneratedBatchTopology();
+    TestCollisionImpactSelection();
     TestTriangleTagging();
     if (argc > 2 && std::string_view(argv[1]) == "--export-navigation-fixture")
     {
@@ -2345,6 +2456,7 @@ int main(int argc, char **argv)
         TestAffectedCells();
         TestNavmeshOverrideWriter();
         TestNewNavmeshRecords();
+        TestNewExteriorNavmeshRecord();
         TestReciprocalCellTransitions();
         return 0;
     }
@@ -2357,6 +2469,7 @@ int main(int argc, char **argv)
     TestLossAwareRecordReader();
     TestNavmeshOverrideWriter();
     TestNewNavmeshRecords();
+    TestNewExteriorNavmeshRecord();
     TestReciprocalCellTransitions();
     TestAdjacentBorderBridges();
     TestCompleteBorderStitching();

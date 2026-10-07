@@ -144,6 +144,7 @@ namespace navmesh::app::detail
         destination.referencesWithModels += source.referencesWithModels;
         destination.modelsLoaded += source.modelsLoaded;
         destination.modelsMissing += source.modelsMissing;
+        destination.archiveSearchComplete = destination.archiveSearchComplete && source.archiveSearchComplete;
         destination.invalidVertices += source.invalidVertices;
         destination.invalidIndices += source.invalidIndices;
         destination.modelsExcluded += source.modelsExcluded;
