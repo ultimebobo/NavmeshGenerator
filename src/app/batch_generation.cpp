@@ -7,16 +7,52 @@
 #include "core/reproducibility/export_metadata.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <format>
 #include <map>
 #include <limits>
+#include <new>
+#include <set>
 
 namespace navmesh::app::detail
 {
     namespace
     {
+        /// Borrow winning meshes for existing authored portals; keys remain in resolved FormID space.
+        std::map<std::uint32_t, const core::NavMesh *> IndexAuthoredPortalTargets(
+            const std::vector<core::GeneratedCellCandidate> &exterior, const skyrim::ResolvedLoadOrder &resolved)
+        {
+            std::map<std::uint32_t, const core::NavMesh *> targets;
+            for (const auto &target : exterior)
+            {
+                for (const auto &link : target.candidate->borderLinks)
+                {
+                    if (!link.generatedNeighborCell)
+                    {
+                        targets.emplace(link.neighborNavmeshId, nullptr);
+                    }
+                }
+            }
+            if (targets.empty())
+            {
+                return targets;
+            }
+            for (const auto &cell : resolved.cells)
+            {
+                for (const auto &mesh : cell.navMeshes)
+                {
+                    const auto found = targets.find(mesh.id);
+                    if (found != targets.end())
+                    {
+                        found->second = &mesh;
+                    }
+                }
+            }
+            return targets;
+        }
+
         /// Compact both joins together so polygon and region indices remain valid in the spooled scene.
         core::Scene CompactEvidence(core::CandidateNavMesh &candidate, const core::Scene &scene)
         {
@@ -121,26 +157,56 @@ namespace navmesh::app::detail
                                            : input.cacheDirectory / "candidates" / (key + ".gz");
             core::Scene evidence;
             result.reused = !key.empty() && LoadCandidate(result.auditPath, result.candidate, evidence);
-            if (!result.reused)
+            const auto started = std::chrono::steady_clock::now();
+            // Only cell-local generation/validation failures are recoverable.
+            // Evidence storage and allocation exceptions still stop the run.
+            try
             {
-                const auto started = std::chrono::steady_clock::now();
-                result.candidate = core::RecastCandidateGenerator{}.Generate(
-                    input.geometry.scene, options.navigationProfile, input.bounds, std::move(input.exits),
-                    options.partitioningAlgorithm, options.recastSettings, core::CandidateRetention::AllWalkable);
-                core::RefreshCandidateTopology(result.candidate);
-                if (input.bounds && !input.adjacent.empty())
+                if (result.reused)
                 {
-                    (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent, {}, true);
+                    // A cached mesh cannot bypass the current scene-height safety check.
+                    // Keep compatible successful caches without rerunning rasterization.
+                    core::ValidateRecastSceneHeightRange(input.geometry.scene, options.navigationProfile, input.bounds,
+                                                         options.recastSettings);
                 }
+                else
+                {
+                    result.candidate = core::RecastCandidateGenerator{}.Generate(
+                        input.geometry.scene, options.navigationProfile, input.bounds, std::move(input.exits),
+                        options.partitioningAlgorithm, options.recastSettings, core::CandidateRetention::AllWalkable);
+                    core::RefreshCandidateTopology(result.candidate);
+                    if (input.bounds && !input.adjacent.empty())
+                    {
+                        (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent, {}, true);
+                    }
+                    core::TagCandidateTriangles(result.candidate, result.cell->navMeshes, result.cell->waterHeight,
+                                                options.tagTriangles);
+                    if (!result.candidate.topology.valid)
+                    {
+                        result.diagnostics = result.candidate.topology.findings;
+                        throw std::runtime_error("Candidate topology validation failed: " + result.diagnostics.front());
+                    }
+                }
+            }
+            catch (const std::bad_alloc &)
+            {
+                throw;
+            }
+            catch (const std::exception &error)
+            {
                 result.generationSeconds =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-                core::TagCandidateTriangles(result.candidate, result.cell->navMeshes, result.cell->waterHeight,
-                                            options.tagTriangles);
-                if (!result.candidate.topology.valid)
-                {
-                    result.diagnostics = result.candidate.topology.findings;
-                    throw std::runtime_error("Candidate topology validation failed: " + result.diagnostics.front());
-                }
+                result.status = "skipped_generation_failed";
+                result.error = std::format("CELL {:08X}: {}", result.cell->id, error.what());
+                result.candidate = {};
+                result.auditPath.clear();
+                result.reused = false;
+                return result;
+            }
+            result.generationSeconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+            if (!result.reused)
+            {
                 evidence = CompactEvidence(result.candidate, input.geometry.scene);
                 if (!StoreCandidate(result.auditPath, result.candidate, evidence))
                 {
@@ -180,8 +246,14 @@ namespace navmesh::app::detail
     std::string ReconcileBatchBorders(std::vector<BatchCellResult> &results, const skyrim::ResolvedLoadOrder &resolved)
     {
         std::vector<core::GeneratedCellCandidate> exterior;
+        std::map<std::uint32_t, std::array<std::int32_t, 2>> generatedCoordinates;
+        std::vector<const BatchCellResult *> skippedExteriors;
         for (auto &result : results)
         {
+            if (result.status == "skipped_generation_failed" && result.cell->exteriorCoordinates)
+            {
+                skippedExteriors.push_back(&result);
+            }
             if (result.status != "generated" || !result.cell->exteriorCoordinates)
             {
                 continue;
@@ -192,6 +264,7 @@ namespace navmesh::app::detail
                 return "Generated exterior CELL has no resolved worldspace";
             }
             const auto [x, y] = *result.cell->exteriorCoordinates;
+            generatedCoordinates.emplace(result.cell->id, *result.cell->exteriorCoordinates);
             const core::AABB bounds{.min = {x * 4096.0F, y * 4096.0F, std::numeric_limits<float>::lowest()},
                                     .max = {(static_cast<float>(x) + 1) * 4096.0F,
                                             (static_cast<float>(y) + 1) * 4096.0F, std::numeric_limits<float>::max()}};
@@ -199,6 +272,63 @@ namespace navmesh::app::detail
         }
         try
         {
+            const auto portalTargets = skippedExteriors.empty() ? std::map<std::uint32_t, const core::NavMesh *>{}
+                                                                : IndexAuthoredPortalTargets(exterior, resolved);
+            // Failed targets remain authored cells. Reintroduce their NAVMs as
+            // untouched border constraints before joining successful generated cells.
+            for (auto &target : exterior)
+            {
+                const auto *owner = resolved.FindWinning(target.cellId);
+                const auto [ownerX, ownerY] = generatedCoordinates.at(target.cellId);
+                std::vector<core::NavMesh> adjacent;
+                for (const auto *result : skippedExteriors)
+                {
+                    const auto *neighbor = resolved.FindWinning(result->cell->id);
+                    if (!neighbor || neighbor->worldspaceFormId != owner->worldspaceFormId)
+                    {
+                        continue;
+                    }
+                    const auto [x, y] = *result->cell->exteriorCoordinates;
+                    if (std::abs(static_cast<std::int64_t>(x) - ownerX) +
+                            std::abs(static_cast<std::int64_t>(y) - ownerY) ==
+                        1)
+                    {
+                        adjacent.insert(adjacent.end(), result->cell->navMeshes.begin(), result->cell->navMeshes.end());
+                    }
+                }
+                if (!adjacent.empty())
+                {
+                    // Stitching validates every portal against this neighbor set.
+                    // Include established destinations alongside the failed targets;
+                    // a failed cell without authored NAVM contributes no constraint.
+                    std::set<std::uint32_t> neighborIds;
+                    for (const auto &mesh : adjacent)
+                    {
+                        neighborIds.insert(mesh.id);
+                    }
+                    for (const auto &link : target.candidate->borderLinks)
+                    {
+                        if (link.generatedNeighborCell || !neighborIds.insert(link.neighborNavmeshId).second)
+                        {
+                            continue;
+                        }
+                        const auto *mesh = portalTargets.at(link.neighborNavmeshId);
+                        if (!mesh)
+                        {
+                            throw std::runtime_error(
+                                std::format("CELL {:08X}: authored border target {:08X} is missing", target.cellId,
+                                            link.neighborNavmeshId));
+                        }
+                        adjacent.push_back(*mesh);
+                    }
+                    (void)core::StitchCandidateBorders(*target.candidate, target.bounds, adjacent, {}, true);
+                    if (!target.candidate->topology.valid)
+                    {
+                        throw std::runtime_error(
+                            std::format("CELL {:08X}: {}", target.cellId, target.candidate->topology.findings.front()));
+                    }
+                }
+            }
             (void)core::StitchGeneratedCandidates(exterior);
         }
         catch (const std::exception &error)

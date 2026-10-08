@@ -14,7 +14,8 @@ namespace navmesh::app::detail
      * @param progress Optional synchronous progress sink.
      * @param cancelled Optional cancellation query between processing stages.
      * @param inputPreparationSeconds Elapsed input/report preparation time, in seconds, for checkpoint telemetry.
-     * @return Process-style status: success, processing/export failure, or cancellation.
+     * @return Process-style status: success (including logged cell-generation skips),
+     * input/export/global-linking failure, or cancellation. Skips preserve authored geometry.
      * @warning Writes batch reports and candidate exports, and a verified ESP when requested.
      */
     int RunBatch(const Options &options, const skyrim::ResolvedLoadOrder &resolved,

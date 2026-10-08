@@ -32,6 +32,10 @@ format. The copy retains its extension and flags rather than selecting a patch
 format. Source plugins and existing output files are never overwritten. Every
 generated or modified NAVM is read back before the copy is finalized.
 
+NAVM-only patches use a filename distinct from every active input. A numeric
+suffix is added when the default generated filename is already active, allowing
+the patch to depend on earlier generated navigation without a self dependency.
+
 ```powershell
 NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --copy-plugin --output "<new output folder>"
 ```
@@ -69,6 +73,12 @@ positions, including negative coordinates, determine physical cell ownership;
 persistent references stored in a distant parent CELL are bucketed by their
 world position. Worldspace identities keep overlapping coordinate grids separate.
 Interiors remain independent targets.
+
+Persistent worldspace CELL containers can carry placeholder grid coordinates.
+They supply placed geometry through physical bucketing and are reported as
+`skipped_persistent_cell` when selected; they do not receive generated NAVM or
+authored border constraints. The ordinary terrain CELL at that position remains
+eligible. Cost samples exclude the containers.
 
 Exterior impact uses the horizontal projection of changed collision triangles,
 including their historical rotation and scale. Height-only model extent does not
@@ -131,15 +141,28 @@ NAVM. With `--skip-existing-navmesh`, any winning NAVM record protects its CELL 
 is reported as `skipped_existing_navm` before extraction. Empty, unsupported and
 deleted NAVM records also protect their identities when that option is enabled.
 The Windows UI exposes and persists **Skip cells with existing navmesh**.
+New NAVM child groups use the CELL's identity in the output master table;
+unrelated earlier load-order plugins do not affect their placement.
 Deleted CELLs are skipped. Valid empty candidates are completed replacements when
 no supported walkable floor survives; they clear replaced authored geometry rather
-than inventing a floor. Input, extraction, topology, refinement and writer failures
-stop the batch with a diagnostic and prevent publishing a partial patch.
+than inventing a floor. Cell-local Recast generation, height-range and topology
+failures are logged as `skipped_generation_failed`, with the CELL identity, error
+and validation findings in `batch-report.json`. These cells produce no replacement
+NAVM; their authored geometry stays intact. Other cells continue generating and
+the verified plugin can complete. Reports use `complete_with_skips` when generation
+failures occurred and count them in `generation_failed_cells`; the completion
+message also reports that count. Input, extraction, allocation exceptions, evidence-storage,
+global seam refinement and writer failures still stop publishing.
 
 Generation and border linking are separate stages. Workers retain all surviving
 walkable components without requiring authored portals or door anchors. Authored
 NAVMs from other rebuilding targets never constrain their geometry. Borders into
 untouched cells are matched to authored edges while preserving those endpoints.
+Targets skipped after generation failure become untouched neighbors for border
+matching, including reciprocal connection updates when required.
+Recovery validates the complete set of established authored portal destinations
+together with the skipped neighbors. A skipped neighbor without authored NAVM
+adds no border constraint; supported floors remain intact with open seams.
 After every target is ready, `core/navmesh/batch_stitching` intersects neighboring
 candidate seam partitions, splits triangles with stable evidence and door joins,
 and welds compatible heights within movement limits. Corner endpoints are planned
@@ -184,6 +207,11 @@ remain global ordered stages. Input plugin records are read by range.
 before writing a plugin. Its report distinguishes the full selected/eligible scope
 from sampled/completed work and gives a heuristic remaining-time range. Cached
 sampled candidates can be reused by a later generation run.
+
+Candidate keys include the ordered generation inputs and a versioned pipeline
+compatibility identity. Rebuilding a compatible executable preserves reuse.
+Cache entries keyed by a legacy executable hash need explicit verified migration;
+the checkpoint alone does not make an arbitrary candidate safe to reuse.
 
 Run the core tests and the synthetic CLI integration tests after building:
 

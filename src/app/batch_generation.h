@@ -14,6 +14,8 @@ namespace navmesh::app::detail
         /// Generated geometry and compact source joins retained through batch seam refinement.
         core::CandidateNavMesh candidate;
         /// Public export metadata, report status, and captured failure message (empty on success).
+        /// skipped_generation_failed has no candidate or audit and retains authored geometry.
+        /// Reciprocal connections into successful neighbors can still be updated.
         std::string metadata, status, error;
         /// Topology findings captured when candidate generation fails.
         std::vector<std::string> diagnostics;
@@ -46,15 +48,19 @@ namespace navmesh::app::detail
      * @param input Isolated world-space geometry, untouched-neighbor constraints and borrowed target metadata.
      * @param options Validated shared batch settings, including the normalized artifact policy.
      * @return Candidate with compact evidence and status generated, including valid empty floor coverage.
-     * No component is removed for lacking an authored portal or a door. Worker failures,
-     * including invalid topology, are captured in result.error with status failed.
+     * No component is removed for lacking an authored portal or a door. Cell-local generation
+     * and topology failures return skipped_generation_failed with an error and no candidate.
+     * Allocation exceptions and evidence-storage failures return failed and must stop batch publishing.
      */
     [[nodiscard]] BatchCellResult BuildBatchCandidate(BatchGenerationInput input, const Options &options);
 
     /** Join the complete generated exterior set without consulting replaced authored geometry.
      * @param results Completed targets with full generated geometry and compact source joins.
      * Candidates remain present when an adjacent target has no walkable floor.
-     * @param resolved Winning CELL worldspace and coordinate ownership.
+     * Skipped generation targets retain their authored NAVMs as untouched border constraints.
+     * Recovery validates existing authored portals together with newly available neighbors.
+     * Neighbors without authored NAVM leave open borders and walkable components intact.
+     * @param resolved Winning CELL worldspace/coordinate ownership and decoded authored portal destinations.
      * @return Empty on success, or a fatal refinement/ownership error. Generated links
      * identify destination CELLs until the writer allocates every primary NAVM identity.
      * Refinement preserves existing portals into untouched cells and adds exact reciprocal

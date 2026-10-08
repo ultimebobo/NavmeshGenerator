@@ -106,8 +106,8 @@ class BatchRebuild(unittest.TestCase):
         world = record("WRLD", 0x400, sub("EDID", b"FixtureWorld\0") + world_data) + group(0x400, 1, cells)
         (self.root / "Baseline.esm").write_bytes(record("TES4", 0, header, 1) + group(int.from_bytes(b"WRLD", "little"), 0, world))
 
-    def run_cli(self, *args, output="output", code=0, terrain_only=True):
-        completed = subprocess.run([str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
+    def run_cli(self, *args, output="output", code=0, terrain_only=True, executable=None):
+        completed = subprocess.run([str(executable or EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
                                     "--output", str(self.root / output), "--batch-output", "full",
                                     "--asset-cache", str(self.root / "cache"),
                                     *(["--terrain-only"] if terrain_only else []), *args],
@@ -133,12 +133,161 @@ class BatchRebuild(unittest.TestCase):
             manifest.write(str(output / "generated-navmesh.esp") + "\n")
         self.run_cli("--list-cells", output="read-back")
 
+    def test_generation_failure_is_logged_and_other_cells_write(self):
+        # Independent exterior targets: one usable floor and one unrepresentable
+        # vertical terrain range. The failed cell's authored NAVM must survive.
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        baseline_cells = b""
+        for cell_id, coordinate, land_id, navm_id in [(0x100, 0, 0x300, 0x200), (0x101, 10, 0x301, 0x201)]:
+            cell = record("CELL", cell_id, sub("EDID", f"HeightFixture{coordinate}\0".encode())
+                          + sub("XCLC", struct.pack("<ii", coordinate, 0)))
+            children = record("LAND", land_id, land()) + record("NAVM", navm_id, navm(coordinate))
+            baseline_cells += cell + group(cell_id, 6, group(cell_id, 9, children))
+        (self.root / "Baseline.esm").write_bytes(record("TES4", 0, header, 1)
+            + group(int.from_bytes(b"WRLD", "little"), 0,
+                    record("WRLD", 0x400, sub("EDID", b"HeightFixtureWorld\0")) + group(0x400, 1, baseline_cells)))
+        extreme = sub("VHGT", struct.pack("<f", 0) + bytes([127]) * (33 * 33) + bytes(3))
+        edited = (group(0x100, 6, group(0x100, 9, record("LAND", 0x300, land(1))))
+                  + group(0x101, 6, group(0x101, 9, record("LAND", 0x301, extreme)
+                                         + record("NAVM", 0x201, navm(10)))))
+        (self.root / "Patch.esp").write_bytes(record("TES4", 0, header + sub("MAST", b"Baseline.esm\0")
+                                                    + sub("DATA", bytes(8)))
+            + group(int.from_bytes(b"WRLD", "little"), 0, group(0x400, 1, edited)))
+        for args, filename in [(('--generate-plugin',), 'generated-navmesh.esp'),
+                               (('--copy-plugin',), 'Patch.esp')]:
+            output = self.run_cli("--rebuild-plugin", "Patch.esp", *args, output=filename + "-run")
+            report = json.loads((output / "batch-report.json").read_text())
+            self.assertEqual(report["status"], "complete_with_skips")
+            self.assertEqual(report["generation_failed_cells"], 1)
+            self.assertEqual(report["completed_cells"], 2)
+            cells = {cell['form_id']:cell for cell in report['cells']}
+            self.assertEqual(cells['00000100']['status'], 'generated')
+            self.assertEqual(cells['00000101']['status'], 'skipped_generation_failed')
+            self.assertIn('vertical span limit', cells['00000101']['error'])
+            self.assertFalse((output / 'cells/00000101/candidate-navm.json').exists())
+            emitted = [item for item in read_records(output / filename) if item[0]=='NAVM']
+            self.assertTrue(any(item[1]==0x200 for item in emitted))
+            if filename=='Patch.esp':
+                self.assertEqual(next(item[3] for item in emitted if item[1]==0x201), navm(10))
+                copied_land = next(item[3] for item in read_records(output / filename)
+                                   if item[0]=='LAND' and item[1]==0x301)
+                self.assertEqual(copied_land, extreme)
+            else:
+                self.assertFalse(any(item[1]==0x201 for item in emitted))
+
+    def test_recovery_preserves_untouched_portals_with_optional_authored_navmesh(self):
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        # The failed tile rises away from its western seam, keeping the successful
+        # tile's clipped geometry halo within the supported vertical range.
+        extreme = sub("VHGT", struct.pack("<f", 0)
+                      + (bytes([0]) + bytes([127]) * 32) * 33 + bytes(3))
+        edits = b"".join(group(cell, 6, group(cell, 9, record("LAND", land_id, heights)))
+                         for cell, land_id, heights in ((0x101, 0x301, land(0.001)),
+                                                       (0x102, 0x302, extreme)))
+        patch = (record("TES4", 0, header + sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8)))
+                 + group(int.from_bytes(b"WRLD", "little"), 0, group(0x400, 1, edits)))
+        for west_authored, east_authored in ((True, True), (True, False), (False, True), (False, False)):
+            with self.subTest(west_authored=west_authored, east_authored=east_authored):
+                authored = {}
+                if west_authored:
+                    authored[0] = navm(0)
+                if east_authored:
+                    authored[2] = navm(2)
+                self.write_baseline(navmeshes=authored)
+                (self.root / "Patch.esp").write_bytes(patch)
+                for repeated in (False, True):
+                    output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin",
+                                          output=f"recovery-{west_authored}-{east_authored}-{repeated}")
+                    report = json.loads((output / "batch-report.json").read_text())
+                    self.assertEqual(report["status"], "complete_with_skips")
+                    self.assertEqual(report["generation_failed_cells"], 1)
+                    cells = {cell["form_id"]: cell for cell in report["cells"]}
+                    self.assertEqual(cells["00000101"]["status"], "generated")
+                    self.assertEqual(cells["00000102"]["status"], "skipped_generation_failed")
+                    if repeated:
+                        self.assertTrue(cells["00000101"]["candidate_reused"])
+                    candidate = json.loads((output / "cells/00000101/candidate-navm.json").read_text())
+                    self.assertTrue(candidate["topology"]["valid"], candidate["topology"])
+                    self.assertGreater(len(candidate["polygons"]), 0)
+                    expected_neighbors = {f"{0x200 + x:08X}" for x in authored}
+                    self.assertEqual({link["neighbor_navmesh_id"] for link in candidate["border_links"]},
+                                     expected_neighbors)
+                    emitted_path = output / "generated-navmesh.esp"
+                    if authored:
+                        self.assert_plugin_portals(emitted_path)
+                    emitted = {form: payload for kind, form, _, payload in read_records(emitted_path)
+                               if kind == "NAVM"}
+                    for x, payload in authored.items():
+                        self.assertEqual(navm_geometry(emitted[0x200 + x]), navm_geometry(payload))
+                    self.assertEqual(len(emitted), len(authored) + 1)
+
     def test_load_order_scope(self):
         output = self.run_cli("--rebuild-load-order")
         report = json.loads((output / "batch-report.json").read_text())
         self.assertEqual(report["selected_cells"], 2)
         self.assertEqual(report["scope"], "load_order")
         self.assertIn("metadata", report)
+
+    def test_new_navmesh_placement_uses_output_ids_instead_of_load_order_ids(self):
+        self.write_baseline(navmeshes={})
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        (self.root / "Earlier.esm").write_bytes(record("TES4", 0, header, 1))
+        (self.root / "plugins.txt").write_text("Earlier.esm\nBaseline.esm\nPatch.esp\n")
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual({cell["form_id"] for cell in report["cells"]}, {"01000100", "01000101"})
+        emitted = read_records(output / "generated-navmesh.esp")
+        self.assertEqual(sum(kind == "NAVM" for kind, _, _, _ in emitted), 2)
+        self.assert_plugin_portals(output / "generated-navmesh.esp")
+
+    def test_patch_filename_cannot_create_a_self_master(self):
+        first = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", output="first-patch")
+        (self.root / "generated-navmesh.esp").write_bytes((first / "generated-navmesh.esp").read_bytes())
+        (self.root / "plugins.txt").write_text("Baseline.esm\nPatch.esp\ngenerated-navmesh.esp\n")
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", output="second-patch")
+        emitted_path = output / "generated-navmesh-2.esp"
+        self.assertTrue(emitted_path.exists())
+        header = next(payload for kind, _, _, payload in read_records(emitted_path) if kind == "TES4")
+        masters = []
+        offset = 0
+        while offset < len(header):
+            kind, size = struct.unpack_from("<4sH", header, offset)
+            offset += 6
+            if kind == b"MAST":
+                masters.append(header[offset:offset + size].rstrip(b"\0").decode())
+            offset += size
+        self.assertIn("generated-navmesh.esp", masters)
+        self.assertNotIn(emitted_path.name, masters)
+        self.assert_plugin_portals(emitted_path)
+
+    def test_persistent_worldspace_container_is_not_a_navmesh_destination(self):
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        cells = b""
+        for cell, land_id, navm_id, flags in ((0x100, 0x300, 0x200, 0), (0x110, 0x310, 0x210, 0x400)):
+            payload = sub("XCLC", struct.pack("<ii", 0, 0))
+            children = record("LAND", land_id, land()) + record("NAVM", navm_id, navm(0))
+            cells += record("CELL", cell, payload, flags) + group(cell, 6, group(cell, 9, children))
+        world = record("WRLD", 0x400, sub("EDID", b"ContainerFixtureWorld\0")) + group(0x400, 1, cells)
+        (self.root / "Baseline.esm").write_bytes(record("TES4", 0, header, 1) +
+                                                group(int.from_bytes(b"WRLD", "little"), 0, world))
+        patch_header = header + sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
+        edits = b"".join(group(cell, 6, group(cell, 9, record("LAND", land_id, land(0.001))))
+                         for cell, land_id in ((0x100, 0x300), (0x110, 0x310)))
+        (self.root / "Patch.esp").write_bytes(record("TES4", 0, patch_header) +
+                                             group(int.from_bytes(b"WRLD", "little"), 0, group(0x400, 1, edits)))
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(report["selected_cells"], 2)
+        self.assertEqual(report["eligible_cells"], 1)
+        self.assertEqual(report["completed_cells"], 1)
+        statuses = {cell["form_id"]: cell["status"] for cell in report["cells"]}
+        self.assertEqual(statuses, {"00000100": "generated", "00000110": "skipped_persistent_cell"})
+        self.assertFalse(any(kind == "NAVM" and form == 0x210
+                             for kind, form, _, _ in read_records(output / "generated-navmesh.esp")))
+        estimate = self.run_cli("--rebuild-plugin", "Patch.esp", "--estimate-only", output="estimate-container")
+        self.assertEqual(json.loads((estimate / "batch-report.json").read_text())["sampled_cells"], 1)
 
     def test_rebuild_uses_edited_floor_without_authored_crossing(self):
         header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
@@ -1089,6 +1238,17 @@ class BatchRebuild(unittest.TestCase):
         size = lambda directory: sum(path.stat().st_size for path in directory.rglob("*") if path.is_file())
         self.assertLess(size(minimal), size(full) // 2)
         self.assertTrue(all(not list(directory.glob(".candidate-staging-*")) for directory in (full, compact, minimal)))
+
+    def test_candidate_reuse_survives_compatible_executable_change(self):
+        self.run_cli("--rebuild-plugin", "Patch.esp", output="first")
+        compatible = self.root / "compatible-build.exe"
+        # A PE overlay changes the binary hash while keeping executable behavior identical.
+        compatible.write_bytes(EXE.read_bytes() + b"compatible-build-cache-regression")
+        repeated = self.run_cli("--rebuild-plugin", "Patch.esp", output="compatible",
+                                executable=compatible)
+        report = json.loads((repeated / "batch-report.json").read_text())
+        self.assertEqual(report["candidate_cache_hits"], 2)
+        self.assertTrue(all(cell["candidate_reused"] for cell in report["cells"]))
 
     def test_candidate_reuse_invalidates_on_authored_neighbor_change(self):
         self.run_cli("--rebuild-plugin", "Patch.esp", output="first")

@@ -39,6 +39,7 @@ saved for the next session.
 - **Preview generated navigation:** enable **Generate candidate NAVM** to inspect
   a proposed navmesh before writing a plugin. NAVM is Skyrim's navmesh record.
 - **Create a patch:** enable **Write plugin** to export `generated-navmesh.esp`.
+  A numeric suffix is added when that filename is already active in the load order.
 - **Update your own mod:** select Plugin scope and enable **Copy selected plugin**
   to export a copy with regenerated navigation and the plugin's other records.
 - **Fill areas without navmeshes:** enable **Skip cells with existing navmesh**
@@ -59,6 +60,14 @@ colors expose the classifications for review; exported plugins retain the tags.
 Use **Reset** in Advanced settings to adopt current numerical defaults if your
 desktop configuration already has saved values. Smaller contour error follows
 obstacle outlines more closely and can increase the triangle count.
+If contour refinement cannot represent a retained watershed region, generation
+recovers with layer regions over the retained floor and records a warning.
+Scenes exceeding Recast's vertical raster range are rejected before generation.
+Plugin and load-order batches log cell generation failures and continue with the
+remaining cells, preserving skipped cells' authored NAVM. Check `batch-report.json`
+for `skipped_generation_failed` entries and `complete_with_skips` completion.
+Persistent worldspace containers supply placed objects but are skipped as NAVM
+destinations, including when their placeholder coordinates overlap a terrain cell.
 
 ## Review and use the results
 
@@ -93,8 +102,13 @@ candidate. Plugin and Load order batches regenerate every selected live cell,
 including cells without existing NAVM. All walkable candidates are retained until neighboring
 candidates are available. Shared seams receive matching partitions and reciprocal
 links; only untouched cells supply authored border constraints. The dedicated
-skip-existing option protects authored cells. Invalid topology stops export with
-its CELL and finding; it never substitutes authored navigation.
+skip-existing option protects authored cells. Cell-local generation and topology
+failures are logged and skipped, retaining their authored geometry while other
+cells complete. Recovery preserves links to untouched neighbors; cells without
+authored NAVM leave open borders and supported walkable floors intact.
+Global seam and writer validation failures stop export.
+Compatible executable rebuilds reuse completed candidate caches through versioned
+pipeline identities; legacy executable-hash entries require verified migration.
 
 Install a generated patch through MO2 and load it after the plugins it depends
 on. A **Copy selected plugin** export replaces the selected plugin; use it with

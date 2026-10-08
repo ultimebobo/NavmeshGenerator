@@ -8,7 +8,8 @@ namespace navmesh::app::detail
 {
     /** Fingerprint actual ordered generation inputs and authored neighboring portals.
      * Includes geometry, provenance, profile, voxel controls, partition strategy, tagging evidence,
-     * exits, bounds, and tool/schema identity.
+     * exits, bounds, and cache/pipeline compatibility identity. Compatible executable
+     * rebuilds share keys; successful-generation changes require a pipeline revision.
      * Neighbor changes invalidate each dependent target independently; no plugin filename shortcut is used.
      * @param scene Ordered Skyrim-world geometry and complete provenance.
      * @param profile Valid movement constraints in Skyrim world units.
@@ -21,7 +22,7 @@ namespace navmesh::app::detail
      * changes invalidate tagging. Batch seam geometry depends on generated neighbors after cache reuse.
      * @param waterHeight Effective water-surface Z in Skyrim units, or no supported plane.
      * @param tagTriangles Whether generated triangle classification is enabled.
-     * @return Stable dependency hash, or empty if tool identity or hashing cannot be obtained.
+     * @return Stable dependency hash, or empty if input serialization exceeds the cache limit.
      */
     [[nodiscard]] std::string CandidateFingerprint(
         const core::Scene &scene, const core::NavigationProfile &profile, std::optional<core::AABB> bounds,

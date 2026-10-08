@@ -76,6 +76,19 @@ namespace
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return a == b;
     }
+    /// Choose a patch filename outside the active load order so retained generated
+    /// inputs can remain masters without creating an output self dependency.
+    std::string PatchFilename(const std::vector<std::filesystem::path> &inputPlugins)
+    {
+        std::string name = "generated-navmesh.esp";
+        std::size_t suffix = 1;
+        while (std::any_of(inputPlugins.begin(), inputPlugins.end(),
+                           [&](const auto &input) { return SameName(input.filename().string(), name); }))
+        {
+            name = "generated-navmesh-" + std::to_string(++suffix) + ".esp";
+        }
+        return name;
+    }
     struct SourceInfo
     {
         std::string name;
@@ -1109,7 +1122,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             return fail("Cannot read a required source master.");
         }
     }
-    const auto path = outputDirectory / (copy ? copiedName : "generated-navmesh.esp");
+    const auto path = outputDirectory / (copy ? copiedName : PatchFilename(inputPlugins));
     if (std::filesystem::exists(path))
     {
         return fail("Plugin output already exists; choose an empty output folder.");
@@ -1392,22 +1405,6 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             }
             ResolvedRecord placement;
             placement.groupHeaders = navm->groupHeaders;
-            if (newNavmesh)
-            {
-                // The winning CELL's ancestors provide exterior block/sub-block or
-                // interior placement. New NAVMs live in its temporary child group.
-                for (const auto groupType : {6U, 9U})
-                {
-                    Bytes header{'G', 'R', 'U', 'P'};
-                    U32(header, 24);
-                    U32(header, navm->winning.formId);
-                    U32(header, groupType);
-                    header.resize(24);
-                    std::array<std::uint8_t, 24> groupHeader{};
-                    std::copy(header.begin(), header.end(), groupHeader.begin());
-                    placement.groupHeaders.push_back(groupHeader);
-                }
-            }
             for (auto &header : placement.groupHeaders)
             {
                 Bytes group(header.begin(), header.end());
@@ -1429,6 +1426,29 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                         outputCellGroup = *label;
                     }
                     std::copy(group.begin(), group.end(), header.begin());
+                }
+            }
+            if (newNavmesh)
+            {
+                // Retained ancestor labels above are source-local. Synthetic child
+                // labels originate from a resolved CELL identity and must be encoded
+                // directly in output-master space after those ancestors are rebased.
+                const auto outputCell = RebaseResolvedFormId(resolved, masters, cell.id);
+                if (!outputCell || (outputCellGroup && *outputCellGroup != *outputCell))
+                {
+                    return fail("Cannot resolve new NAVM CELL group placement.");
+                }
+                outputCellGroup = *outputCell;
+                for (const auto groupType : {6U, 9U})
+                {
+                    Bytes header{'G', 'R', 'U', 'P'};
+                    U32(header, 24);
+                    U32(header, *outputCell);
+                    U32(header, groupType);
+                    header.resize(24);
+                    std::array<std::uint8_t, 24> groupHeader{};
+                    std::copy(header.begin(), header.end(), groupHeader.begin());
+                    placement.groupHeaders.push_back(groupHeader);
                 }
             }
             Add(root, placement, std::move(bytes));

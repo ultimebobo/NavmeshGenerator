@@ -1,6 +1,7 @@
 #include "core/navmesh/generator.h"
 
 #include "core/navmesh/detail_triangulation.h"
+#include "core/navmesh/recast_contours.h"
 
 #include <Recast.h>
 #include <RecastAlloc.h>
@@ -300,6 +301,25 @@ namespace
         return result;
     }
 
+    /// Prepare the same clipped, radius-padded input for generation and cached-scene validation.
+    RecastInput PrepareGenerationInput(const Scene &scene, const NavigationProfile &profile,
+                                       std::optional<AABB> cellBounds, const RecastSettings &settings,
+                                       CandidateStatistics &statistics)
+    {
+        if (cellBounds)
+        {
+            const auto width = cellBounds->max.x - cellBounds->min.x;
+            const auto depth = cellBounds->max.y - cellBounds->min.y;
+            const auto voxelSize = std::max({settings.cellSize, width / 2048.0F, depth / 2048.0F});
+            const auto halo = (std::ceil(profile.agentRadius / voxelSize) + 3.0F) * voxelSize;
+            cellBounds->min.x -= halo;
+            cellBounds->min.y -= halo;
+            cellBounds->max.x += halo;
+            cellBounds->max.y += halo;
+        }
+        return PrepareRecastInput(scene, cellBounds, statistics);
+    }
+
     /// Convert physical profile constraints to voxel counts and pad Recast Y-up raster bounds.
     [[nodiscard]] rcConfig MakeRecastConfig(const AABB &bounds, const NavigationProfile &profile,
                                             const RecastSettings &settings)
@@ -339,58 +359,18 @@ namespace
         config.bmax[0] = bounds.max.x + cs * 2;
         config.bmax[1] = bounds.max.z + profile.agentHeight + ch * 2;
         config.bmax[2] = bounds.max.y + cs * 2;
+        // Raster spans clamp heights to their packed integer range. Reject an
+        // unrepresentable scene before distant solids can become artificial floors.
+        const auto heightVoxels = std::ceil((static_cast<double>(bounds.max.z) - config.bmin[1]) / config.ch);
+        if (heightVoxels > RC_SPAN_MAX_HEIGHT)
+        {
+            throw std::runtime_error(std::format(
+                "Recast collision height range exceeds the vertical span limit: {} Skyrim units at voxel height {} "
+                "(maximum representable range {}).",
+                bounds.max.z - config.bmin[1], config.ch, RC_SPAN_MAX_HEIGHT * config.ch));
+        }
         rcCalcGridSize(config.bmin, config.bmax, config.cs, &config.width, &config.height);
         return config;
-    }
-
-    /// Require a contour for every surviving voxel region; coarse simplification can collapse small islands.
-    [[nodiscard]] bool HasAllRegionContours(const rcCompactHeightfield &compact, const rcContourSet &contours)
-    {
-        std::vector<bool> represented(static_cast<std::size_t>(compact.maxRegions) + 1);
-        for (int contour{}; contour < contours.nconts; ++contour)
-        {
-            const auto &boundary = contours.conts[contour];
-            if (boundary.nverts >= 3 && boundary.reg < represented.size())
-            {
-                represented[boundary.reg] = true;
-            }
-        }
-        for (int span{}; span < compact.spanCount; ++span)
-        {
-            const auto region = compact.spans[span].reg;
-            if (compact.areas[span] != RC_NULL_AREA && region && !(region & RC_BORDER_REG) && !represented[region])
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /// Refine contour tolerance until every retained voxel region survives, never exceeding the requested error.
-    [[nodiscard]] RecastOwner<rcContourSet, rcFreeContourSet> BuildRegionContours(rcContext &context,
-                                                                                  rcCompactHeightfield &compact,
-                                                                                  const rcConfig &config)
-    {
-        auto error = config.maxSimplificationError;
-        while (true)
-        {
-            RecastOwner<rcContourSet, rcFreeContourSet> refined(rcAllocContourSet(), rcFreeContourSet);
-            if (!refined || !rcBuildContours(&context, compact, error, config.maxEdgeLen, *refined))
-            {
-                throw std::runtime_error("Recast contour construction failed");
-            }
-            // Every neighboring region must use the same simplification pass:
-            // their shared interfaces form one partition of the compact spans.
-            if (HasAllRegionContours(compact, *refined))
-            {
-                return refined;
-            }
-            if (error == 0)
-            {
-                throw std::runtime_error("Recast contour construction lost a retained walkable region");
-            }
-            error = error > 1 ? error * 0.5F : 0;
-        }
     }
 
     /** Recast detail patches may share a boundary, but cannot reuse a directed
@@ -682,7 +662,8 @@ namespace
         {
             throw std::runtime_error("Recast region partition failed");
         }
-        const auto contours = BuildRegionContours(context, *compact, config);
+        const auto contours =
+            detail::BuildRetainedRegionContours(context, *compact, config, partitioningAlgorithm, warnings);
         RecastOwner<rcPolyMesh, rcFreePolyMesh> polyMesh(rcAllocPolyMesh(), rcFreePolyMesh);
         if (!polyMesh || !rcBuildPolyMesh(&context, *contours, config.maxVertsPerPoly, *polyMesh))
         {
@@ -1060,6 +1041,23 @@ namespace navmesh::core
         }
     }
 
+    void ValidateRecastSceneHeightRange(const Scene &scene, const NavigationProfile &profile,
+                                        std::optional<AABB> cellBounds, const RecastSettings &settings)
+    {
+        if (!scene.HasCompleteTriangleProvenance())
+        {
+            throw std::invalid_argument("Recast requires complete triangle provenance");
+        }
+        ValidateRecastSettings(profile, settings);
+        CandidateStatistics statistics;
+        const auto input = PrepareGenerationInput(scene, profile, cellBounds, settings, statistics);
+        if (!input.sources.empty() &&
+            std::find(input.obstacles.begin(), input.obstacles.end(), false) != input.obstacles.end())
+        {
+            (void)MakeRecastConfig(input.bounds, profile, settings);
+        }
+    }
+
     CandidateNavMesh RecastCandidateGenerator::Generate(const Scene &scene, const NavigationProfile &profile,
                                                         std::optional<AABB> cellBounds,
                                                         std::vector<CandidateExit> exits,
@@ -1100,19 +1098,7 @@ namespace navmesh::core
         // Prepare input evidence before allocating Recast resources.
         // Rasterize a supported halo so radius erosion does not treat the CELL seam
         // as a cliff. Only the final mesh is clipped to the selected CELL.
-        auto rasterBounds = cellBounds;
-        if (rasterBounds)
-        {
-            const auto width = rasterBounds->max.x - rasterBounds->min.x;
-            const auto depth = rasterBounds->max.y - rasterBounds->min.y;
-            const auto voxelSize = std::max({settings.cellSize, width / 2048.0F, depth / 2048.0F});
-            const auto halo = (std::ceil(profile.agentRadius / voxelSize) + 3.0F) * voxelSize;
-            rasterBounds->min.x -= halo;
-            rasterBounds->min.y -= halo;
-            rasterBounds->max.x += halo;
-            rasterBounds->max.y += halo;
-        }
-        const auto input = PrepareRecastInput(scene, rasterBounds, result.statistics);
+        const auto input = PrepareGenerationInput(scene, profile, cellBounds, settings, result.statistics);
         if (input.sources.empty())
         {
             result.warnings.push_back("No supported terrain or collision triangles were available for Recast.");
@@ -1126,8 +1112,8 @@ namespace navmesh::core
             return result;
         }
         const auto fallbackSource = input.sources[static_cast<std::size_t>(floorSource - input.obstacles.begin())];
-        const auto sourceIndex = BuildSourceIndex(scene, input.sources);
         const auto config = MakeRecastConfig(input.bounds, profile, settings);
+        const auto sourceIndex = BuildSourceIndex(scene, input.sources);
         if (config.cs > settings.cellSize)
         {
             result.warnings.push_back(std::format(

@@ -28,6 +28,13 @@
 
 namespace
 {
+    /// Persistent worldspace CELLs store placed objects; their placeholder grid coordinates
+    /// do not identify an independently navigable terrain tile.
+    bool IsPersistentExteriorCell(const navmesh::core::Cell &cell, const navmesh::skyrim::ResolvedRecord *record)
+    {
+        return !cell.isInterior && record && record->worldspaceFormId && record->raw && (record->raw->flags & 0x400U);
+    }
+
     [[nodiscard]] std::string JsonEscape(const std::string &value)
     {
         std::string result;
@@ -282,7 +289,7 @@ namespace navmesh::app::detail
         {
             const auto *record = resolved.FindWinning(cell->id);
             return (!options.skipExistingNavmesh || !existingNavmeshCells.contains(cell->id)) &&
-                   !(record && record->raw && (record->raw->flags & 0x20U));
+                   !(record && record->raw && (record->raw->flags & 0x20U)) && !IsPersistentExteriorCell(*cell, record);
         };
         const auto fullEligibleCells =
             static_cast<std::size_t>(std::count_if(targets.begin(), targets.end(), eligible));
@@ -502,19 +509,23 @@ namespace navmesh::app::detail
             out << std::format("  \"scope\":\"{}\",\"plugin\":\"{}\",\"status\":\"{}\",\"error\":\"{}\",\n",
                                options.rebuildScope == app::RebuildScope::Plugin ? "plugin" : "load_order",
                                JsonEscape(options.affectedPlugin), state, JsonEscape(error));
-            out << std::format("  \"selected_cells\":{},\"geometry_cells_extracted\":{},\"geometry_cache_hits\":{},\n  "
-                               "\"original_polygons\":{},\"generated_polygons\":{},\n  \"cells\":[\n",
-                               selectedCells, extractedCells, cacheHits, originalPolygons, generatedPolygons);
+            out << std::format(
+                "  \"selected_cells\":{},\"geometry_cells_extracted\":{},\"geometry_cache_hits\":{},\n  "
+                "\"original_polygons\":{},\"generated_polygons\":{},\"generation_failed_cells\":{},\n  \"cells\":[\n",
+                selectedCells, extractedCells, cacheHits, originalPolygons, generatedPolygons,
+                std::count_if(results.begin(), results.end(),
+                              [](const auto &result) { return result.status == "skipped_generation_failed"; }));
             for (std::size_t i{}; i < results.size(); ++i)
             {
-                out << std::format("    "
-                                   "{{\"form_id\":\"{:08X}\",\"status\":\"{}\",\"polygons\":{},\"supplier_cells\":{},"
-                                   "\"references\":{},\"unique_models\":{},\"extraction_seconds\":{},\"generation_"
-                                   "seconds\":{},\"candidate_reused\":{},\"diagnostics\":[",
-                                   results[i].cell->id, JsonEscape(results[i].status),
-                                   results[i].candidate.mesh.polygons.size(), results[i].supplierCells,
-                                   results[i].references, results[i].models, results[i].extractionSeconds,
-                                   results[i].generationSeconds, results[i].reused ? "true" : "false");
+                out << std::format(
+                    "    "
+                    "{{\"form_id\":\"{:08X}\",\"status\":\"{}\",\"error\":\"{}\",\"polygons\":{},\"supplier_cells\":{},"
+                    "\"references\":{},\"unique_models\":{},\"extraction_seconds\":{},\"generation_"
+                    "seconds\":{},\"candidate_reused\":{},\"diagnostics\":[",
+                    results[i].cell->id, JsonEscape(results[i].status), JsonEscape(results[i].error),
+                    results[i].candidate.mesh.polygons.size(), results[i].supplierCells, results[i].references,
+                    results[i].models, results[i].extractionSeconds, results[i].generationSeconds,
+                    results[i].reused ? "true" : "false");
                 for (std::size_t finding{}; finding < results[i].diagnostics.size(); ++finding)
                 {
                     out << (finding ? "," : "") << "\"" << JsonEscape(results[i].diagnostics[finding]) << "\"";
@@ -632,9 +643,13 @@ namespace navmesh::app::detail
             pendingBytes -= job.estimatedBytes;
             auto &result = results[job.target];
             result = job.result.get();
-            if (!result.error.empty())
+            if (!result.error.empty() && result.status != "skipped_generation_failed")
             {
                 return fail(result.error);
+            }
+            if (result.status == "skipped_generation_failed")
+            {
+                std::cerr << result.error << "; skipped generation; authored NAVM retained\n";
             }
             if (!result.diagnostics.empty())
             {
@@ -691,6 +706,11 @@ namespace navmesh::app::detail
                 record && record->raw && (record->raw->flags & 0x20U))
             {
                 result.status = "skipped_deleted_cell";
+                continue;
+            }
+            if (IsPersistentExteriorCell(cell, resolved.FindWinning(cell.id)))
+            {
+                result.status = "skipped_persistent_cell";
                 continue;
             }
             const auto update = [&](std::string_view status)
@@ -800,7 +820,8 @@ namespace navmesh::app::detail
                 for (const auto *neighbor : index.Neighbors(cell, 1))
                 {
                     if (!neighbor->exteriorCoordinates || neighbor->id == cell.id ||
-                        rebuildingCells.contains(neighbor->id))
+                        rebuildingCells.contains(neighbor->id) ||
+                        IsPersistentExteriorCell(*neighbor, resolved.FindWinning(neighbor->id)))
                     {
                         continue;
                     }
@@ -923,14 +944,16 @@ namespace navmesh::app::detail
                       << written.string() << '\n';
         }
         skyrim::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL);
-        if (!summary("complete"))
+        const auto generationFailures = std::count_if(results.begin(), results.end(), [](const auto &result)
+                                                      { return result.status == "skipped_generation_failed"; });
+        if (!summary(generationFailures ? "complete_with_skips" : "complete"))
         {
             return fail("Cannot finalize batch-report.json");
         }
         const auto status = std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; "
-                                        "generated polygons: {}",
+                                        "generated polygons: {}; generation failures: {}",
                                         targets.size(), generatedByCell.size(), targets.size() - generatedByCell.size(),
-                                        originalPolygons, generatedPolygons) +
+                                        originalPolygons, generatedPolygons, generationFailures) +
                             (missingModelWarning.empty() ? "" : "; " + missingModelWarning);
         std::cout << status << '\n';
         if (progress)

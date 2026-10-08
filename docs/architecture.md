@@ -56,6 +56,18 @@ The goal is to make a real downstream generation pass possible without hard-codi
 
 ## 5. Candidate generation
 
+`core/navmesh/recast_contours` owns complete contour-set refinement and verifies
+coverage of retained voxel regions. When watershed contours remain incomplete,
+it repartitions the retained floor with layer partitioning and reports recovery.
+It preserves initial island filtering and rebuilds all shared interfaces together.
+The Recast adapter rejects supported geometry outside its packed vertical span
+range before rasterization, and applies the same check to cached batch scenes.
+Batch workers distinguish cell-local generation failures from infrastructure
+failures. Skipped generation targets retain authored NAVM and rejoin border
+matching as untouched neighbors. Recovery includes existing authored portal
+destinations from the resolved snapshot in its neighbor validation. Missing authored
+NAVM adds no constraint and leaves open borders intact; global refinement and writer checks remain fatal.
+
 `core::CandidateGenerator` is the replaceable boundary between extracted scene
 geometry and a neutral candidate navmesh. The shared CLI/Windows run path uses
 `RecastCandidateGenerator` from the Recast Navigation submodule. It accepts only
@@ -136,6 +148,9 @@ reader. Generated geometry occupies the largest original NAVM; the others get
 empty geometry. Parent CELL and worldspace records remain in the load order.
 New NAVMs serialize a non-null PathingCell type tag so Creation Kit consumes the
 location fields before the geometry arrays; read-back checks each new identity's tag.
+Retained source group ancestors are rebased from the winning plugin's master
+indices. New child groups use the resolved CELL identity converted directly to
+output-master indices, independently of its load-order index.
 The writer always emits an ESP and sets its ESL flag when the override-only
 records and master table fit the light format. Matched door triangles are
 serialized in the generated NAVM. Matched exterior borders add external portals
@@ -254,7 +269,9 @@ reciprocal links addressed by opaque CELL keys. It retains unanchored floors and
 never substitutes authored meshes from rebuilding targets. Invalid topology or
 refinement prevents export. Authored border subdivision commits only when all
 consumed portals survive. `app/candidate_cache` stores candidates before generated
-seam refinement with bounded reads and a versioned dependency fingerprint. Compact
+seam refinement with bounded reads and a versioned dependency fingerprint. The
+cache/pipeline revision defines compatibility across executable rebuilds; it must
+change when successful generation semantics become incompatible. Compact
 source joins remain in memory for subsequent splitting; inspection evidence is
 loaded from pinned gzip audits. `app/candidate_artifacts` streams public JSON into
 gzip. `app/batch_runner` owns selection, sampling, admission, ordered checkpoints,
@@ -267,7 +284,9 @@ See [performance settings and limits](performance-improvements.md).
 The resolver retains compact placement evidence for every record origin and
 builds a FormID lookup index. `CellImpactIndex` indexes exterior cells by
 worldspace and coordinates, buckets persistent references by physical position,
-and follows changed base records to their placed uses. Plugin/load-order scopes
+and follows changed base records to their placed uses. Persistent worldspace
+containers stay outside batch generation destinations and authored border
+constraints even when they carry placeholder coordinates. Plugin/load-order scopes
 provide geometry suppliers and conservative record-impact discovery for diagnostics.
 `skyrim/extraction/collision_impact` selects batch regeneration targets by comparing
 historical supported collision triangles, terrain heights and effective water.

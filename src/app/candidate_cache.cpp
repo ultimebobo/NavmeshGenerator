@@ -12,17 +12,14 @@
 #include <utility>
 #include <type_traits>
 #include <zlib.h>
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#endif
 
 namespace navmesh::app::detail
 {
     namespace
     {
-        // Private cache layout is deliberately versioned, distinct from supported inspection/export formats.
+        // This identity versions both storage and successful generation semantics.
+        // Change its pipeline revision when successful output becomes incompatible;
+        // executable rebuilds alone must not discard completed generation work.
         constexpr std::string_view Schema = "navmesh-candidate-cache-6/recast-pipeline-17";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
@@ -243,25 +240,6 @@ namespace navmesh::app::detail
             return gzopen(path.c_str(), mode);
 #endif
         }
-        std::string ToolIdentity()
-        {
-            core::ContentHash hash;
-#ifdef _WIN32
-            std::array<wchar_t, 32768> buffer{};
-            const auto length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-            const auto path = std::filesystem::path(std::wstring(buffer.data(), length));
-#else
-            const auto path = std::filesystem::read_symlink("/proc/self/exe");
-#endif
-            std::ifstream stream(path, std::ios::binary);
-            std::array<std::uint8_t, 65536> bytes{};
-            while (stream)
-            {
-                stream.read(reinterpret_cast<char *>(bytes.data()), bytes.size());
-                hash.Add(std::span(bytes.data(), static_cast<std::size_t>(stream.gcount())));
-            }
-            return stream.eof() ? hash.Hex() : std::string{};
-        }
         // Writes and hashes never mutate fields. Reading alone changes the supplied object.
         template <class T> T &Writable(const T &value)
         {
@@ -277,12 +255,6 @@ namespace navmesh::app::detail
     {
         core::ContentHash hash;
         hash.Add(Schema);
-        static const auto toolIdentity = ToolIdentity();
-        if (toolIdentity.empty())
-        {
-            return {};
-        }
-        hash.Add(toolIdentity);
         hash.Add(partitioning);
         Archive archive(hash);
         archive(Writable(scene.mesh.vertices), Writable(scene.mesh.triangles), Writable(scene.geometrySources),

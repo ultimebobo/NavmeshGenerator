@@ -2377,11 +2377,14 @@ namespace
 
 void TestPerformanceCaches();
 void TestGeneratedBatchTopology();
+void TestBatchGenerationFailurePolicy();
+void TestBatchRecoveryBorderNeighbors();
 void TestCollisionImpactSelection();
 void TestTriangleTagging();
 
 void TestDesktopOptionsAndRecastSettings();
 void TestNavigationObstacleFixture();
+void TestRecastContourRecovery();
 void ExportNavigationObstacleFixture(const std::filesystem::path &directory);
 
 int main(int argc, char **argv)
@@ -2407,7 +2410,14 @@ int main(int argc, char **argv)
         TestReciprocalCellTransitions(2.5F, true);
         return 0;
     }
+    TestRecastContourRecovery();
+    if (argc > 1 && std::string_view(argv[1]) == "--contours-only")
+    {
+        return 0;
+    }
     TestGeneratedBatchTopology();
+    TestBatchGenerationFailurePolicy();
+    TestBatchRecoveryBorderNeighbors();
     TestCollisionImpactSelection();
     TestTriangleTagging();
     if (argc > 2 && std::string_view(argv[1]) == "--export-navigation-fixture")

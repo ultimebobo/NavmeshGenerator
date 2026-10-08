@@ -32,8 +32,21 @@ error, optional maximum edge length and merge-area multiplier. Contour error is
 an upper bound: if simplification collapses a surviving voxel region, construction
 retries the complete contour set at finer tolerance until every retained region
 has a contour. Neighboring regions share one simplification pass, preserving their
-common interfaces without overlapping coarse and fine boundaries. Recast
-merges convex contour polygons before height sampling and triangulates the
+common interfaces without overlapping coarse and fine boundaries.
+Recast can collapse a watershed region enclosed by one other region even at zero
+contour error. If refinement cannot represent every retained region, the adapter
+repartitions the already-retained spans with layer partitioning and rebuilds the
+complete contour set. Recovery preserves the initial walkability and island
+filtering decisions, and reports its use in candidate warnings; the recorded
+partitioning setting remains the requested strategy. Unrepresentable recovered
+regions still fail generation.
+Supported geometry must fit Recast's packed vertical span range at the requested
+vertical voxel size. The adapter rejects unrepresentable extents before
+rasterization can clamp distant solids into artificial floors. Cached batch
+candidates undergo the same scene-height validation without rerunning Recast.
+Missing retained-region contours remain failures. Batch generation logs cell-local
+failures and continues without replacing those cells' authored geometry.
+Recast merges convex contour polygons before height sampling and triangulates the
 result for the neutral mesh. Disconnected
 regions below the profile's minimum area are removed. Watershed and monotone
 partitioning can merge small adjacent regions; layer partitioning does not use
@@ -102,8 +115,9 @@ their centroids need not be inside it. Source contributors, region membership, d
 are remapped transactionally. Missing required crossings fail final validation
 and prevent that candidate's plugin export, including when no candidate floor survives.
 Single-cell generation fails export on invalid topology. Plugin and load-order
-batches use complete generated candidates for rebuilding neighbors and stop export
-on invalid topology.
+batches skip cell-local generation/topology failures and preserve those cells as
+authored neighbors. Complete successful candidates are reconciled together;
+invalid global seam topology stops export.
 Compatible collinear generated subdivisions are coalesced
 by retriangulating their incident fans while preserving the interior rim and
 horizontal footprint. Mixed regions or flags, existing portal triangles, invalid

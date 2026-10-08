@@ -87,7 +87,10 @@ instead of duplicating every winner in compact or plugin-only runs.
 
 Candidate fingerprints include actual ordered support geometry and provenance,
 generation settings, exits, bounds, untouched authored neighboring geometry/portals, and
-the running executable identity. Disk-cache retention and report checkpoints run
+the cache format and generation-pipeline compatibility revision. Compatible
+executable rebuilds reuse completed candidates. Changes to successful generation
+semantics require a pipeline revision; legacy executable-hash keys are not
+automatically migrated. Disk-cache retention and report checkpoints run
 periodically during generation, with final retention on every exit; completing a
 CELL does not traverse the entire growing disk cache. Incompatible or corrupt cache entries trigger
 generation. Both source-triangle and geometry-source evidence tables are

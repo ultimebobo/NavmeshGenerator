@@ -2,6 +2,8 @@
 #undef NDEBUG
 #endif
 
+#include "app/batch_generation.h"
+#include "app/candidate_cache.h"
 #include "core/navmesh/batch_stitching.h"
 #include "core/navmesh/detail_triangulation.h"
 #include "core/navmesh/generator.h"
@@ -9,8 +11,11 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <chrono>
+#include <fstream>
 #include <limits>
 #include <set>
+#include <Recast.h>
 
 namespace
 {
@@ -301,6 +306,7 @@ void TestGeneratedBatchTopology()
     corner.polygonSourceTriangles = {0};
     corner.polygonContributingTriangles = {{0}};
     corner.regions = {{.id = 0, .polygons = {0}}};
+    RefreshCandidateTopology(corner);
     corner.borderLinks = {{0, 2, 201, 0, 0}};
     const NavMesh west{.id = 201,
                        .vertices = {{0, 0, 0}, {0, 300, 0}, {-100, 100, 0}},
@@ -311,4 +317,157 @@ void TestGeneratedBatchTopology()
     (void)StitchCandidateBorders(corner, {{0, 0, -100}, {300, 300, 100}}, {west, south});
     assert(corner.topology.valid);
     assert(corner.borderLinks.size() == 1 && corner.borderLinks[0].neighborNavmeshId == west.id);
+}
+
+void TestBatchGenerationFailurePolicy()
+{
+    using namespace navmesh;
+    const auto directory =
+        std::filesystem::temp_directory_path() /
+        ("navmesh-generation-failure-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(directory);
+    app::Options options;
+    options.batchOutput = "plugin_only";
+    options.tagTriangles = false;
+    core::Cell badCell{.id = 10};
+    core::Scene floor;
+    floor.geometrySources.push_back({.sourceType = core::GeometrySourceType::Collision, .confidence = 1});
+    floor.mesh.vertices = {{0, 0, 0}, {512, 0, 0}, {512, 512, 0}, {0, 512, 0}};
+    floor.mesh.triangles = {{{0, 1, 2}}, {{0, 2, 3}}};
+    floor.triangleProvenance = {{0, 0, {}}, {0, 1, {}}};
+    // Height validation must reject incomplete cached-scene evidence before indexing it.
+    auto incomplete = floor;
+    incomplete.triangleProvenance.clear();
+    bool rejectedIncomplete{};
+    try
+    {
+        core::ValidateRecastSceneHeightRange(incomplete, options.navigationProfile, {}, options.recastSettings);
+    }
+    catch (const std::invalid_argument &)
+    {
+        rejectedIncomplete = true;
+    }
+    assert(rejectedIncomplete);
+    auto oversized = floor;
+    const auto excessiveHeight = (RC_SPAN_MAX_HEIGHT + 1) * options.recastSettings.cellHeight;
+    oversized.mesh.vertices.insert(
+        oversized.mesh.vertices.end(),
+        {{0, 0, excessiveHeight}, {512, 0, excessiveHeight}, {512, 512, excessiveHeight}, {0, 512, excessiveHeight}});
+    oversized.mesh.triangles.insert(oversized.mesh.triangles.end(), {{{4, 5, 6}}, {{4, 6, 7}}});
+    oversized.triangleProvenance.insert(oversized.triangleProvenance.end(), {{0, 2, {}}, {0, 3, {}}});
+    const auto input = [&](const core::Scene &scene, const core::Cell &cell)
+    {
+        app::detail::BatchGenerationInput value;
+        value.result.cell = &cell;
+        value.geometry.scene = scene;
+        value.cacheDirectory = directory / "cache";
+        value.stagingDirectory = directory / "staging";
+        return value;
+    };
+    auto skipped = app::detail::BuildBatchCandidate(input(oversized, badCell), options);
+    assert(skipped.status == "skipped_generation_failed" && skipped.error.contains("vertical span limit"));
+    assert(skipped.candidate.mesh.polygons.empty() && skipped.auditPath.empty() && skipped.metadata.empty());
+    core::Cell goodCell{.id = 11};
+    const auto successful = app::detail::BuildBatchCandidate(input(floor, goodCell), options);
+    assert(successful.status == "generated" && successful.error.empty() && !successful.candidate.mesh.polygons.empty());
+    const auto reused = app::detail::BuildBatchCandidate(input(floor, goodCell), options);
+    assert(reused.status == "generated" && reused.reused);
+
+    // Cached candidates must not hide a scene whose solids exceed raster height storage.
+    const auto key = app::detail::CandidateFingerprint(oversized, options.navigationProfile, {}, {}, {}, "watershed",
+                                                       options.recastSettings, {}, {}, options.tagTriangles);
+    assert(
+        app::detail::StoreCandidate(directory / "cache" / "candidates" / (key + ".gz"), successful.candidate, floor));
+    skipped = app::detail::BuildBatchCandidate(input(oversized, badCell), options);
+    assert(skipped.status == "skipped_generation_failed" && skipped.error.contains("vertical span limit"));
+    assert(!skipped.reused && skipped.candidate.mesh.polygons.empty());
+
+    // Output failures are global infrastructure errors, not cell skips.
+    const auto blockedPath = directory / "blocked";
+    std::ofstream(blockedPath) << "regular file";
+    auto blocked = input(floor, goodCell);
+    blocked.cacheDirectory = blockedPath;
+    const auto failed = app::detail::BuildBatchCandidate(std::move(blocked), options);
+    assert(failed.status == "failed" && !failed.error.empty());
+
+    // A failed neighbor's authored geometry remains an available reciprocal border target.
+    goodCell.exteriorCoordinates = std::array<std::int32_t, 2>{0, 0};
+    badCell.exteriorCoordinates = std::array<std::int32_t, 2>{1, 0};
+    auto authored = Floor(4096, 0, 0).mesh;
+    authored.id = 201;
+    badCell.navMeshes = {authored};
+    std::vector<app::detail::BatchCellResult> results{
+        {.cell = &goodCell, .candidate = Floor(0, 0, 0), .status = "generated"},
+        {.cell = &badCell, .status = "skipped_generation_failed", .error = "synthetic generation failure"}};
+    skyrim::ResolvedLoadOrder resolved;
+    resolved.records = {{.type = "CELL", .formId = goodCell.id, .worldspaceFormId = 1},
+                        {.type = "CELL", .formId = badCell.id, .worldspaceFormId = 1}};
+    assert(app::detail::ReconcileBatchBorders(results, resolved).empty());
+    const auto &links = results.front().candidate.borderLinks;
+    assert(!links.empty() && std::all_of(links.begin(), links.end(), [](const auto &link)
+                                         { return link.neighborNavmeshId == 201 && !link.generatedNeighborCell; }));
+    assert(results.back().candidate.mesh.polygons.empty() && badCell.navMeshes.front().polygons.size() == 2);
+    std::filesystem::remove_all(directory);
+}
+
+void TestBatchRecoveryBorderNeighbors()
+{
+    using namespace navmesh;
+    for (const bool westAuthored : {true, false})
+    {
+        for (const bool eastAuthored : {true, false})
+        {
+            core::Cell goodCell{.id = 11, .exteriorCoordinates = std::array<std::int32_t, 2>{0, 0}};
+            core::Cell badCell{.id = 10, .exteriorCoordinates = std::array<std::int32_t, 2>{1, 0}};
+            core::Cell westCell{.id = 12, .exteriorCoordinates = std::array<std::int32_t, 2>{-1, 0}};
+            auto westMesh = Floor(-4096, 0, 0).mesh;
+            westMesh.id = 202;
+            if (westAuthored)
+            {
+                westCell.navMeshes.push_back(westMesh);
+            }
+            auto eastMesh = Floor(4096, 0, 0).mesh;
+            eastMesh.id = 201;
+            if (eastAuthored)
+            {
+                badCell.navMeshes.push_back(eastMesh);
+            }
+            auto candidate = Floor(0, 0, 0);
+            const core::AABB bounds{.min = {0, 0, -100}, .max = {4096, 4096, 100}};
+            if (westAuthored)
+            {
+                (void)core::StitchCandidateBorders(candidate, bounds, westCell.navMeshes, {}, true);
+                assert(candidate.topology.valid && candidate.borderLinks.size() == 1);
+            }
+            const auto polygons = candidate.mesh.polygons.size();
+            skyrim::ResolvedLoadOrder resolved;
+            resolved.cells = {goodCell, badCell, westCell};
+            resolved.records = {{.type = "CELL", .formId = goodCell.id, .worldspaceFormId = 1},
+                                {.type = "CELL", .formId = badCell.id, .worldspaceFormId = 1},
+                                {.type = "CELL", .formId = westCell.id, .worldspaceFormId = 1}};
+            std::vector<app::detail::BatchCellResult> results{
+                {.cell = &goodCell, .candidate = std::move(candidate), .status = "generated"},
+                {.cell = &badCell, .status = "skipped_generation_failed", .error = "synthetic generation failure"}};
+            assert(app::detail::ReconcileBatchBorders(results, resolved).empty());
+            const auto &recovered = results.front().candidate;
+            assert(recovered.topology.valid && recovered.mesh.polygons.size() == polygons);
+            std::set<std::uint32_t> targets;
+            for (const auto &link : recovered.borderLinks)
+            {
+                assert(!link.generatedNeighborCell);
+                targets.insert(link.neighborNavmeshId);
+            }
+            std::set<std::uint32_t> expected;
+            if (westAuthored)
+            {
+                expected.insert(westMesh.id);
+            }
+            if (eastAuthored)
+            {
+                expected.insert(eastMesh.id);
+            }
+            assert(targets == expected && recovered.borderLinks.size() == expected.size());
+            assert(goodCell.navMeshes.empty() && results.back().candidate.mesh.polygons.empty());
+        }
+    }
 }

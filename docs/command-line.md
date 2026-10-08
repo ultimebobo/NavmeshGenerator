@@ -84,8 +84,15 @@ Every selected live batch cell generates navigation, including cells with no NAV
 Workers retain every surviving walkable component until all targets are ready;
 shared generated seams then receive matching partitions and reciprocal links.
 Only untouched neighbors provide authored border constraints. Valid empty targets
-clear replaced navigation where no supported floor survives. Topology and linking
-failures stop export with a CELL-specific diagnostic.
+clear replaced navigation where no supported floor survives. Cell-local generation
+and topology failures are logged as `skipped_generation_failed` and leave
+authored geometry intact while other targets continue. `complete_with_skips` and
+`generation_failed_cells` identify such completion in `batch-report.json`.
+Global linking and writer failures still stop export.
+The patch filename gains a numeric suffix if its default name is already active
+in the load order, so an earlier generated plugin can remain a valid dependency.
+Selected persistent worldspace containers are logged as `skipped_persistent_cell`;
+their placed objects remain geometry suppliers for ordinary terrain cells.
 See [batch rebuilding](batch-rebuilding.md) for the baseline contract,
 outputs, caching and writer limitations.
 
@@ -162,7 +169,7 @@ The CLI writes files into the target output directory:
 - `scene.glb` — one combined scene ordered with the current cell’s original NAVM in its own group, neighboring and candidate NAVMs, green connection bars along linked triangle edges and exit markers, then terrain, collision, and render geometry. Door-linked triangles use a dedicated orange material; classification centroid markers are omitted. `scene.glb.provenance.json` maps each named object to its source record/model and preserves run metadata; `scene.glb.metadata.json` is the standard metadata sidecar.
 - `scene-report.html` — standalone classification report grouped by support-source and geometry-coverage status. Its support-triangle indices join `analysis.json` to `geometry.json`; this report does not change classifications.
 - `analysis.json` — stable, report-only discrepancy evidence: seven-point polygon coverage, selected source type and confidence, explicit `ambiguous`/`out_of_coverage` states, topology findings, and manual-review repair candidates. It never contains replacement NAVM geometry or a plugin write instruction.
-- With `--generate-candidate`, Recast creates a neutral candidate NAVM from supported terrain and collision. Convex patch merging and movement-bounded height detail simplify stairs and terrain; landscape rock collision blocks movement without supplying walkable tops. Contour simplification automatically refines if a retained voxel region would collapse. `candidate-navm.json` contains profile parameters, approximate source-triangle provenance, obstacle tags, regions, matched door triangles, reciprocal border-link matches, adjacency, statistics, and topology validation. `candidate-navm.obj` is a mesh view, and `scene.glb` gains a blue-green Candidate NAVM layer beside the existing scene layers. These files do not contain plugin records.
+- With `--generate-candidate`, Recast creates a neutral candidate NAVM from supported terrain and collision. Convex patch merging and movement-bounded height detail simplify stairs and terrain; landscape rock collision blocks movement without supplying walkable tops. Contour simplification automatically refines if a retained voxel region would collapse. If watershed contours remain incomplete at zero error, generation recovers with layer regions over the already-retained spans and records a candidate warning; the partitioning setting remains the requested strategy. `candidate-navm.json` contains profile parameters, approximate source-triangle provenance, obstacle tags, regions, matched door triangles, reciprocal border-link matches, adjacency, statistics, and topology validation. `candidate-navm.obj` is a mesh view, and `scene.glb` gains a blue-green Candidate NAVM layer beside the existing scene layers. These files do not contain plugin records.
 - `input-report.json` — MO2 profile snapshot, emitted first for every MO2 run. Compact/plugin-only batches reference a shared loose-asset catalog; full inspection includes every winner.
 - `load-order.json` — full inspection of resolved inputs: every winning record with its plugin and ordered origin chain. Compact/plugin-only batches omit this table.
 - With `--generate-plugin`, `generated-navmesh.esp` overrides existing NAVM records or allocates new records for uncovered cells. The ESP receives the ESL flag when its master table and new identities fit a light plugin. Single-cell writing also generates candidate exports; batch writing follows `--batch-output`. The writer refuses to replace an existing output file and verifies every NAVM by reading it back.
@@ -229,4 +236,3 @@ The repository contains only synthetic, redistributable fixture builders; it doe
 - Discrepancy detection is deliberately conservative. Collision support has priority over terrain, terrain has priority over render fallback, and only sufficiently consistent samples can classify a polygon. Ambiguous or out-of-coverage polygons are displayed as limitations rather than defects. Repair candidates remain report-only/manual-review evidence.
 
 The verified NVNM layout and writer acceptance rules are documented in [docs/navm-format-study.md](navm-format-study.md).
-

@@ -17,6 +17,8 @@ namespace navmesh::skyrim
     };
     /** Serialize generated navigation into a verified patch or source copy, allocating NAVMs for uncovered cells.
      * @param outputDirectory Writable output folder; existing plugins are refused.
+     * Patch names receive a numeric suffix when their default filename is already
+     * an active input, preventing a self dependency on an earlier generated plugin.
      * @param inputPlugins Active physical plugin paths in load order.
      * @param resolved Winning records from the same input snapshot.
      * @param replacements Unique cells with valid candidates, including empty meshes

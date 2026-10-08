@@ -6,6 +6,18 @@ this reference.
 
 ## Code map
 
+- `navmesh::core::detail::BuildRetainedRegionContours`: Recast contour coverage
+  and shared-interface refinement, with layer recovery over already-retained
+  spans when watershed contours remain incomplete. Recovery adds a warning.
+
+- `navmesh::core::ValidateRecastSceneHeightRange`: validates supported,
+  generation-clipped scene heights against Recast's packed raster span range;
+  used before cached batch candidates can be accepted.
+- `navmesh::app::detail::BuildBatchCandidate`: cell-local generation failures
+  return `skipped_generation_failed` without a candidate or audit. Allocation exceptions and
+  evidence failures return fatal `failed` results. Border reconciliation treats
+  skipped generation targets as untouched authored neighbors.
+
 - `navmesh::core::TagCandidateTriangles`: optional centroid-based water detection
   and closest-floor authored water/preferred-path transfer after border reshaping.
   It preserves geometry and connection bits; `WaterFlag` and `PreferredPathFlag`
@@ -43,7 +55,8 @@ this reference.
   preserves hull segments and every sample position without authored geometry.
 - `navmesh::core::RefreshCandidateTopology`: rebuilds internal adjacency, region areas
   and boundary loops after geometry refinement without changing polygon identities.
-- `navmesh::app::detail` candidate-cache/artifact helpers: input fingerprints,
+- `navmesh::app::detail` candidate-cache/artifact helpers: input fingerprints
+  with explicit pipeline compatibility across executable rebuilds,
   bounded private gzip reads/writes and streaming public gzip JSON.
 - `navmesh::core::CandidateGenerator`: interchangeable scene-to-candidate
   interface. `RecastCandidateGenerator` is the application implementation and

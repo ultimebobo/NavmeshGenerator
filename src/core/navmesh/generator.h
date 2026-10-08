@@ -20,6 +20,17 @@ namespace navmesh::core
      */
     void ValidateRecastSettings(const NavigationProfile &profile, const RecastSettings &settings);
 
+    /** Reject supported geometry whose floor heights would saturate Recast raster spans.
+     * @param scene Authoritative Skyrim Z-up geometry with complete triangle provenance.
+     * @param profile Valid movement constraints in Skyrim world units.
+     * @param cellBounds Optional exterior bounds; validation uses the generation halo and clipping.
+     * @param settings Requested voxel controls; vertical cell height stays fixed.
+     * @throws std::runtime_error When retained collision or terrain exceeds the vertical raster range.
+     * Also validates settings and input geometry. Does not rasterize or change the scene.
+     */
+    void ValidateRecastSceneHeightRange(const Scene &scene, const NavigationProfile &profile,
+                                        std::optional<AABB> cellBounds, const RecastSettings &settings);
+
     /// Region partition strategy used by Recast after walkable-area erosion.
     enum class RegionPartitioningAlgorithm
     {
@@ -65,8 +76,9 @@ namespace navmesh::core
          * and obstacle-only solids, and sample floor heights into detail triangles.
          * Convex patches share height detail with approximation error bounded by the larger
          * of climb and vertical voxel size. Contour error is refined if a retained voxel
-         * region would collapse. Obstacle-only sources cannot supply walkable floors. Retain only
-         * walkable components with a shared-edge path to a matched door or exterior
+         * region would collapse. Unrepresentable watershed contours trigger layer recovery
+         * over the already-retained spans, reported in warnings. Obstacle-only sources cannot supply
+         * walkable floors. Retain only components with a shared-edge path to a matched door or exterior
          * boundary edge as provisional anchors under Anchored retention. AllWalkable
          * keeps unanchored floors for whole-batch stitching.
          * @param scene Geometry with complete triangle provenance in Skyrim world coordinates.
@@ -78,7 +90,7 @@ namespace navmesh::core
          * @param retention AllWalkable keeps unanchored floors for subsequent batch linking.
          * @return Candidate mesh and evidence, with warnings for adaptive horizontal
          * resolution and downward climb quantization; empty when no floor survives retention;
-         * throws on invalid input or a Recast build failure.
+         * throws on invalid input, unrepresentable vertical scene extent, or a Recast build failure.
          */
         [[nodiscard]] CandidateNavMesh Generate(
             const Scene &scene, const NavigationProfile &profile, std::optional<AABB> cellBounds,
