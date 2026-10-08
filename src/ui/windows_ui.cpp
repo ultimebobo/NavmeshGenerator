@@ -366,6 +366,24 @@ namespace
         return options;
     }
 
+    /// Format a nonnegative steady-clock interval with nonzero hours/minutes and always include fractional seconds.
+    std::string FormatElapsedTime(std::chrono::steady_clock::duration elapsed)
+    {
+        // Round before splitting units so fractional seconds carry into minutes and hours at their boundaries.
+        const std::chrono::hh_mm_ss time(std::chrono::round<std::chrono::duration<long long, std::centi>>(elapsed));
+        std::string result;
+        if (time.hours().count() != 0)
+        {
+            result += std::format("{}h ", time.hours().count());
+        }
+        if (time.minutes().count() != 0)
+        {
+            result += std::format("{}m ", time.minutes().count());
+        }
+        result += std::format("{}.{:02}s", time.seconds().count(), time.subseconds().count());
+        return result;
+    }
+
     void Execute(Workspace &workspace, const Options &options, bool listOnly)
     {
         const auto started = std::chrono::steady_clock::now();
@@ -389,20 +407,19 @@ namespace
             code = 1;
             summary = error.what();
         }
-        const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        const auto elapsed = FormatElapsedTime(std::chrono::steady_clock::now() - started);
         std::lock_guard lock(workspace.status.mutex);
         workspace.status.code = code;
         if (code == 0)
         {
             workspace.status.percent = 100;
             workspace.status.text =
-                std::format("Completed in {:.2f}s. {}", elapsed,
+                std::format("Completed in {}. {}", elapsed,
                             listOnly ? "Cell catalog saved to " + PathText(options.output / "cells.json") : summary);
         }
         else
         {
-            workspace.status.text =
-                std::format("{} in {:.2f}s. {}", code == 3 ? "Cancelled" : "Stopped", elapsed, summary);
+            workspace.status.text = std::format("{} in {}. {}", code == 3 ? "Cancelled" : "Stopped", elapsed, summary);
         }
         workspace.status.complete = true;
     }
