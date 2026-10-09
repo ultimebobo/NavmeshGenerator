@@ -31,6 +31,9 @@ namespace navmesh::reproducibility
         const core::Cell *selectedCell{};
         SourceCoverage coverage;
         std::vector<std::string> warnings;
+        /// Borrowed complete Cell selection for combined scenes; cells must outlive serialization.
+        /// selectedCell remains the single-target identity for ordinary exports.
+        std::vector<const core::Cell *> selectedCells;
     };
     [[nodiscard]] std::string EscapeJson(const std::string &value);
     [[nodiscard]] std::string ToJson(const ExportMetadata &metadata, std::string_view indent = "  ");

@@ -55,7 +55,7 @@ namespace navmesh::reproducibility
             warnings += std::format("\"{}\"{}", EscapeJson(metadata.warnings[i]),
                                     i + 1 == metadata.warnings.size() ? "" : ", ");
         }
-        return std::format(
+        auto json = std::format(
             "{{\n{}\"schema\": \"navmesh-generator/export-metadata\",\n{}\"schema_version\": \"{}\",\n{}\"tool\": "
             "{{\"name\": \"navmesh-generator\", \"version\": \"{}\"}},\n{}\"input_plugins\": "
             "[\"{}\"],\n{}\"selected_cell\": {},\n{}\"coordinates\": {{\"convention\": \"skyrim-world-z-up-v1\", "
@@ -71,6 +71,21 @@ namespace navmesh::reproducibility
             metadata.coverage.terrainLandRecords, metadata.coverage.terrainLandDecoded,
             metadata.coverage.terrainLandMissing, metadata.coverage.terrainSupported ? "true" : "false",
             metadata.coverage.collisionGeometrySupported ? "true" : "false", indent, warnings, indent);
+        if (!metadata.selectedCells.empty())
+        {
+            std::string cells;
+            for (const auto *selected : metadata.selectedCells)
+            {
+                if (!cells.empty())
+                {
+                    cells += ", ";
+                }
+                cells += std::format("{{\"form_id\":\"{:08X}\",\"editor_id\":\"{}\",\"is_interior\":{}}}", selected->id,
+                                     EscapeJson(selected->editorId), selected->isInterior ? "true" : "false");
+            }
+            json.insert(json.rfind('}'), std::format(",\n{}\"selected_cells\": [{}]\n", indent, cells));
+        }
+        return json;
     }
     bool WriteSidecar(const std::filesystem::path &path, const ExportMetadata &metadata)
     {

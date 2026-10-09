@@ -27,7 +27,7 @@ namespace navmesh::ui
         draft.workers = defaults.workers;
     }
 
-    app::Options PrepareDesktopOptions(const app::Options &draft, CellIdentification identification, bool listOnly)
+    app::Options PrepareDesktopOptions(const app::Options &draft, bool listOnly)
     {
         auto result = draft;
         if (result.mo2.empty() || result.profile.empty() || result.output.empty())
@@ -69,20 +69,36 @@ namespace navmesh::ui
             result.workingMemoryMiB = app::Options{}.workingMemoryMiB;
         }
         const bool cellScope = result.rebuildScope == app::RebuildScope::Cell;
-        if (listOnly || !cellScope || identification != CellIdentification::FormId)
+        if (listOnly || !cellScope || !result.cellSelection.empty())
         {
             result.cellFormId.reset();
-        }
-        if (listOnly || !cellScope || identification != CellIdentification::EditorId)
-        {
             result.editorId.clear();
+        }
+        if (listOnly || !cellScope)
+        {
+            result.cellSelection.clear();
+            result.makeScene = false;
         }
         if (listOnly || result.rebuildScope != app::RebuildScope::Plugin)
         {
             result.affectedPlugin.clear();
+        }
+        if (listOnly || result.rebuildScope == app::RebuildScope::LoadOrder)
+        {
             result.copyPlugin = false;
         }
-        if (cellScope)
+        if (listOnly || !cellScope || !result.copyPlugin)
+        {
+            result.copySourcePlugin.clear();
+        }
+        result.generatePlugin = result.generatePlugin || result.copyPlugin;
+        result.generateCandidate = result.generateCandidate || result.generatePlugin || !cellScope;
+        if (result.makeScene)
+        {
+            result.estimateOnly = false;
+        }
+        const bool batchGeneration = app::UsesBatchGeneration(result);
+        if (cellScope && !batchGeneration)
         {
             result.estimateOnly = false;
             result.batchOutput = "auto";
@@ -95,8 +111,6 @@ namespace navmesh::ui
             result.maxSlope = app::Options{}.maxSlope;
         }
         result.worldspace.clear();
-        result.generatePlugin = result.generatePlugin || result.copyPlugin;
-        result.generateCandidate = result.generateCandidate || result.generatePlugin || !cellScope;
         if (!result.generateCandidate)
         {
             result.skipExistingNavmesh = false;
@@ -125,13 +139,22 @@ namespace navmesh::ui
             throw std::invalid_argument("Check Advanced settings: analysis requires a positive search radius, "
                                         "nonnegative support distance and a slope below 90 degrees.");
         }
-        if (!listOnly && cellScope && !result.cellFormId && result.editorId.empty())
+        if (!listOnly && cellScope && result.cellSelection.empty() && !result.cellFormId && result.editorId.empty())
         {
             throw std::invalid_argument("Enter a cell Form ID or editor ID from cells.json.");
         }
         if (!listOnly && result.rebuildScope == app::RebuildScope::Plugin && result.affectedPlugin.empty())
         {
             throw std::invalid_argument("Enter the active plugin filename for Plugin scope.");
+        }
+        if (!listOnly && cellScope && !result.cellSelection.empty() &&
+            app::ParseCellSelection(result.cellSelection).empty())
+        {
+            throw std::invalid_argument("Enter at least one cell Form ID or editor ID from cells.json.");
+        }
+        if (!listOnly && cellScope && result.copyPlugin && result.copySourcePlugin.empty())
+        {
+            throw std::invalid_argument("Enter the active plugin filename to copy for the selected cells.");
         }
         // A report-only batch cannot consume a plugin-only artifact policy.
         if (!result.generatePlugin && !result.estimateOnly && result.batchOutput == "plugin_only")

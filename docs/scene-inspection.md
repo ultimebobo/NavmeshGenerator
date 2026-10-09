@@ -1,8 +1,27 @@
 # Combined scene inspection
 
-Milestone 6 writes one binary glTF scene, `scene.glb`, for each analysis run.
+Cell analysis writes a binary glTF scene, `scene.glb`, for each inspected cell.
 It uses named objects and stable materials so it can be inspected without
-manually joining the OBJ exports:
+manually joining the OBJ exports.
+
+For multiple cells, enable **Make scene** in Cell mode or pass `--make-scene` with
+`--cells`. This adds one combined `scene.glb` at the output root, retaining the
+normal per-cell inspection reports. It also works during candidate generation
+and plugin-copy exports, independently of batch artifact policy. Generated NAVMs
+are named by their owning CELL and exported after seam reconciliation; generated
+connections resolve directly to other selected candidates even when no authored
+NAVM exists. Shared source triangles, authored NAVMs and door markers appear once.
+The scene metadata records the complete selected-cell list. Authored links into
+successfully regenerated cells are replaced by candidate bars; skipped cells
+retain their authored geometry and links.
+
+Scene creation requires a complete Cell run and cannot combine listing or cost
+estimation. **Make scene** is saved with desktop choices and disables estimation
+for that run. The combined scene retains native Skyrim coordinates. Different
+interiors and worldspaces can overlap; select cells from the same space for a
+continuous scene. Layer and detail options apply normally. Requested scene
+geometry is retained for the run and adds memory beyond the generation admission
+budget. Scene or sidecar write failures prevent subsequent plugin publishing.
 
 The scene tree and flattened mesh list put navigation first: `Original NAVM
 (current cell)`, `Neighboring NAVM`, `Candidate NAVM` when generated, `NAVM

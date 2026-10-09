@@ -35,7 +35,6 @@ namespace
     using Microsoft::WRL::ComPtr;
     using navmesh::app::Options;
     using navmesh::app::RebuildScope;
-    using navmesh::ui::CellIdentification;
 
     std::wstring Wide(std::string_view text)
     {
@@ -158,6 +157,7 @@ namespace
     auto BooleanFields(Options &options)
     {
         return std::array{std::pair{"candidate", &options.generateCandidate},
+                          std::pair{"make_scene", &options.makeScene},
                           std::pair{"generate_plugin", &options.generatePlugin},
                           std::pair{"skip_existing_navmesh", &options.skipExistingNavmesh},
                           std::pair{"triangle_tagging", &options.tagTriangles},
@@ -187,7 +187,6 @@ namespace
         Options draft;
         std::map<std::string, std::string> text;
         std::filesystem::path config;
-        int identification{};
         bool busy{};
         RunStatus status;
         std::thread worker;
@@ -213,11 +212,18 @@ namespace
                           {"asset_cache", PathText(options.assetCache)},
                           {"form", options.cellFormId ? std::format("{:08X}", *options.cellFormId) : ""},
                           {"editor", options.editorId},
-                          {"affected_plugin", options.affectedPlugin}};
+                          {"affected_plugin", options.affectedPlugin},
+                          {"copy_plugin_source", options.copySourcePlugin}};
         for (auto &[key, value] : workspace.text)
         {
             value = ReadConfig(workspace.config, key.c_str(), value);
         }
+        const auto savedIdentification = ReadConfig(workspace.config, "target", options.editorId.empty() ? "0" : "1");
+        const auto cellFallback = options.cellSelection.empty()
+                                      ? workspace.text.at(savedIdentification == "1" ? "editor" : "form")
+                                      : options.cellSelection;
+        workspace.text["selected_cells"] = ReadConfig(workspace.config, "selected_cells", cellFallback);
+        std::replace(workspace.text.at("selected_cells").begin(), workspace.text.at("selected_cells").end(), ';', '\n');
         for (const auto &field : BooleanFields(options))
         {
             const auto value = ReadConfig(workspace.config, field.first, *field.second ? "1" : "0");
@@ -281,11 +287,14 @@ namespace
         const char *scopes[] = {"cell", "plugin", "load_order"};
         const auto scope =
             ReadConfig(workspace.config, "rebuild_scope", scopes[static_cast<int>(options.rebuildScope)]);
+        if (scope == "selected_cells")
+        {
+            workspace.text.at("copy_plugin_source") =
+                ReadConfig(workspace.config, "copy_plugin_source", workspace.text.at("affected_plugin"));
+        }
         options.rebuildScope = scope == "plugin"       ? RebuildScope::Plugin
                                : scope == "load_order" ? RebuildScope::LoadOrder
                                                        : RebuildScope::Cell;
-        workspace.identification =
-            ReadConfig(workspace.config, "target", options.editorId.empty() ? "0" : "1") == "1" ? 1 : 0;
         const char *algorithms[] = {"watershed", "monotone", "layers"};
         const auto algorithm = ReadConfig(workspace.config, "partitioning_algorithm",
                                           algorithms[static_cast<int>(options.partitioningAlgorithm)]);
@@ -304,7 +313,24 @@ namespace
     {
         for (const auto &[key, value] : workspace.text)
         {
-            WriteConfig(workspace.config, key.c_str(), value);
+            if (key == "selected_cells")
+            {
+                // INI values occupy one line; delimiter encoding preserves the cell list across sessions.
+                std::string stored;
+                for (const auto &identifier : navmesh::app::ParseCellSelection(value))
+                {
+                    if (!stored.empty())
+                    {
+                        stored += ';';
+                    }
+                    stored += identifier;
+                }
+                WriteConfig(workspace.config, key.c_str(), stored);
+            }
+            else
+            {
+                WriteConfig(workspace.config, key.c_str(), value);
+            }
         }
         for (const auto &field : BooleanFields(workspace.draft))
         {
@@ -327,7 +353,6 @@ namespace
         WriteConfig(workspace.config, "rebuild_scope", scopes[static_cast<int>(workspace.draft.rebuildScope)]);
         WriteConfig(workspace.config, "partitioning_algorithm",
                     algorithms[static_cast<int>(workspace.draft.partitioningAlgorithm)]);
-        WriteConfig(workspace.config, "target", std::to_string(workspace.identification));
         WriteConfig(workspace.config, "batch_output", workspace.draft.batchOutput);
         WriteConfig(workspace.config, "neighboring_cell_radius", std::to_string(workspace.draft.neighboringCellRadius));
     }
@@ -348,21 +373,11 @@ namespace
         options.output = Wide(value("output"));
         options.assetCache = Wide(value("asset_cache"));
         options.affectedPlugin = value("affected_plugin");
-        options.editorId = value("editor");
+        options.cellSelection = value("selected_cells");
+        options.copySourcePlugin = value("copy_plugin_source");
         options.cellFormId.reset();
-        if (!listOnly && options.rebuildScope == RebuildScope::Cell && workspace.identification == 0)
-        {
-            const auto text = value("form");
-            std::size_t end{};
-            const auto form = std::stoull(text, &end, 16);
-            if (text.empty() || text.front() == '-' || end != text.size() || form == 0 || form > UINT32_MAX)
-            {
-                throw std::invalid_argument("Cell Form ID must be a nonzero hexadecimal identifier from cells.json.");
-            }
-            options.cellFormId = static_cast<std::uint32_t>(form);
-        }
-        options = navmesh::ui::PrepareDesktopOptions(options, static_cast<CellIdentification>(workspace.identification),
-                                                     listOnly);
+        options.editorId.clear();
+        options = navmesh::ui::PrepareDesktopOptions(options, listOnly);
         return options;
     }
 
@@ -501,6 +516,44 @@ namespace
         ImGui::PopID();
     }
 
+    /// Retain only the plugin filename; the shared runner verifies membership in the active profile.
+    void BrowsePlugin(HWND window, std::string &value)
+    {
+        ComPtr<IFileOpenDialog> dialog;
+        if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
+        {
+            return;
+        }
+        const COMDLG_FILTERSPEC filters[] = {{L"Skyrim plugins", L"*.esp;*.esm;*.esl"}};
+        dialog->SetFileTypes(1, filters);
+        dialog->SetOptions(FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_NOCHANGEDIR);
+        if (FAILED(dialog->Show(window)))
+        {
+            return;
+        }
+        ComPtr<IShellItem> file;
+        PWSTR path{};
+        if (SUCCEEDED(dialog->GetResult(&file)) && SUCCEEDED(file->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+        {
+            value = PathText(std::filesystem::path(path).filename());
+            CoTaskMemFree(path);
+        }
+    }
+
+    void PluginField(Workspace &workspace, HWND window, const char *key, const char *label)
+    {
+        ImGui::PushID(key);
+        ImGui::TextUnformatted(label);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 92 * ImGui::GetStyle().FontScaleDpi);
+        ImGui::InputTextWithHint("##value", "Active ESP, ESM or ESL filename", &workspace.text.at(key));
+        ImGui::SameLine();
+        if (ImGui::Button("Browse", ImVec2(-1, 0)))
+        {
+            BrowsePlugin(window, workspace.text.at(key));
+        }
+        ImGui::PopID();
+    }
+
     /// Auto-sized cards flow with contextual rows, so hidden controls leave no fixed-position gaps.
     void BeginCard(const char *id, const char *title, const char *description = nullptr)
     {
@@ -622,7 +675,7 @@ namespace
         {
             options.rebuildScope = static_cast<RebuildScope>(scope);
         }
-        if (options.rebuildScope != RebuildScope::Cell)
+        if (options.rebuildScope == RebuildScope::Plugin || options.rebuildScope == RebuildScope::LoadOrder)
         {
             Help("Generate navigation for cells affected by terrain, water or collision, including new worldspaces "
                  "and cells without navmesh. Water-only changes require supported terrain or model collision. "
@@ -630,21 +683,26 @@ namespace
         }
         if (options.rebuildScope == RebuildScope::Cell)
         {
-            ImGui::TextUnformatted("Cell identification");
-            ImGui::SetNextItemWidth(-1);
-            ImGui::Combo("##identification", &workspace.identification, "Form ID\0Editor ID\0");
-            if (workspace.identification == 0)
+            ImGui::TextUnformatted("Cells");
+            ImGui::TextWrapped(
+                "Paste Form IDs or editor IDs from cells.json, one per line. Commas and semicolons also work.");
+            ImGui::InputTextMultiline("##selected_cells", &workspace.text.at("selected_cells"),
+                                      ImVec2(-1, 130 * ImGui::GetStyle().FontScaleDpi));
+            const auto identifiers = navmesh::app::ParseCellSelection(workspace.text.at("selected_cells"));
+            ImGui::TextDisabled("%zu cell identifiers", identifiers.size());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear list"))
             {
-                TextField(workspace, window, "form", "Cell Form ID", "Hexadecimal CELL identifier from cells.json");
+                workspace.text.at("selected_cells").clear();
             }
-            else
-            {
-                TextField(workspace, window, "editor", "Cell editor ID", "Exact CELL editor ID from cells.json");
-            }
+            ImGui::TextWrapped(
+                "Only listed cells are processed. Duplicate identifiers are combined; unknown or ambiguous "
+                "identifiers stop the run. Use List cells to file to find identifiers.");
+            options.cellSelection = workspace.text.at("selected_cells");
         }
         else if (options.rebuildScope == RebuildScope::Plugin)
         {
-            TextField(workspace, window, "affected_plugin", "Affected plugin", "Active ESP, ESM or ESL filename");
+            PluginField(workspace, window, "affected_plugin", "Affected plugin");
         }
         else
         {
@@ -658,13 +716,18 @@ namespace
     {
         auto &options = workspace.draft;
         const bool cellScope = options.rebuildScope == RebuildScope::Cell;
-        const bool pluginScope = options.rebuildScope == RebuildScope::Plugin;
+        const bool copyAllowed = cellScope || options.rebuildScope == RebuildScope::Plugin;
+        const bool batchGeneration = navmesh::app::UsesBatchGeneration(options);
         BeginCard("output", "OUTPUT", "Reports and exports are saved under this folder.");
         TextField(workspace, window, "output", "Output folder", "Folder for this run's results", true);
         if (cellScope)
         {
-            bool candidate = options.generateCandidate || options.generatePlugin;
-            ImGui::BeginDisabled(options.generatePlugin);
+            ImGui::Checkbox("Make scene", &options.makeScene);
+            Help("Write scene.glb for all selected cells, with terrain, models and NAVMs. Generated NAVMs are "
+                 "included when enabled. Cells keep their native coordinates; separate interiors or worldspaces "
+                 "can overlap.");
+            bool candidate = options.generateCandidate || options.generatePlugin || options.copyPlugin;
+            ImGui::BeginDisabled(options.generatePlugin || options.copyPlugin);
             if (ImGui::Checkbox("Generate candidate NAVM", &candidate))
             {
                 options.generateCandidate = candidate;
@@ -672,31 +735,37 @@ namespace
             ImGui::EndDisabled();
             Help("Generate navigation using supported terrain and collision with the advanced Recast settings.");
         }
-        bool writing = options.generatePlugin || (pluginScope && options.copyPlugin);
-        ImGui::BeginDisabled(pluginScope && options.copyPlugin);
+        bool writing = options.generatePlugin || (copyAllowed && options.copyPlugin);
+        ImGui::BeginDisabled(copyAllowed && options.copyPlugin);
         if (ImGui::Checkbox("Write plugin", &writing))
         {
             options.generatePlugin = writing;
         }
         ImGui::EndDisabled();
         Help("Write a verified NAVM patch; light format is selected automatically when eligible.");
-        if (pluginScope)
+        if (copyAllowed)
         {
             ImGui::Checkbox("Copy selected plugin", &options.copyPlugin);
             Help("Enables plugin writing. Preserve other records and the filename; install this copy in place of the "
                  "source.");
+            if (cellScope && options.copyPlugin)
+            {
+                PluginField(workspace, window, "copy_plugin_source", "Plugin to copy");
+            }
         }
-        if (!cellScope || options.generateCandidate || options.generatePlugin)
+        if (!cellScope || options.generateCandidate || options.generatePlugin || options.copyPlugin)
         {
             ImGui::Checkbox("Skip cells with existing navmesh", &options.skipExistingNavmesh);
             Help("Generate only for uncovered cells. Any winning NAVM record protects its cell.");
         }
-        if (!cellScope)
+        if (batchGeneration)
         {
+            ImGui::BeginDisabled(cellScope && options.makeScene);
             ImGui::Checkbox("Estimate batch cost", &options.estimateOnly);
+            ImGui::EndDisabled();
             Help("Sample eligible targets, cache the work and write a cost report before a full rebuild.");
             const bool minimalAllowed =
-                options.generatePlugin || (pluginScope && options.copyPlugin) || options.estimateOnly;
+                options.generatePlugin || (copyAllowed && options.copyPlugin) || options.estimateOnly;
             const char *policies[] = {"auto", "full", "compact", "plugin_only"};
             const char *labels[] = {"Automatic", "Full inspection (JSON / OBJ)", "Compressed inspection (gzip JSON)",
                                     "Plugin and reports only"};
@@ -825,8 +894,8 @@ namespace
         DrawOutput(workspace, window);
         const auto &options = workspace.draft;
         const bool cellScope = options.rebuildScope == RebuildScope::Cell;
-        const bool generation = !cellScope || options.generateCandidate || options.generatePlugin;
-        DrawAdvanced(workspace, window, cellScope, generation);
+        const bool generation = !cellScope || options.generateCandidate || options.generatePlugin || options.copyPlugin;
+        DrawAdvanced(workspace, window, cellScope && !navmesh::app::UsesBatchGeneration(options), generation);
         ImGui::EndDisabled();
         ImGui::EndChild();
         DrawActions(workspace);

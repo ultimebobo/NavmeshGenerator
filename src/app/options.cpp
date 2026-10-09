@@ -5,6 +5,32 @@
 
 namespace navmesh::app
 {
+    std::vector<std::string> ParseCellSelection(std::string_view selection)
+    {
+        std::vector<std::string> identifiers;
+        std::size_t position{};
+        while ((position = selection.find_first_not_of(" \t\r\n,;", position)) != std::string_view::npos)
+        {
+            const auto end = selection.find_first_of(" \t\r\n,;", position);
+            identifiers.emplace_back(selection.substr(position, end - position));
+            if (end == std::string_view::npos)
+            {
+                break;
+            }
+            position = end;
+        }
+        return identifiers;
+    }
+
+    bool UsesBatchGeneration(const Options &options)
+    {
+        return options.rebuildScope != RebuildScope::Cell || options.copyPlugin ||
+               (options.makeScene && options.skipExistingNavmesh &&
+                (options.generateCandidate || options.generatePlugin)) ||
+               ((options.generateCandidate || options.generatePlugin) &&
+                ParseCellSelection(options.cellSelection).size() > 1);
+    }
+
     Options ParseCommandLine(int argc, char **argv)
     {
         Options options;
@@ -69,6 +95,14 @@ namespace navmesh::app
             {
                 options.cell = argv[++index];
             }
+            else if (argument == "--cells" && index + 1 < argc)
+            {
+                if (options.rebuildScope != RebuildScope::Cell)
+                {
+                    throw std::invalid_argument("Choose one rebuild scope");
+                }
+                options.cellSelection += std::string(argv[++index]) + "\n";
+            }
             else if (argument == "--cell-formid" && index + 1 < argc)
             {
                 options.cellFormId = static_cast<std::uint32_t>(std::stoul(argv[++index], nullptr, 16));
@@ -104,6 +138,10 @@ namespace navmesh::app
             else if (argument == "--export-scene" && index + 1 < argc)
             {
                 options.exportScene = argv[++index];
+            }
+            else if (argument == "--make-scene")
+            {
+                options.makeScene = true;
             }
             else if (argument == "--geometry-layers" && index + 1 < argc)
             {
@@ -195,6 +233,10 @@ namespace navmesh::app
                 options.generatePlugin = true;
                 options.generateCandidate = true;
             }
+            else if (argument == "--copy-plugin-source" && index + 1 < argc)
+            {
+                options.copySourcePlugin = argv[++index];
+            }
             else if (argument == "--surface-search-radius" && index + 1 < argc)
             {
                 options.surfaceSearchRadius = std::stof(argv[++index]);
@@ -233,7 +275,7 @@ namespace navmesh::app
             }
             else if (argument == "--rebuild-plugin" && index + 1 < argc)
             {
-                if (options.rebuildScope != RebuildScope::Cell)
+                if (options.rebuildScope != RebuildScope::Cell || !options.cellSelection.empty())
                 {
                     throw std::invalid_argument("Choose one rebuild scope");
                 }
@@ -243,7 +285,7 @@ namespace navmesh::app
             }
             else if (argument == "--rebuild-load-order")
             {
-                if (options.rebuildScope != RebuildScope::Cell)
+                if (options.rebuildScope != RebuildScope::Cell || !options.cellSelection.empty())
                 {
                     throw std::invalid_argument("Choose one rebuild scope");
                 }
@@ -258,6 +300,14 @@ namespace navmesh::app
             else if (argument == "--rebuild-plugin")
             {
                 throw std::invalid_argument("--rebuild-plugin requires an active plugin filename");
+            }
+            else if (argument == "--cells")
+            {
+                throw std::invalid_argument("--cells requires a list of CELL Form IDs or editor IDs");
+            }
+            else if (argument == "--copy-plugin-source")
+            {
+                throw std::invalid_argument("--copy-plugin-source requires an active plugin filename");
             }
         }
         return options;

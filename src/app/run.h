@@ -11,9 +11,11 @@ namespace navmesh::app
     using ProgressCallback = std::function<void(int percent, std::string_view status)>;
     using CancellationCallback = std::function<bool()>;
     /// Execute a cell analysis or an affected-cell plugin/load-order rebuild.
-    /// Batch scopes resolve inputs once and export a report and per-cell candidates;
+    /// Cell mode accepts one or multiple explicit cells; inputs resolve once per run.
+    /// Coordinated generation exports a report and per-cell candidates;
     /// generatePlugin writes one verified plugin after all candidates are ready;
-    /// copyPlugin preserves the affected plugin's other records in Plugin scope.
+    /// copyPlugin preserves its named source's other records in Cell and Plugin scopes.
+    /// makeScene writes one Cell-selection GLB with finalized candidates independently of the batch output policy.
     /// @return Process-style status code; nonzero indicates failure or cancellation.
     int Run(const Options &options, const ProgressCallback &progress = {}, const CancellationCallback &cancelled = {});
 } // namespace navmesh::app

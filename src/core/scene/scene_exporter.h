@@ -39,6 +39,14 @@ namespace navmesh::core
         std::optional<std::size_t> supportTriangle;
         std::optional<std::uint32_t> navmeshFormId;
     };
+    /// A finalized generated mesh owned by a selected CELL, in Skyrim world coordinates.
+    struct SceneCandidate
+    {
+        /// Resolved CELL identity used to resolve generated-neighbor links before plugin allocation.
+        std::uint32_t cellFormId{};
+        /// Borrowed complete candidate; must remain valid through scene export.
+        const CandidateNavMesh *candidate{};
+    };
     /// GLB selection and borrowed candidate evidence; pointers must remain valid through export.
     struct SceneExportOptions
     {
@@ -56,12 +64,17 @@ namespace navmesh::core
         /// Generated exterior connections; invalid or unavailable destination triangles are omitted.
         /// Displaying a candidate suppresses authored bars involving the selected cell's original NAVMs.
         const std::vector<CandidateBorderLink> *candidateBorderLinks{};
+        /// Multi-cell candidates, including per-cell exit indices and generated-neighbor connections.
+        /// Used instead of the single-candidate fields when nonempty; candidate pointers must be nonnull.
+        std::vector<SceneCandidate> candidates;
     };
     struct SceneExportResult
     {
         std::size_t objects{};
         std::size_t triangles{};
         std::size_t culledTriangles{};
+        /// True only when the GLB and adjacent provenance JSON both finish writing successfully.
+        bool written{};
     };
 
     /** Write a world-coordinate inspection GLB and adjacent provenance JSON.
@@ -69,9 +82,9 @@ namespace navmesh::core
      * @param scene Terrain, collision, and display geometry with source provenance.
      * @param navmeshes Authored meshes; metadata.selectedCell identifies meshes grouped as original.
      * @param markers Analysis evidence for polygon colors, without rendered diagnostic pyramids.
-     * @param metadata Run provenance and optional selected CELL; its NAVM identities select original meshes.
+     * @param metadata Run provenance and selected CELL(s); their NAVM identities select original meshes.
      * @param options Layer/bounds selection and borrowed generated connection evidence.
-     * @return Emitted mesh/triangle counts and culled support geometry count. Counts alone do not confirm I/O success.
+     * @return Emitted counts and written status; false written indicates an output failure.
      * Solid connection bars follow recorded source edges, lifted above the NAVM in Skyrim Z-up space.
      * Invalid triangles and unresolved connections are omitted. Requested empty geometry groups are retained.
      */

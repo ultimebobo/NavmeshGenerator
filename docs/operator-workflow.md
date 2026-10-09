@@ -18,6 +18,12 @@ that exceed the source's full/light format stop export. Existing output files
 and source plugins are never overwritten. The default **Write plugin** export
 still produces a separate NAVM-only patch. See [batch rebuilding](batch-rebuilding.md).
 
+For explicit cells, use **Cell** mode, fill **Cells**, enable **Copy selected
+plugin**, and enter the active filename in **Plugin to copy**. The CLI accepts
+`--cells "<cell identifiers>" --copy-plugin --copy-plugin-source "<active plugin.esp>"`.
+Inspection without generation writes separate results beneath `cells/<FormID>/`
+for multiple cells and uses the usual output paths for one cell.
+
 ## Desktop workspace
 
 Starting without command-line switches opens a dark Dear ImGui workspace with
@@ -33,17 +39,32 @@ written only to the catalog, including for CLI `--list-cells` runs.
 
 **Rebuild scope** controls which settings appear:
 
-- **Cell** shows **Cell identification** and either a Form ID or editor ID field.
-  Enable candidate generation or plugin writing to expose generation controls.
+- **Cell** shows a multiline **Cells** field. Paste Form IDs or editor IDs from
+  `cells.json`, one per line or separated by commas or semicolons. The identifier
+  count helps review pasted input, and **Clear list** removes it. Aliases are
+  combined; unknown or ambiguous identifiers stop processing. Leave generation
+  disabled to inspect the selected cells. Enable **Copy selected plugin** to show
+  **Plugin to copy**, where you enter or browse to an active plugin filename.
+  The generated NAVMs are written in that copy. The source field is required only
+  when copying and is saved independently of the affected-plugin selection.
 - **Plugin** shows **Affected plugin** and **Copy selected plugin**. Copy mode
   enables writing through the shared runner.
 - **Load order** selects affected cells without a cell identifier or affected
-  plugin. Both batch scopes expose cost estimation, output policy and workers.
+  plugin. Affected-cell scopes and Cell generation lists expose cost estimation,
+  output policy and workers; Cell inspection retains its analysis controls.
 
 **Skip cells with existing navmesh** appears when generation is enabled. The
 plugin-only output policy is available when batch writing or estimation is
 selected. Settings retain their saved values when hidden, but inactive selectors
 and dependent flags are cleared before invoking `app::Run`.
+
+In **Cell** scope, enable **Make scene** to write one `scene.glb` for the complete
+selection. It combines terrain, collision, display models, authored NAVMs and any
+finalized generated NAVMs, with shared neighborhood geometry emitted once. It
+works during inspection, candidate generation and plugin-copy exports, independently
+of the batch output policy. The choice is saved. Cost estimation is disabled while
+making a scene because the scene requires the whole selection. Cells retain their
+native coordinates, so unrelated interiors or worldspaces may overlap.
 
 **Advanced settings** starts folded each time the workspace opens. It contains
 numerical analysis thresholds, neighboring-cell radius, disk/working budgets,
@@ -194,7 +215,7 @@ The high-risk gates remain: real exterior terrain before generation; real collis
 
 ## Batch cost and storage settings
 
-Use **Estimate batch cost** / `--estimate-only` with a Plugin or Load order scope
+Use **Estimate batch cost** / `--estimate-only` with Cell generation lists, Cell copy exports, or Plugin and Load order scopes
 to sample real generation before starting the complete job. Sampled candidates
 are cached for reuse. **Batch output**, **Shared asset cache**, cache disk/working
 budgets, and generation workers are persisted by the Windows UI and passed to

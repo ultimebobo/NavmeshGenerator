@@ -4,6 +4,16 @@ This project is intentionally split into processing stages so the analysis logic
 
 The build targets the Windows application, neutral core, and tests. Runtime game APIs are outside the processing pipeline.
 
+The application-owned `app/cell_scene` accumulator joins Cell-mode inspection and
+batch extraction into an optional complete-selection scene. It deduplicates by
+source identity, original triangle and exact world-space positions, rebases vertex
+and provenance indices, and retains authored NAVMs and exits by Form ID. The neutral
+scene exporter accepts borrowed finalized candidates with owning CELL identities,
+so generated seam destinations resolve without allocating plugin NAVM identities.
+This keeps extraction/orchestration in the app and serialization in the core.
+Requested scene storage is owned for the run, independently of cache retention and
+generation admission budgets. Scene and sidecar failures stop plugin publishing.
+
 ## 1. Plugin parsing
 
 The parser layer is responsible for reading a Bethesda plugin file directly from disk.
@@ -163,7 +173,7 @@ range. Adjacent geometry remains unchanged. Other authored links, cover
 data, NAVI, and REFR XNDP references remain outside this
 writer's supported remapping.
 
-Plugin-scope authoring can instead copy the selected source with generated
+Cell and Plugin scopes can instead copy the selected source with generated
 navigation. `skyrim/parser/plugin_copy` validates the complete raw record/group
 envelope, preserves encoded unrelated records and TES4 metadata, merges NAVMs
 by identity and group placement, and updates group sizes, HEDR accounting, and
@@ -198,6 +208,18 @@ rendering responsive and closing waits for a safe completion boundary.
 `ui/options_model` prepares MO2 desktop actions independently of rendering,
 clearing hidden selectors and resolving scope-dependent generation/export flags.
 It can be exercised by automated tests without opening the desktop.
+
+`app::Options::cellSelection` carries an explicit list independently of single-cell
+selectors and automatic impact selection. `ParseCellSelection` shares delimiter
+handling between CLI, desktop validation and persisted list encoding. Cell
+lists resolve all identifiers uniquely against the winning load order and
+deduplicate by CELL Form ID before processing. `ResolveCellSelection` performs
+this resolution independently of generation. Inspection reuses the resolved
+snapshot and the single-cell processing pipeline, with separate directories for
+multiple targets. `UsesBatchGeneration` dispatches generation lists and Cell copy
+exports to supplier extraction, seam stitching, skip policies and the combined
+writer. `Options::copySourcePlugin` supplies the active copy template in Cell
+mode; its edit history does not expand targets.
 
 `NavigationProfile` and `RecastSettings` carry movement and raster/contour controls
 through shared options to cell and batch generation. Validation precedes input

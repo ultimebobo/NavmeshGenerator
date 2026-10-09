@@ -437,9 +437,15 @@ namespace navmesh::core
             for (const auto &navmesh : navmeshes)
             {
                 const bool isOriginal =
+                    std::any_of(metadata.selectedCells.begin(), metadata.selectedCells.end(),
+                                [&](const auto *cell)
+                                {
+                                    return std::any_of(cell->navMeshes.begin(), cell->navMeshes.end(),
+                                                       [&](const auto &mesh) { return mesh.id == navmesh.id; });
+                                }) ||
                     metadata.selectedCell &&
-                    std::any_of(metadata.selectedCell->navMeshes.begin(), metadata.selectedCell->navMeshes.end(),
-                                [&](const auto &mesh) { return mesh.id == navmesh.id; });
+                        std::any_of(metadata.selectedCell->navMeshes.begin(), metadata.selectedCell->navMeshes.end(),
+                                    [&](const auto &mesh) { return mesh.id == navmesh.id; });
                 std::set<std::uint32_t> doorPolygons;
                 for (const auto &door : navmesh.doorLinks)
                 {
@@ -483,17 +489,21 @@ namespace navmesh::core
                 }
             }
         }
-        if (options.candidateNavmesh && Contains(options.layers, SceneLayer::CandidateNavmesh))
+        const auto appendCandidate =
+            [&](const NavMesh &candidate, const std::vector<CandidateExit> *entrances, std::uint32_t cellId)
         {
-            const auto &candidate = *options.candidateNavmesh;
-            Object object{SceneLayer::CandidateNavmesh, "Candidate NAVM", "{\"kind\":\"neutral_candidate\"}"};
-            Object doors{SceneLayer::CandidateNavmesh, "Candidate NAVM: door_linked",
+            const auto name = cellId ? std::format("Candidate NAVM CELL {:08X}", cellId) : "Candidate NAVM";
+            const auto provenance =
+                cellId ? std::format("{{\"kind\":\"neutral_candidate\",\"cellFormId\":\"{:08X}\"}}", cellId)
+                       : "{\"kind\":\"neutral_candidate\"}";
+            Object object{SceneLayer::CandidateNavmesh, name, provenance};
+            Object doors{SceneLayer::CandidateNavmesh, name + ": door_linked",
                          "{\"kind\":\"neutral_candidate\",\"classification\":\"door_linked\"}", "door_linked"};
             std::map<std::string, Object> tagged;
             std::set<std::uint32_t> doorPolygons;
-            if (options.candidateEntrances)
+            if (entrances)
             {
-                for (const auto &door : *options.candidateEntrances)
+                for (const auto &door : *entrances)
                 {
                     if (door.polygon)
                     {
@@ -520,7 +530,7 @@ namespace navmesh::core
                     if (added)
                     {
                         entry->second = {
-                            SceneLayer::CandidateNavmesh, "Candidate NAVM: " + classification,
+                            SceneLayer::CandidateNavmesh, name + ": " + classification,
                             std::format("{{\"kind\":\"neutral_candidate\",\"classification\":\"{}\"}}", classification),
                             classification};
                     }
@@ -537,6 +547,17 @@ namespace navmesh::core
             for (auto &[_, group] : tagged)
             {
                 objects.push_back(std::move(group));
+            }
+        };
+        if (Contains(options.layers, SceneLayer::CandidateNavmesh))
+        {
+            if (options.candidates.empty() && options.candidateNavmesh)
+            {
+                appendCandidate(*options.candidateNavmesh, options.candidateEntrances, 0);
+            }
+            for (const auto &view : options.candidates)
+            {
+                appendCandidate(view.candidate->mesh, &view.candidate->exits, view.cellFormId);
             }
         }
         if (options.candidateEntrances && Contains(options.layers, SceneLayer::DiagnosticMarkers))
@@ -565,24 +586,38 @@ namespace navmesh::core
             meshById.emplace(mesh.id, &mesh);
         }
         std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t>> authoredPairs;
-        const bool showCandidateLinks =
-            options.candidateNavmesh && Contains(options.layers, SceneLayer::CandidateNavmesh);
+        const bool showCandidateLinks = (options.candidateNavmesh || !options.candidates.empty()) &&
+                                        Contains(options.layers, SceneLayer::CandidateNavmesh);
         const auto isReplaced = [&](std::uint32_t id)
         {
+            for (const auto &view : options.candidates)
+            {
+                for (const auto *cell : metadata.selectedCells)
+                {
+                    if (showCandidateLinks && cell->id == view.cellFormId &&
+                        std::any_of(cell->navMeshes.begin(), cell->navMeshes.end(),
+                                    [&](const auto &mesh) { return mesh.id == id; }))
+                    {
+                        return true;
+                    }
+                }
+            }
             return showCandidateLinks && metadata.selectedCell &&
                    std::any_of(metadata.selectedCell->navMeshes.begin(), metadata.selectedCell->navMeshes.end(),
                                [&](const auto &mesh) { return mesh.id == id; });
         };
         const auto appendLink = [&](const NavMesh &source, std::uint32_t sourcePolygon, std::uint8_t sourceEdge,
-                                    std::uint32_t targetId, std::uint32_t targetPolygon, bool generated)
+                                    std::uint32_t targetId, std::uint32_t targetPolygon, bool generated,
+                                    const NavMesh *generatedTarget = nullptr, std::uint32_t sourceCell = 0)
         {
             const auto target = meshById.find(targetId);
-            if (target == meshById.end())
+            if (!generatedTarget && target == meshById.end())
             {
                 return;
             }
             const auto sourcePoints = SelectedPolygon(source, sourcePolygon, options.bounds);
-            const auto targetPoints = SelectedPolygon(*target->second, targetPolygon, options.bounds);
+            const auto targetPoints =
+                SelectedPolygon(generatedTarget ? *generatedTarget : *target->second, targetPolygon, options.bounds);
             if (!sourcePoints || !targetPoints)
             {
                 return;
@@ -598,14 +633,24 @@ namespace navmesh::core
                 }
             }
             Object object{SceneLayer::NavmeshLinks,
-                          generated
-                              ? std::format("Candidate link {} -> {:08X}:{}", sourcePolygon, targetId, targetPolygon)
-                              : std::format("Authored link {:08X}:{} -> {:08X}:{}", source.id, sourcePolygon, targetId,
-                                            targetPolygon),
+                          generated ? (sourceCell ? std::format("Candidate link CELL {:08X}:{} -> {:08X}:{}",
+                                                                sourceCell, sourcePolygon, targetId, targetPolygon)
+                                                  : std::format("Candidate link {} -> {:08X}:{}", sourcePolygon,
+                                                                targetId, targetPolygon))
+                                    : std::format("Authored link {:08X}:{} -> {:08X}:{}", source.id, sourcePolygon,
+                                                  targetId, targetPolygon),
                           std::format("{{\"kind\":\"{}\",\"sourceNavmeshFormId\":\"{:08X}\",\"sourcePolygon\":{},"
                                       "\"sourceEdge\":{},\"targetNavmeshFormId\":\"{:08X}\",\"targetPolygon\":{}}}",
                                       generated ? "candidate_border_link" : "authored_external_link", source.id,
                                       sourcePolygon, sourceEdge, targetId, targetPolygon)};
+            if (sourceCell)
+            {
+                object.provenance = std::format(
+                    "{{\"kind\":\"candidate_border_link\",\"sourceCellFormId\":\"{:08X}\",\"sourcePolygon\":{},"
+                    "\"sourceEdge\":{},\"{}\":\"{:08X}\",\"targetPolygon\":{},\"targetKind\":\"{}\"}}",
+                    sourceCell, sourcePolygon, sourceEdge, generatedTarget ? "targetCellFormId" : "targetNavmeshFormId",
+                    targetId, targetPolygon, generatedTarget ? "generated_cell" : "authored_navmesh");
+            }
             // The consuming edge fixes the portal's exact endpoints, including
             // authored border drift and slope. The target remains required for culling.
             AppendLinkBar(object, (*sourcePoints)[sourceEdge], (*sourcePoints)[(sourceEdge + 1) % 3]);
@@ -624,7 +669,7 @@ namespace navmesh::core
                 }
             }
         }
-        if (options.candidateNavmesh && options.candidateBorderLinks &&
+        if (options.candidates.empty() && options.candidateNavmesh && options.candidateBorderLinks &&
             Contains(options.layers, SceneLayer::CandidateNavmesh) &&
             Contains(options.layers, SceneLayer::ExistingNavmesh))
         {
@@ -634,6 +679,49 @@ namespace navmesh::core
                 {
                     appendLink(*options.candidateNavmesh, link.polygon, link.edge, link.neighborNavmeshId,
                                link.neighborPolygon, true);
+                }
+            }
+        }
+        if (Contains(options.layers, SceneLayer::CandidateNavmesh) &&
+            Contains(options.layers, SceneLayer::ExistingNavmesh))
+        {
+            std::map<std::uint32_t, const CandidateNavMesh *> candidatesByCell;
+            for (const auto &view : options.candidates)
+            {
+                candidatesByCell.emplace(view.cellFormId, view.candidate);
+            }
+            std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t>> generatedPairs;
+            // Generated destinations use CELL identities until the writer allocates NAVM records.
+            // Resolve them directly to finalized candidate geometry, and draw reciprocal seams once.
+            for (const auto &view : options.candidates)
+            {
+                for (const auto &link : view.candidate->borderLinks)
+                {
+                    if (link.edge >= 3 || link.neighborEdge >= 3)
+                    {
+                        continue;
+                    }
+                    const NavMesh *target{};
+                    auto targetId = link.neighborNavmeshId;
+                    if (link.generatedNeighborCell)
+                    {
+                        const auto found = candidatesByCell.find(*link.generatedNeighborCell);
+                        if (found == candidatesByCell.end())
+                        {
+                            continue;
+                        }
+                        target = &found->second->mesh;
+                        targetId = found->first;
+                        const auto sourcePair = std::pair{view.cellFormId, link.polygon};
+                        const auto targetPair = std::pair{targetId, link.neighborPolygon};
+                        const auto [a, b] = std::minmax(sourcePair, targetPair);
+                        if (!generatedPairs.emplace(a.first, a.second, b.first, b.second).second)
+                        {
+                            continue;
+                        }
+                    }
+                    appendLink(view.candidate->mesh, link.polygon, link.edge, targetId, link.neighborPolygon, true,
+                               target, view.cellFormId);
                 }
             }
         }
@@ -836,6 +924,9 @@ namespace navmesh::core
                        << (options.detailedProvenance ? "full" : "summary") << "\"},\n  \"objects\": ["
                        << join(provenanceObjects) << "]\n}\n";
         }
+        glb.close();
+        provenance.close();
+        result.written = glb.good() && provenance.good();
         return result;
     }
 } // namespace navmesh::core

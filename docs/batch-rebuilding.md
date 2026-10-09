@@ -4,18 +4,26 @@ For terminology and the distinction between regenerated cell geometry and
 neighboring connection updates, see the [navmesh glossary](glossary.md).
 
 The shared application runner supports **Cell**, **Plugin**, and **Load order**
-scopes. The Windows UI persists the scope and affected-plugin filename with the
-other settings. Plugin and load-order rebuilding require a resolved MO2 profile
-or the developer load-order manifest. They generate candidates;
+scopes. Cell accepts one or multiple explicit cells. The Windows UI persists the
+scope and affected-plugin filename with the other settings. Affected-cell scopes
+require a resolved MO2 profile or the developer load-order manifest. They generate candidates;
 **Write plugin** / `--generate-plugin` additionally writes a combined patch.
 Automatic batch output retains full inspection without writing, and reports plus
 the plugin when writing. **Batch output** / `--batch-output` selects full,
 compressed, or plugin-only artifacts explicitly.
 
+In Cell scope, **Make scene** / `--make-scene` adds a combined `scene.glb` and its
+sidecars regardless of batch output policy. Geometry is deduplicated across
+overlapping neighborhoods; generated candidates are displayed after final seam
+reconciliation, alongside authored navigation from skipped cells. This is a
+complete-selection export and excludes cost estimation. Retaining requested scene
+geometry adds memory beyond the generation admission budget. Scene write failures
+stop publishing the plugin.
+
 For authoring, **Copy selected plugin** / `--copy-plugin` enables writing and
-uses the selected Plugin-scope file as the output template. The UI persists the
-option and exposes it only in Plugin scope. The result is written under
-the source filename in the output folder and is intended to replace the selected
+uses the selected file as the output template. The UI persists the
+option and exposes it in Cell and Plugin scopes. The result is written
+under the source filename in the output folder and is intended to replace the selected
 plugin while retaining its assets. It preserves encoded unrelated records,
 TES4 flags, and existing master indices. Header accounting is updated; master
 copies and copies with ONAM tables register generated overrides there while
@@ -35,6 +43,39 @@ generated or modified NAVM is read back before the copy is finalized.
 NAVM-only patches use a filename distinct from every active input. A numeric
 suffix is added when the default generated filename is already active, allowing
 the patch to depend on earlier generated navigation without a self dependency.
+
+To rebuild a chosen set rather than discover affected cells, use **Cell** mode
+in the desktop and paste Form IDs or editor IDs into **Cells**. The
+multiline list accepts whitespace, commas and semicolons and retains its entries
+between sessions. Enable **Copy selected plugin** to show **Plugin to copy**, which
+accepts an active filename or the Browse button and is required when copying.
+The equivalent CLI is:
+
+```powershell
+NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --cells "<cell identifier>,<another cell identifier>" --copy-plugin-source "<active plugin.esp>" --copy-plugin --output "<new output folder>"
+```
+
+`--cells` can be repeated. Each token is a resolved hexadecimal Form ID (with an
+optional `0x` prefix) or a case-insensitive editor ID from `cells.json`. Every token
+must resolve uniquely before any cell is processed. Multiple tokens naming the
+same CELL are combined, and processing follows resolved CELL order. Explicit
+selection includes unchanged cells and cells outside the chosen plugin's edit
+history; `--copy-plugin-source` supplies the copy template in Cell mode.
+`--rebuild-plugin` selects automatic affected-cell rebuilding and cannot combine
+with `--cells`. Without copy mode, `--generate-plugin` writes a combined NAVM patch,
+and `--generate-candidate` without writing produces candidate inspection artifacts.
+Without generation, multiple cells receive the standard inspection exports beneath
+`cells/<resolved FormID>/`; one cell uses the ordinary output paths. The input
+snapshot is shared across these inspections. Single-cell selectors, affected-cell
+rebuilding and listing cannot be combined with `--cells`.
+
+Explicit targets use the shared batch generation, skip-existing, seam repair,
+estimation and export policies. Neighboring cells supply geometry and may receive
+reciprocal connection updates while retaining their authored geometry. Copy mode's
+master-table and format constraints still apply to every generated reference.
+`batch-report.json` identifies explicit generation as scope `cell`; impact-selection
+counters do not report automatic impacts because this scope does not scan for
+changed geometry.
 
 ```powershell
 NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --copy-plugin --output "<new output folder>"

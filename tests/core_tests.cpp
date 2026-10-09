@@ -2383,6 +2383,7 @@ void TestCollisionImpactSelection();
 void TestTriangleTagging();
 
 void TestDesktopOptionsAndRecastSettings();
+void TestCellSceneAccumulation();
 void TestNavigationObstacleFixture();
 void TestRecastContourRecovery();
 void ExportNavigationObstacleFixture(const std::filesystem::path &directory);
@@ -2471,6 +2472,7 @@ int main(int argc, char **argv)
         return 0;
     }
     TestDesktopOptionsAndRecastSettings();
+    TestCellSceneAccumulation();
     TestGeometryNeighborhoodCulling();
     TestAffectedCells();
     TestResolvedLoadOrder();

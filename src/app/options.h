@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace navmesh::app
 {
@@ -32,12 +34,22 @@ namespace navmesh::app
         RebuildScope rebuildScope{RebuildScope::Cell};
         /// Active plugin filename whose edits select affected cells in Plugin scope.
         std::string affectedPlugin;
+        /// Explicit resolved CELL Form IDs or editor IDs, separated by whitespace, commas or semicolons.
+        /// Used in Cell scope; each identifier must resolve uniquely before processing.
+        std::string cellSelection;
+        /// Write one inspection scene for the Cell selection, including finalized generated candidates.
+        /// Independent interiors/worldspaces retain their native coordinates and may overlap.
+        bool makeScene{};
+        /// Active plugin filename to copy when copyPlugin is enabled in Cell scope.
+        /// Supplies the output template without expanding the explicit cell selection.
+        std::string copySourcePlugin;
         /// Write generated navigation as NAVM overrides or new records in uncovered cells.
         bool generatePlugin{};
         /// Detect generated water and preferred-route triangles; disable to export unclassified geometry.
         bool tagTriangles{true};
-        /// Copy the affected plugin with generated NAVMs instead of writing a NAVM-only patch.
-        /// Requires Plugin scope and generatePlugin; keeps the source filename and master indices.
+        /// Copy the named source plugin with generated NAVMs instead of writing a NAVM-only patch.
+        /// Requires Cell or Plugin scope, its copy source filename and generatePlugin;
+        /// keeps the source filename and master indices.
         bool copyPlugin{};
         /// Skip generation for cells with any winning NAVM record, including empty or unsupported records.
         /// Requires resolved MO2/load-order input; uncovered cells may receive new NAVM records.
@@ -70,4 +82,20 @@ namespace navmesh::app
 
     /// Parse CLI options; `--generate-plugin` selects the format automatically and rejects a format argument.
     [[nodiscard]] Options ParseCommandLine(int argc, char **argv);
+
+    /** Split an explicit cell list for CLI, desktop validation and resolved selection.
+     * @param selection Form IDs or editor IDs separated by whitespace, commas or semicolons.
+     * @return Nonempty identifier tokens in input order; an empty list returns no tokens.
+     * Identifiers are resolved against the winning load order before processing; this function performs no I/O.
+     */
+    [[nodiscard]] std::vector<std::string> ParseCellSelection(std::string_view selection);
+
+    /** Decide whether generation needs coordinated batch targets and a combined writer.
+     * @param options Shared run choices; multiple Cell identifiers use coordinated generation when
+     * generation is enabled. Cell copy exports always use the combined writer.
+     * Scene requests with skip-existing generation also coordinate inspection of skipped targets.
+     * @return True for affected-cell scopes or coordinated Cell generation; false for ordinary inspection
+     * and single-cell previews. Performs no I/O and does not change the selected scope.
+     */
+    [[nodiscard]] bool UsesBatchGeneration(const Options &options);
 } // namespace navmesh::app

@@ -23,8 +23,8 @@ application and cached on demand. For source builds, follow the
 1. Open `NavmeshGenerator.exe` to launch the desktop window.
 2. Choose your **MO2 folder** and enter your existing **Profile** name.
 3. Choose a fresh **Output folder** for the results.
-4. Select a **Rebuild scope**: **Cell** works on one area, identified by its Form
-   ID or editor ID; **Plugin** rebuilds areas affected by a selected active plugin;
+4. Select a **Rebuild scope**: **Cell** works on one or multiple areas, identified
+   by Form IDs or editor IDs; **Plugin** rebuilds areas affected by a selected active plugin;
    **Load order** rebuilds areas affected by changes across your active mods.
 5. Choose the output you want, then run the operation.
 
@@ -38,10 +38,19 @@ saved for the next session.
   disabled to export the existing navigation and surrounding geometry.
 - **Preview generated navigation:** enable **Generate candidate NAVM** to inspect
   a proposed navmesh before writing a plugin. NAVM is Skyrim's navmesh record.
+- **Make a scene from multiple cells:** select **Cell**, enter the identifiers in
+  **Cells**, and enable **Make scene**. One `scene.glb` in the output folder combines
+  their geometry and NAVMs, including generated NAVMs when generation is enabled.
+  This also works with **Copy selected plugin**.
 - **Create a patch:** enable **Write plugin** to export `generated-navmesh.esp`.
   A numeric suffix is added when that filename is already active in the load order.
 - **Update your own mod:** select Plugin scope and enable **Copy selected plugin**
   to export a copy with regenerated navigation and the plugin's other records.
+- **Rebuild chosen cells in your mod:** select **Cell** and paste cell Form IDs or
+  editor IDs into **Cells**, one per line. Commas and semicolons also work. Enable
+  **Copy selected plugin** and choose the active filename in **Plugin to copy**
+  to write their NAVMs into the exported copy. The list is saved between sessions;
+  aliases are combined and unknown or ambiguous identifiers stop processing.
 - **Fill areas without navmeshes:** enable **Skip cells with existing navmesh**
   during generation to preserve areas that already have navigation.
 

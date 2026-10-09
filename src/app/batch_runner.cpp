@@ -1,4 +1,5 @@
 #include "app/batch_runner.h"
+#include "app/cell_scene.h"
 
 #include "app/geometry_pipeline.h"
 #include "app/candidate_artifacts.h"
@@ -128,6 +129,54 @@ namespace
 
 namespace navmesh::app::detail
 {
+    /// Resolve every requested identifier before admitting generation work. Ambiguity fails the whole
+    /// selection; aliases deduplicate by resolved Form ID and targets retain load-order CELL ordering.
+    std::vector<const navmesh::core::Cell *> ResolveCellSelection(const navmesh::skyrim::ResolvedLoadOrder &resolved,
+                                                                  const std::string &selection)
+    {
+        std::set<std::uint32_t> selectedIds;
+        for (const auto &identifier : navmesh::app::ParseCellSelection(selection))
+        {
+            std::string_view hexadecimal = identifier;
+            if (hexadecimal.starts_with("0x") || hexadecimal.starts_with("0X"))
+            {
+                hexadecimal.remove_prefix(2);
+            }
+            std::uint32_t formId{};
+            const auto parsed =
+                std::from_chars(hexadecimal.data(), hexadecimal.data() + hexadecimal.size(), formId, 16);
+            const bool isFormId =
+                parsed.ec == std::errc{} && parsed.ptr == hexadecimal.data() + hexadecimal.size() && formId != 0;
+            const navmesh::core::Cell *match{};
+            for (const auto &cell : resolved.cells)
+            {
+                if ((isFormId && cell.id == formId) || EqualsIgnoreCase(cell.editorId, identifier))
+                {
+                    if (match)
+                    {
+                        throw std::runtime_error("Ambiguous CELL identifier: " + identifier +
+                                                 "; use a unique Form ID from cells.json");
+                    }
+                    match = &cell;
+                }
+            }
+            if (!match)
+            {
+                throw std::runtime_error("No matching CELL in the resolved load order: " + identifier);
+            }
+            selectedIds.insert(match->id);
+        }
+        std::vector<const navmesh::core::Cell *> targets;
+        for (const auto &cell : resolved.cells)
+        {
+            if (selectedIds.contains(cell.id))
+            {
+                targets.push_back(&cell);
+            }
+        }
+        return targets;
+    }
+
     /// Extract in target order and admit independent generation tasks within an estimated byte budget.
     /// Full scene meshes are owned only by extraction caches and in-flight tasks.
     int RunBatch(const navmesh::app::Options &options, const navmesh::skyrim::ResolvedLoadOrder &resolved,
@@ -137,6 +186,13 @@ namespace navmesh::app::detail
     {
         using namespace navmesh;
         const auto stop = [&] { return cancelled && cancelled(); };
+        const auto &copySource =
+            options.rebuildScope == app::RebuildScope::Cell ? options.copySourcePlugin : options.affectedPlugin;
+        if (!copySource.empty() && std::none_of(paths.begin(), paths.end(), [&](const auto &path)
+                                                { return EqualsIgnoreCase(path.filename().string(), copySource); }))
+        {
+            throw std::invalid_argument("Rebuild plugin is not active in the resolved load order: " + copySource);
+        }
         const auto started = std::chrono::steady_clock::now();
         const auto assetCache = skyrim::ModelAssetCacheDirectory(options.data, assets, options.assetCache);
         struct CacheRetention
@@ -164,7 +220,7 @@ namespace navmesh::app::detail
         std::set<std::string> changedModels;
         bool archiveModelsChanged{};
         std::set<std::filesystem::path> changedArchives;
-        if (assets)
+        if (assets && options.rebuildScope != app::RebuildScope::Cell)
         {
             const auto inside = [](const std::filesystem::path &path, const std::filesystem::path &root)
             {
@@ -254,25 +310,34 @@ namespace navmesh::app::detail
         skyrim::ImpactSelectionStatistics selectionStatistics;
         if (progress)
         {
-            progress(30, "Selecting cells with changed terrain or collision");
+            progress(30, options.rebuildScope == app::RebuildScope::Cell
+                             ? "Resolving selected cells"
+                             : "Selecting cells with changed terrain or collision");
         }
         std::vector<const core::Cell *> targets;
         std::string selectionError;
         try
         {
-            targets = skyrim::SelectCollisionAffectedCells(
-                resolved, index,
-                {.plugin = options.rebuildScope == app::RebuildScope::Plugin ? options.affectedPlugin : "",
-                 .dataDirectory = options.data,
-                 .cacheDirectory = assetCache,
-                 .previousCacheDirectory = previousAssetCache,
-                 .assets = assets,
-                 .previousAssets = assets ? &previousAssets : nullptr,
-                 .changedModels = changedModels,
-                 .archiveModelsChanged = archiveModelsChanged,
-                 .terrainOnly = options.terrainOnly,
-                 .cancelled = cancelled},
-                modelCache, selectionStatistics);
+            if (options.rebuildScope == app::RebuildScope::Cell)
+            {
+                targets = ResolveCellSelection(resolved, options.cellSelection);
+            }
+            else
+            {
+                targets = skyrim::SelectCollisionAffectedCells(
+                    resolved, index,
+                    {.plugin = options.rebuildScope == app::RebuildScope::Plugin ? options.affectedPlugin : "",
+                     .dataDirectory = options.data,
+                     .cacheDirectory = assetCache,
+                     .previousCacheDirectory = previousAssetCache,
+                     .assets = assets,
+                     .previousAssets = assets ? &previousAssets : nullptr,
+                     .changedModels = changedModels,
+                     .archiveModelsChanged = archiveModelsChanged,
+                     .terrainOnly = options.terrainOnly,
+                     .cancelled = cancelled},
+                    modelCache, selectionStatistics);
+            }
         }
         catch (const std::runtime_error &error)
         {
@@ -378,7 +443,7 @@ namespace navmesh::app::detail
             }
         } cleanup{auditDirectory, options.output};
         auto metadata = reproducibility::ExportMetadata{
-            .inputPlugin = options.affectedPlugin,
+            .inputPlugin = options.copyPlugin ? copySource : options.affectedPlugin,
             .warnings = {"Load-order scope treats plugins after the first active baseline plugin as changes.",
                          "Skipped targets and writer limitations are recorded in the batch report and "
                          "docs/batch-rebuilding.md."}};
@@ -507,8 +572,11 @@ namespace navmesh::app::detail
             out << "  \"skip_existing_navmesh\":" << (options.skipExistingNavmesh ? "true" : "false") << ",\n";
             out << "  \"copy_plugin\":" << (options.copyPlugin ? "true" : "false") << ",\n";
             out << std::format("  \"scope\":\"{}\",\"plugin\":\"{}\",\"status\":\"{}\",\"error\":\"{}\",\n",
-                               options.rebuildScope == app::RebuildScope::Plugin ? "plugin" : "load_order",
-                               JsonEscape(options.affectedPlugin), state, JsonEscape(error));
+                               options.rebuildScope == app::RebuildScope::Cell     ? "cell"
+                               : options.rebuildScope == app::RebuildScope::Plugin ? "plugin"
+                                                                                   : "load_order",
+                               JsonEscape(options.copyPlugin ? copySource : options.affectedPlugin), state,
+                               JsonEscape(error));
             out << std::format(
                 "  \"selected_cells\":{},\"geometry_cells_extracted\":{},\"geometry_cache_hits\":{},\n  "
                 "\"original_polygons\":{},\"generated_polygons\":{},\"generation_failed_cells\":{},\n  \"cells\":[\n",
@@ -683,6 +751,7 @@ namespace navmesh::app::detail
             }
             return 0;
         };
+        CellScene combinedScene;
         // Process targets independently while reusing source-cell geometry across overlapping neighborhoods.
         for (std::size_t targetIndex{}; targetIndex < targets.size(); ++targetIndex)
         {
@@ -697,10 +766,14 @@ namespace navmesh::app::detail
             {
                 originalPolygons += mesh.polygons.size();
             }
-            if (options.skipExistingNavmesh && existingNavmeshCells.contains(cell.id))
+            const bool skipGeneration = options.skipExistingNavmesh && existingNavmeshCells.contains(cell.id);
+            if (skipGeneration)
             {
                 result.status = "skipped_existing_navm";
-                continue;
+                if (!options.makeScene)
+                {
+                    continue;
+                }
             }
             if (const auto *record = resolved.FindWinning(cell.id);
                 record && record->raw && (record->raw->flags & 0x20U))
@@ -742,9 +815,18 @@ namespace navmesh::app::detail
             const auto suppliers = index.GeometryNeighbors(cell, std::max(1, options.neighboringCellRadius));
             result.supplierCells = suppliers.size();
             std::set<std::string> uniqueModels;
+            std::vector<core::Cell> sceneCells;
             for (const auto *neighbor : suppliers)
             {
                 auto geometryCell = index.GeometryCell(*neighbor, bounds);
+                if (options.makeScene)
+                {
+                    if (terrainCells.contains(neighbor->id))
+                    {
+                        geometryCell.navMeshes = neighbor->navMeshes;
+                    }
+                    sceneCells.push_back(geometryCell);
+                }
                 result.references += geometryCell.references.size();
                 for (const auto &reference : geometryCell.references)
                 {
@@ -759,7 +841,7 @@ namespace navmesh::app::detail
                         : skyrim::ExtractGeometry(
                               options.data, geometryCell, assetCache, [&](std::size_t done, std::size_t total)
                               { update(std::format("Geometry {:08X}: reference {}/{}", neighbor->id, done, total)); },
-                              stop, assets, &modelCache, true);
+                              stop, assets, &modelCache, !options.makeScene);
                 if (stop())
                 {
                     result.status = "cancelled";
@@ -802,8 +884,16 @@ namespace navmesh::app::detail
                 }
             }
             result.models = uniqueModels.size();
+            if (options.makeScene)
+            {
+                combinedScene.Append(geometry.scene, sceneCells);
+            }
             result.extractionSeconds =
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - extractionStarted).count();
+            if (skipGeneration)
+            {
+                continue;
+            }
             std::vector<core::CandidateExit> exits;
             // Physical bucketing includes DOORs from persistent worldspace parents.
             for (const auto &reference : index.GeometryCell(cell).references)
@@ -918,6 +1008,30 @@ namespace navmesh::app::detail
             return 3;
         }
         // Write one combined override only after all generated border targets and exports are ready.
+        if (options.makeScene)
+        {
+            std::vector<core::SceneCandidate> candidates;
+            for (const auto &result : results)
+            {
+                if (result.status == "generated")
+                {
+                    candidates.push_back({result.cell->id, &result.candidate});
+                }
+            }
+            if (progress)
+            {
+                progress(91, "Writing scene for selected cells");
+            }
+            if (!combinedScene.Write(options.output / "scene.glb", options, targets, candidates))
+            {
+                return fail("Cannot write the selected-cell scene");
+            }
+            if (stop())
+            {
+                summary("cancelled");
+                return 3;
+            }
+        }
         if (options.generatePlugin && !generatedByCell.empty())
         {
             std::vector<skyrim::NavmeshReplacement> replacements;
@@ -936,7 +1050,7 @@ namespace navmesh::app::detail
                          options.copyPlugin ? "Writing selected plugin copy" : "Writing batch NAVM override plugin");
             }
             if (!skyrim::WriteNavmeshOverrides(options.output, paths, resolved, replacements, written, error,
-                                               options.copyPlugin ? options.affectedPlugin : ""))
+                                               options.copyPlugin ? copySource : ""))
             {
                 return fail(error);
             }

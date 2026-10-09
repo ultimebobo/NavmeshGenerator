@@ -89,13 +89,14 @@ class BatchRebuild(unittest.TestCase):
         (self.root / "Patch.esp").write_bytes(record("TES4", 0, patch_header) + group(int.from_bytes(b"WRLD", "little"), 0, patch))
         (self.root / "plugins.txt").write_text("Baseline.esm\nPatch.esp\n")
 
-    def write_baseline(self, navmeshes=None, references=None, water=None, world_data=b"", cell_count=3):
+    def write_baseline(self, navmeshes=None, references=None, water=None, world_data=b"", cell_count=3, editor_ids=None):
         if navmeshes is None:
             navmeshes = {x: navm(x) for x in range(cell_count)}
         cells = b""
         for x in range(cell_count):
             cell = 0x100 + x
-            payload = sub("EDID", f"Exterior{x}\0".encode()) + sub("XCLC", struct.pack("<ii", x, 0))
+            editor_id = (editor_ids or {}).get(x, f"Exterior{x}")
+            payload = sub("EDID", (editor_id + "\0").encode()) + sub("XCLC", struct.pack("<ii", x, 0))
             payload += (water or {}).get(x, b"")
             children = record("LAND", 0x300 + x, land())
             if x in navmeshes:
@@ -741,6 +742,221 @@ class BatchRebuild(unittest.TestCase):
         self.run_cli("--rebuild-load-order", "--cell-formid", "100", code=1)
         self.run_cli("--rebuild-plugin", "Patch.esp", "--rebuild-load-order", code=1)
         self.run_cli("--rebuild-load-order", "--neighboring-cell-radius", "-1", code=1)
+
+    def test_explicit_cells_include_unchanged_cells_and_deduplicate_aliases(self):
+        output = self.run_cli("--cells", "exterior2,\n0x102;00000100", "--cells", "EXTERIOR0",
+                              "--generate-plugin")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["scope"], "cell")
+        self.assertEqual(report["selected_cells"], 2)
+        self.assertEqual([cell["form_id"] for cell in report["cells"]], ["00000100", "00000102"])
+        self.assertTrue(all(cell["status"] == "generated" for cell in report["cells"]))
+        self.assertTrue((output / "generated-navmesh.esp").exists())
+
+    def test_explicit_cells_copy_selected_plugin_and_preserve_unselected_records(self):
+        selected = self.root / "Patch.esp"
+        unrelated = record("QUST", 0x01000850, sub("DATA", b"unrelated selected-plugin record"))
+        retained_navm = record("NAVM", 0x200, navm(0))
+        selected.write_bytes(selected.read_bytes() + group(int.from_bytes(b"QUST", "little"), 0, unrelated)
+            + group(int.from_bytes(b"WRLD", "little"), 0,
+                    group(0x400, 1, group(0x100, 6, group(0x100, 9, retained_navm)))))
+        original = selected.read_bytes()
+        for index, args in enumerate([("--copy-plugin-source", "pAtCh.EsP", "--cells", "Exterior2"),
+                                      ("--cells", "00000102", "--copy-plugin-source", "Patch.esp")]):
+            output = self.run_cli(*args, "--copy-plugin", output=f"selected-copy-{index}")
+            report = json.loads((output / "batch-report.json").read_text())
+            self.assertTrue(report["copy_plugin"])
+            self.assertEqual(report["scope"], "cell")
+            self.assertEqual([cell["form_id"] for cell in report["cells"]], ["00000102"])
+            copy = (output / "Patch.esp").read_bytes()
+            self.assertIn(unrelated, copy)
+            self.assertIn(retained_navm, copy)
+            self.assertEqual(selected.read_bytes(), original)
+            self.assertFalse((output / "generated-navmesh.esp").exists())
+            generated = [item for item in read_records(output / "Patch.esp") if item[0] == "NAVM" and item[1] == 0x202]
+            self.assertEqual(len(generated), 1)
+            self.assertNotEqual(navm_geometry(generated[0][3]), navm_geometry(navm(2)))
+
+    def test_explicit_cells_validate_all_identifiers_before_generation(self):
+        for index, selection in enumerate(["100;MissingCell", "0x100000000", "0", "-100"]):
+            output = self.run_cli("--cells", selection + ",101", "--generate-plugin", output=f"invalid-cells-{index}", code=2)
+            report = json.loads((output / "batch-report.json").read_text())
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["cells"], [])
+            self.assertIn("No matching CELL", report["error"])
+            self.assertFalse((output / "generated-navmesh.esp").exists())
+        self.run_cli("--cells", " \n,;", code=1)
+        self.run_cli("--cells", code=1)
+        self.run_cli("--cells", "100", "--cell-formid", "101", code=1)
+        self.run_cli("--cells", "100", "--rebuild-load-order", code=1)
+        self.run_cli("--rebuild-load-order", "--cells", "100", code=1)
+        self.run_cli("--cells", "100", "--copy-plugin", code=1)
+        self.run_cli("--cells", "100", "--copy-plugin-source", "Inactive.esp", "--copy-plugin", code=1)
+        self.run_cli("--cells", "100", "--copy-plugin-source", "Patch.esp", code=1)
+        self.run_cli("--copy-plugin", "--copy-plugin-source", "Patch.esp", code=1)
+        self.run_cli("--cells", "100", "--rebuild-plugin", "Patch.esp", code=1)
+        self.run_cli("--rebuild-plugin", "Patch.esp", "--cells", "100", code=1)
+
+    def test_explicit_cells_reject_ambiguous_editor_ids_and_numeric_names(self):
+        for index, names in enumerate([{0: "SharedCell", 1: "SharedCell"}, {0: "00000102"}]):
+            self.write_baseline(editor_ids=names)
+            selection = "SharedCell" if index == 0 else "00000102"
+            output = self.run_cli("--cells", selection + ",101", "--generate-plugin", output=f"ambiguous-{index}", code=2)
+            report = json.loads((output / "batch-report.json").read_text())
+            self.assertIn("Ambiguous CELL", report["error"])
+            self.assertEqual(report["cells"], [])
+
+    def test_explicit_cells_skip_existing_and_generate_uncovered(self):
+        self.write_baseline({0: navm(0), 1: navm(1)})
+        output = self.run_cli("--cells", "100,Exterior2", "--copy-plugin-source", "Patch.esp", "--copy-plugin",
+                              "--skip-existing-navmesh")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual([cell["status"] for cell in report["cells"]], ["skipped_existing_navm", "generated"])
+        self.assertTrue((output / "Patch.esp").exists())
+
+    def test_explicit_adjacent_cells_copy_with_shared_seams(self):
+        original = (self.root / "Patch.esp").read_bytes()
+        output = self.run_cli("--cells", "Exterior0;Exterior1", "--copy-plugin-source", "Patch.esp", "--copy-plugin")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["selected_cells"], 2)
+        self.assertEqual([cell["form_id"] for cell in report["cells"]], ["00000100", "00000101"])
+        self.assertTrue(all(cell["status"] == "generated" for cell in report["cells"]))
+        for cell in report["cells"]:
+            candidate = json.loads((output / "cells" / cell["form_id"] / "candidate-navm.json").read_text())
+            self.assertTrue(candidate["topology"]["valid"])
+        self.assertEqual((self.root / "Patch.esp").read_bytes(), original)
+        (self.root / "plugins.txt").write_text(f"Baseline.esm\n{output / 'Patch.esp'}\n")
+        self.run_cli("--list-cells", output="selected-copy-read-back")
+
+    def test_cell_mode_inspects_multiple_cells_without_generating(self):
+        output = self.run_cli("--cells", "Exterior0,0x102;EXTERIOR2")
+        self.assertFalse((output / "batch-report.json").exists())
+        self.assertFalse((output / "generated-navmesh.esp").exists())
+        self.assertEqual(sorted(path.name for path in (output / "cells").iterdir()), ["00000100", "00000102"])
+        for identifier in ["00000100", "00000102"]:
+            directory = output / "cells" / identifier
+            self.assertTrue((directory / "report.json").exists())
+            self.assertTrue((directory / "scene.glb").exists())
+            self.assertFalse((directory / "candidate-navm.json").exists())
+        single = self.run_cli("--cells", "Exterior0", output="single-list")
+        self.assertTrue((single / "report.json").exists())
+        self.assertTrue((single / "scene.glb").exists())
+
+    def test_cell_mode_copy_accepts_single_cell_selector(self):
+        for index, selector in enumerate([("--cell-formid", "100"), ("--editor-id", "Exterior0"),
+                                          ("--cell-x", "0", "--cell-y", "0")]):
+            output = self.run_cli(*selector, "--copy-plugin", "--copy-plugin-source", "Patch.esp",
+                                  output=f"single-cell-copy-{index}")
+            report = json.loads((output / "batch-report.json").read_text())
+            self.assertEqual(report["scope"], "cell")
+            self.assertEqual([cell["form_id"] for cell in report["cells"]], ["00000100"])
+            self.assertTrue((output / "Patch.esp").exists())
+
+    def read_combined_scene(self, output):
+        data = (output / "scene.glb").read_bytes()
+        self.assertEqual(struct.unpack_from("<III", data), (0x46546C67, 2, len(data)))
+        size, kind = struct.unpack_from("<II", data, 12)
+        self.assertEqual(kind, 0x4E4F534A)
+        scene = json.loads(data[20:20 + size])
+        provenance = json.loads((output / "scene.glb.provenance.json").read_text())
+        metadata = json.loads((output / "scene.glb.metadata.json").read_text())["metadata"]
+        return scene, provenance, metadata
+
+    def test_make_scene_combines_selected_cells_and_deduplicates_neighborhoods(self):
+        output = self.run_cli("--cells", "Exterior0,102,EXTERIOR2", "--make-scene",
+                              "--neighboring-cell-radius", "1")
+        scene, provenance, metadata = self.read_combined_scene(output)
+        self.assertEqual([cell["form_id"] for cell in metadata["selected_cells"]], ["00000100", "00000102"])
+        self.assertEqual(metadata["source_coverage"]["geometry_triangles"], 3 * 32 * 32 * 2)
+        self.assertEqual(sum(obj["triangles"] for obj in provenance["objects"] if obj["layer"] == "Terrain"),
+                         3 * 32 * 32 * 2)
+        original = next(node for node in scene["nodes"] if node["name"] == "Original NAVM (current cell)")
+        self.assertEqual(len(original["children"]), 2)
+        self.assertFalse((output / "batch-report.json").exists())
+        self.assertFalse((output / "generated-navmesh.esp").exists())
+
+    def test_make_scene_copy_includes_final_candidates_and_generated_seams(self):
+        # No authored NAVM identities exist for the generated destination cells.
+        self.write_baseline({})
+        output = self.run_cli("--cells", "100,101", "--make-scene", "--copy-plugin",
+                              "--copy-plugin-source", "Patch.esp", "--batch-output", "plugin_only")
+        scene, provenance, metadata = self.read_combined_scene(output)
+        self.assertEqual([cell["form_id"] for cell in metadata["selected_cells"]], ["00000100", "00000101"])
+        names = [mesh["name"] for mesh in scene["meshes"]]
+        self.assertTrue(any(name.startswith("Candidate NAVM CELL 00000100") for name in names))
+        self.assertTrue(any(name.startswith("Candidate NAVM CELL 00000101") for name in names))
+        links = [obj for obj in provenance["objects"] if obj["layer"] == "NAVM links"]
+        self.assertGreater(len(links), 0)
+        self.assertTrue(all(obj["provenance"]["targetKind"] == "generated_cell" for obj in links))
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["status"], "complete")
+        self.assertTrue((output / "Patch.esp").exists())
+        self.assertFalse((output / "cells").exists())
+
+    def test_make_scene_preserves_skipped_authored_cells(self):
+        self.write_baseline({0: navm(0)})
+        output = self.run_cli("--cells", "100,101", "--generate-candidate", "--make-scene",
+                              "--skip-existing-navmesh")
+        scene, provenance, metadata = self.read_combined_scene(output)
+        names = [mesh["name"] for mesh in scene["meshes"]]
+        self.assertTrue(any(name.startswith("Existing NAVM 00000200") for name in names))
+        self.assertFalse(any(name.startswith("Candidate NAVM CELL 00000100") for name in names))
+        self.assertTrue(any(name.startswith("Candidate NAVM CELL 00000101") for name in names))
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual([cell["status"] for cell in report["cells"]], ["skipped_existing_navm", "generated"])
+        single = self.run_cli("--cell-formid", "100", "--generate-candidate", "--make-scene",
+                              "--skip-existing-navmesh", output="single-skipped-scene")
+        self.read_combined_scene(single)
+        self.assertFalse((single / "cells").exists())
+
+    def test_make_scene_generation_does_not_require_plugin_writing(self):
+        for policy in ["full", "compact"]:
+            with self.subTest(policy=policy):
+                output = self.run_cli("--cells", "100,102", "--make-scene", "--generate-candidate",
+                                      "--batch-output", policy, output=f"preview-scene-{policy}")
+                scene, _, _ = self.read_combined_scene(output)
+                self.assertTrue(any(mesh["name"].startswith("Candidate NAVM CELL 00000102") for mesh in scene["meshes"]))
+                self.assertFalse((output / "generated-navmesh.esp").exists())
+
+    def test_make_scene_failure_prevents_plugin_publishing(self):
+        for blocked in ["scene.glb", "scene.glb.provenance.json", "scene.glb.metadata.json"]:
+            with self.subTest(blocked=blocked):
+                output = self.root / blocked.replace(".", "-")
+                (output / blocked).mkdir(parents=True)
+                self.run_cli("--cells", "100,101", "--make-scene", "--generate-plugin",
+                              output=output.name, code=2)
+                self.assertFalse((output / "generated-navmesh.esp").exists())
+                self.assertEqual(json.loads((output / "batch-report.json").read_text())["status"], "failed")
+
+    def test_make_scene_rejects_non_cell_and_partial_run_options(self):
+        for arguments in [("--rebuild-plugin", "Patch.esp"), ("--rebuild-load-order",),
+                          ("--list-cells",), ("--cells", "100,101", "--generate-candidate", "--estimate-only")]:
+            with self.subTest(arguments=arguments):
+                self.run_cli(*arguments, "--make-scene", code=1)
+
+    def test_make_scene_is_optional_for_multiple_cell_inspection(self):
+        output = self.run_cli("--cells", "100,102")
+        self.assertFalse((output / "scene.glb").exists())
+        single = self.run_cli("--cells", "100", "--make-scene", output="single-scene")
+        self.read_combined_scene(single)
+
+    def test_cell_mode_copy_does_not_expand_selection_to_plugin_edits(self):
+        output = self.run_cli("--cells", "Exterior2", "--copy-plugin", "--copy-plugin-source", "Patch.esp")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["scope"], "cell")
+        self.assertEqual(report["plugin"], "Patch.esp")
+        self.assertEqual([cell["form_id"] for cell in report["cells"]], ["00000102"])
+
+    def test_cell_mode_generation_requires_generation_flag(self):
+        output = self.run_cli("--cells", "100,101", "--generate-candidate")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["scope"], "cell")
+        self.assertEqual(report["selected_cells"], 2)
+        self.assertTrue(all(cell["status"] == "generated" for cell in report["cells"]))
+        self.assertFalse((output / "generated-navmesh.esp").exists())
+        single = self.run_cli("--cells", "Exterior0", "--generate-candidate", output="single-preview")
+        self.assertTrue((single / "scene.glb").exists())
+        self.assertTrue((single / "candidate-navm.json").exists())
 
     def test_plugin_copy_preserves_records_header_and_source(self):
         selected = self.root / "Patch.esp"

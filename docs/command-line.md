@@ -6,10 +6,12 @@ This guide covers current commands, input resolution, exports, and implementatio
 
 Launch the executable without switches for the dark Dear ImGui desktop workspace.
 Select an existing MO2 folder and profile, choose a rebuild scope, and choose an
-output folder. **Cell** shows only the selected Form ID or editor ID input;
-**Plugin** shows the affected plugin and **Copy selected plugin**. Batch output
-and estimation appear for Plugin and Load order scopes. **List cells to file**
-is a separate action that writes `cells.json` without requiring a target.
+output folder. **Cell** shows a multiline **Cells** field accepting Form IDs
+and editor IDs. Its **Copy selected plugin** option reveals **Plugin to copy**
+with a filename input and Browse button. **Plugin** shows the affected plugin and
+**Copy selected plugin**. Generation lists and affected-cell scopes expose batch
+output and estimation. **List cells to file** writes `cells.json` without requiring
+a target.
 
 **Advanced settings** starts collapsed. It contains numerical analysis and
 performance controls, plus Recast agent, voxel, contour and region inputs when
@@ -103,6 +105,42 @@ plugin** in the Windows UI, or use `--copy-plugin`:
 NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --rebuild-plugin "<active plugin.esp>" --copy-plugin --output "<new output folder>"
 ```
 
+For a chosen set of cells, use **Cell** mode and paste identifiers into **Cells**. The CLI accepts `--cells` with whitespace, comma or semicolon
+separators, and repeated lists are combined:
+
+```powershell
+NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --cells "<cell Form ID>,<cell editor ID>" --copy-plugin-source "<active plugin.esp>" --copy-plugin --output "<new output folder>"
+```
+
+Each identifier must uniquely match a resolved hexadecimal Form ID or editor ID
+from `cells.json`; aliases are deduplicated before processing. These cells need
+not be affected by the copied plugin. `--copy-plugin-source` names the copy
+template without discovering additional targets or changing Cell scope. Without
+copying, omit the template filename. Use `--generate-plugin` for a NAVM-only patch or
+`--generate-candidate` for generated previews. Without either generation option,
+Cell mode inspects the list and writes multiple results beneath `cells/<FormID>/`.
+A single inspected cell retains the standard output paths. Unknown or ambiguous
+identifiers fail selection before processing. Single-cell selectors,
+`--rebuild-plugin`, `--rebuild-load-order` and `--list-cells` cannot be combined
+with `--cells`. Batch skip, estimation, output and resource settings apply to
+multi-cell generation and copy exports.
+
+Add `--make-scene` to a Cell-mode command to write one combined `<output>/scene.glb`
+with adjacent provenance and metadata JSON. It works with `--cells`, single-cell
+selectors, candidate generation and plugin copies, including `plugin_only` output.
+Generated meshes use their finalized seams, and shared source geometry is included
+once. For example:
+
+```powershell
+NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --cells "<cell identifiers>" --make-scene --output "<output folder>"
+```
+
+This flag does not enable generation. It requires Cell scope and cannot combine
+listing or cost estimation. Single-cell inspection emits its standard scene
+automatically. Independent interiors/worldspaces keep native coordinates and can
+overlap in the scene. Layer and provenance detail selections apply to the combined
+scene; custom export paths and bounds remain single-cell controls.
+
 This option enables plugin writing and creates `<output>/<selected filename>`
 with generated navigation and the selected plugin's other records. It preserves
 the filename, extension, TES4 flags, master order, and encoded non-NAVM records,
@@ -113,7 +151,7 @@ and input plugins are never overwritten. The UI saves this setting.
 Use the exported copy **in place of** the selected plugin, with its original
 assets and localization resources. It is a replacement plugin, while the
 default `--generate-plugin` export remains a separate NAVM-only patch. Copy mode
-requires Plugin scope and rejects generated references to plugins outside the
+requires Cell or Plugin scope and rejects generated references to plugins outside the
 source's existing master table. Winning geometry still comes from the full
 resolved load order. NAVI, XNDP, cover, and unmatched authored-link limitations
 also apply to the copy; retained records do not imply rebuilt navigation data.
@@ -173,7 +211,7 @@ The CLI writes files into the target output directory:
 - `input-report.json` — MO2 profile snapshot, emitted first for every MO2 run. Compact/plugin-only batches reference a shared loose-asset catalog; full inspection includes every winner.
 - `load-order.json` — full inspection of resolved inputs: every winning record with its plugin and ordered origin chain. Compact/plugin-only batches omit this table.
 - With `--generate-plugin`, `generated-navmesh.esp` overrides existing NAVM records or allocates new records for uncovered cells. The ESP receives the ESL flag when its master table and new identities fit a light plugin. Single-cell writing also generates candidate exports; batch writing follows `--batch-output`. The writer refuses to replace an existing output file and verifies every NAVM by reading it back.
-- With `--copy-plugin` in Plugin scope, the selected plugin's original filename is used for a complete copy with generated NAVMs. Source flags and master indices are preserved. `batch-report.json` records `copy_plugin`; when no eligible navigation is generated, no plugin is written.
+- With `--copy-plugin` in Cell or Plugin scope, the selected plugin's original filename is used for a complete copy with generated NAVMs. Source flags and master indices are preserved. `batch-report.json` records `copy_plugin`; when no eligible navigation is generated, no plugin is written.
 
 Every JSON export contains a versioned `metadata` block. OBJ and HTML exports have an adjacent `<export>.metadata.json` sidecar. The metadata identifies the tool version, input plugin, selected cell, coordinate convention, source coverage, and known limitations. Its schema is [docs/schemas/export-metadata.schema.json](schemas/export-metadata.schema.json); coordinate details are in [docs/coordinate-system.md](coordinate-system.md).
 

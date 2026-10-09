@@ -6,6 +6,14 @@ this reference.
 
 ## Code map
 
+- `navmesh::app::detail::CellScene`: optional complete Cell-selection scene
+  accumulation, source-triangle deduplication, authored navigation and exit joins,
+  and checked GLB/sidecar export. Storage retains native Skyrim coordinates.
+- `navmesh::core::SceneCandidate`: borrowed finalized candidate with an owning
+  CELL identity, used to resolve generated connections without plugin allocation.
+  `SceneExportResult::written` confirms GLB and provenance output success.
+  Combined scene metadata records its borrowed `selectedCells` selection.
+
 - `navmesh::core::detail::BuildRetainedRegionContours`: Recast contour coverage
   and shared-interface refinement, with layer recovery over already-retained
   spans when watershed contours remain incomplete. Recovery adds a warning.
@@ -92,16 +100,22 @@ this reference.
 - `navmesh::analysis`: spatial queries and navmesh discrepancy analysis.
 - `navmesh::validation`: cell validation findings.
 - `navmesh::app`: command-line options and the shared application runner.
+- `navmesh::app::ParseCellSelection`, `Options::cellSelection`, `UsesBatchGeneration`:
+  shared Cell-mode list parsing and coordinated generation dispatch. Identifiers are Form
+  IDs or editor IDs; unknown or ambiguous matches fail before generation, and
+  aliases deduplicate by resolved CELL identity.
 - `navmesh::ui::RunWindowsUi`: dark Dear ImGui desktop host, persisted MO2
   controls, background shared-run execution, progress and safe cancellation.
 - `navmesh::ui::PrepareDesktopOptions`: rendering-independent contextual option
-  preparation for cell, plugin, load-order and catalog-export actions.
+  preparation for cell lists, plugin, load-order and catalog-export actions.
 - `navmesh::ui::ResetAdvancedNumericalOptions`: restores shared numerical
   defaults throughout the desktop draft, including hidden controls; the desktop
   persists the result through its ordinary settings writer.
 - `navmesh::core::RecastSettings`, `NavigationProfile` and `ValidateRecastSettings`:
   shared movement, voxel, contour and region controls with finite/range validation.
-- `navmesh::app::detail::RunBatch`: affected-cell orchestration with bounded
+- `navmesh::app::detail::ResolveCellSelection`: unique Form ID/editor ID resolution
+  against a shared snapshot, reused by Cell inspection and coordinated generation.
+- `navmesh::app::detail::RunBatch`: affected or explicitly selected cell orchestration with bounded
   geometry reuse and combined plugin writer dispatch.
 - `navmesh::app::detail` geometry-pipeline helpers: world-space extraction
   composition, bounds filtering of support and display geometry, and analysis

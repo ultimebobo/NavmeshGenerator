@@ -65,6 +65,8 @@ target("navmesh-tests")
     add_files("src/skyrim/extraction/bsa_archive.cpp", "src/skyrim/extraction/collision_impact.cpp")
     add_packages("zlib", "lz4")
     add_files("src/ui/options_model.cpp")
+    add_files("src/app/options.cpp")
+    add_files("src/app/cell_scene.cpp")
 
 -- Development-only probe for archive differential tests and stage benchmarks.
 target("navmesh-bsa-probe")
