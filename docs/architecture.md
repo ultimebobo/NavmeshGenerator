@@ -84,12 +84,17 @@ geometry and a neutral candidate navmesh. The shared CLI/Windows run path uses
 `RecastCandidateGenerator` from the Recast Navigation submodule. It accepts only
 terrain and supported collision triangles, converts Skyrim Z-up world positions
 to Recast Y-up coordinates, rasterizes a supported exterior halo around the target CELL,
+repairs radius-bounded unsupported seams between climb-compatible standing floors,
 filters walkable spans, erodes them by
 agent radius, then builds regions, contours, a polygon mesh and floor-height
 detail triangles. Authoritative vertical collision faces remain rasterization
 input as obstructions. Skyrim extraction tags landscape rock assets as obstacle-only
 sources; the neutral rasterizer retains their solids but excludes their tops even
-when low-obstacle promotion or terrain overlap could make them walkable. Height
+when low-obstacle promotion or terrain overlap could make them walkable. Raster
+seam repair checks solid obstruction and clearance against the unchanged field
+before proposing crossings, preventing repairs from chaining across wider voids.
+Skyrim extraction excludes operable door models while retaining door metadata
+and separate static architectural geometry. Height
 detail samples the surviving compact heightfield with movement-bounded error;
 convex contour polygons merge before sampling. Contour construction refines the
 requested error when a retained voxel region would collapse. Every region uses

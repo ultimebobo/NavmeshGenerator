@@ -117,6 +117,8 @@ namespace navmesh::skyrim
     /// @return Geometry and per-reference failures, with archiveSearchComplete distinguishing absence from lookup failure.
     /// navigationOnly excludes render-only support.
     /// Landscape rock assets are tagged as navigation obstacles while retaining their collision geometry.
+    /// Operable DOOR models are excluded from permanent support and obstruction;
+    /// static frames and thresholds remain eligible, and exit metadata is handled by callers.
     [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path &dataDirectory, const core::Cell &cell,
                                                      const std::filesystem::path &cacheDirectory = {},
                                                      const GeometryProgressCallback &progress = {},

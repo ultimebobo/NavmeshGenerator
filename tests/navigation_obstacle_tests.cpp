@@ -16,6 +16,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -313,6 +314,45 @@ namespace
         assert(candidate.mesh.polygons.size() == 2);
     }
 
+    void CheckFloorSeams(RegionPartitioningAlgorithm partitioning)
+    {
+        // Separated collision pieces model a landing and a first tread. Repairs
+        // must retain shared-edge routes while obeying solid, climb and clearance limits.
+        for (const auto [gap, rise, obstruction, connected] :
+             {std::tuple{8.0F, 24.0F, 0, true}, std::tuple{48.0F, 24.0F, 0, false}, std::tuple{8.0F, 64.0F, 0, false},
+              std::tuple{8.0F, 24.0F, 1, false}, std::tuple{8.0F, 24.0F, 2, false}, std::tuple{8.0F, 24.0F, 3, false}})
+        {
+            ObstacleFixture fixture;
+            const auto floor = AddSource(fixture, "separated floor pieces");
+            AddBox(fixture, floor, {}, {-256, -128, -32}, {0, 128, 0});
+            AddBox(fixture, floor, {}, {gap, -128, -32}, {gap + 256, 128, rise});
+            if (obstruction == 1)
+            {
+                AddBox(fixture, floor, {}, {0, -128, 0}, {gap, 128, 256});
+            }
+            else if (obstruction == 2)
+            {
+                AddBox(fixture, floor, {}, {-32, -128, 96}, {gap + 32, 128, 112});
+            }
+            else if (obstruction == 3)
+            {
+                const auto solid = AddSource(fixture, "excluded solid in seam");
+                fixture.scene.geometrySources[solid].navigationObstacle = true;
+                AddBox(fixture, solid, {}, {0, -128, -32}, {gap, 128, rise});
+            }
+            AddEntrance(fixture, {-128, 0, 0});
+            AddEntrance(fixture, {gap + 128, 0, rise});
+            const auto candidate =
+                RecastCandidateGenerator{}.Generate(fixture.scene, {}, std::nullopt, fixture.entrances, partitioning);
+            assert(candidate.topology.valid);
+            const auto first = SurfaceRegion(candidate, {-128, 0, 0});
+            const auto second = SurfaceRegion(candidate, {gap + 128, 0, rise});
+            assert(first && second);
+            assert((first == second) == connected);
+            assert(SurfaceRegion(candidate, {gap / 2, 0, rise}).has_value() == connected);
+        }
+    }
+
     void CheckObstacleOnlyCollision(RegionPartitioningAlgorithm partitioning)
     {
         ObstacleFixture fixture;
@@ -355,6 +395,7 @@ void TestNavigationObstacleFixture()
                                     RegionPartitioningAlgorithm::Layers})
     {
         CheckCompactStraightFlight(partitioning);
+        CheckFloorSeams(partitioning);
         CheckObstacleOnlyCollision(partitioning);
         const auto candidate = generator.Generate(fixture.scene, {}, std::nullopt, fixture.entrances, partitioning);
         CheckObstacleFixture(fixture, candidate);

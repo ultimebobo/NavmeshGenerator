@@ -20,6 +20,22 @@ The policy leaves architectural stone and terrain eligible for navigation.
 Candidate source evidence records the obstacle tag, and obstacle triangles are
 counted in `rejected_obstruction`.
 
+Operable DOOR references do not supply permanent collision or render geometry:
+their closed model pose would obstruct an intended portal. Extraction records
+them as excluded while preserving reference metadata for exit matching. Static
+door frames, thresholds and adjoining floors remain eligible geometry.
+
+Before ledge rejection, standing-clearance filtering and radius erosion, the
+adapter repairs narrow unsupported raster seams between collision pieces. Both
+endpoints must be supported standing floors within the profile's climb limit.
+The unsupported width is bounded by the agent radius at the effective voxel
+resolution. Inserted columns use the higher endpoint's floor and require clear
+standing volume; nonwalkable solids reaching the crossing height block repair.
+Proposals inspect the unchanged heightfield, so repairs cannot chain across a
+wider void. Ordinary walkability filters still apply to the completed field.
+Candidate warnings report repaired columns. This automatic stage uses the same
+movement and voxel settings in single-cell and batch generation.
+
 Region partitioning defaults to watershed; the
 CLI and Windows UI also expose monotone and layer partitioning. The selected
 strategy is recorded in `candidate-navm.json`. It exports Recast height-detail triangles for the neutral

@@ -503,7 +503,10 @@ namespace
         // These classes are not stable solid scene support.  The policy is
         // intentionally conservative until their collision semantics are
         // modelled explicitly.
-        if (reference.recordType == "ACHR" || reference.baseRecordType == "FURN")
+        // Operable doors are traversable portals. Their closed model pose cannot
+        // supply permanent obstruction or floor evidence; surrounding static
+        // frames and thresholds remain separate collision placements.
+        if (reference.recordType == "ACHR" || reference.baseRecordType == "FURN" || reference.baseRecordType == "DOOR")
         {
             return true;
         }
@@ -801,7 +804,8 @@ namespace navmesh::skyrim
             }
             if (IsFilteredReference(reference) || IsVisualEffectModel(reference.modelPath))
             {
-                report.failure = "excluded by navigation policy (effect, furniture, animated, or actor reference)";
+                report.failure =
+                    "excluded by navigation policy (effect, furniture, door, animated, or actor reference)";
                 output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
                 ++output.modelsExcluded;
                 output.references.push_back(std::move(report));

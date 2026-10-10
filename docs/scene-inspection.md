@@ -100,6 +100,11 @@ uses the winning record's flags, so a later plugin can enable or disable an
 earlier placement without a height-based scene filter. An initially disabled
 reference that a quest enables at runtime is outside the default scene.
 
+Operable DOOR models are also omitted from collision and render geometry and
+recorded as `excluded` in coverage. Their closed pose does not define a permanent
+wall. Door reference and teleport metadata remain available for candidate exit
+matching; separate static frames, thresholds and floors remain eligible.
+
 When a model has supported collision and a render mesh, collision remains the
 only geometry used for navmesh analysis. Its render mesh is additionally placed
 in `Render fallback` for visual comparison in the 3D viewer; it is display-only

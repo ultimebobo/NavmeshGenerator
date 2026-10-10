@@ -1688,6 +1688,26 @@ namespace
         Require(std::abs(rotated.scene.mesh.vertices[1].y + skyrimUnitsPerHavokUnit) < 0.01F);
         Require(std::abs(rotated.scene.renderFallbackMesh.vertices[1].x) < 1.0e-4F);
         Require(std::abs(rotated.scene.renderFallbackMesh.vertices[1].y + 1.0F) < 1.0e-4F);
+
+        // The same collision asset has different navigation semantics when its
+        // base record is an operable door. Test both extraction paths and keep
+        // teleport metadata available to the caller for exit matching.
+        cell.references.front().baseRecordType = "DOOR";
+        cell.references.front().teleportExit = true;
+        for (const bool navigationOnly : {false, true})
+        {
+            const auto door =
+                navmesh::skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, navigationOnly);
+            Require(door.modelsExcluded == 1 && door.modelsMissing == 0);
+            Require(door.scene.mesh.triangles.empty() && door.scene.renderFallbackMesh.triangles.empty());
+            Require(door.scene.coverage.size() == 1 &&
+                    door.scene.coverage.front().status == navmesh::core::GeometryCoverage::Excluded);
+            Require(door.scene.coverage.front().source.baseObject.recordType == "DOOR");
+            Require(cell.references.front().teleportExit);
+        }
+        cell.references.front().baseRecordType = "STAT";
+        const auto staticFrame = navmesh::skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
+        Require(staticFrame.collisionModelsLoaded == 1 && staticFrame.scene.mesh.triangles.size() == 1);
     }
 
     void TestSceneTransforms()

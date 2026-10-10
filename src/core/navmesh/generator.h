@@ -80,7 +80,10 @@ namespace navmesh::core
          * over the already-retained spans, reported in warnings. Coarse polygon winding,
          * convexity and directed edges are validated before sampling; folded partitions
          * trigger shared contour refinement and watershed layer recovery. Obstacle-only sources cannot supply
-         * walkable floors. Retain only components with a shared-edge path to a matched door or exterior
+         * walkable floors. Unsupported raster seams within the agent radius can join
+         * climb-compatible standing floors when intervening solids permit clearance.
+         * Repairs precede walkability filters and cannot chain across wider voids.
+         * Retain only components with a shared-edge path to a matched door or exterior
          * boundary edge as provisional anchors under Anchored retention. AllWalkable
          * keeps unanchored floors for whole-batch stitching.
          * @param scene Geometry with complete triangle provenance in Skyrim world coordinates.

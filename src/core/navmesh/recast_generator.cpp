@@ -15,6 +15,7 @@
 #include <memory>
 #include <queue>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -570,10 +571,125 @@ namespace
         detail.ntris = static_cast<int>(triangles.size() / 4);
     }
 
+    /// A supported endpoint needs standing clearance; nonwalkable solids never anchor a seam.
+    [[nodiscard]] bool HasStandingFloor(const rcSpan &span, int height)
+    {
+        const int ceiling = span.next ? span.next->smin : RC_SPAN_MAX_HEIGHT;
+        return span.area != RC_NULL_AREA && ceiling - static_cast<int>(span.smax) >= height;
+    }
+
+    /// Find a climb-compatible floor in one column without substituting a stacked level.
+    [[nodiscard]] const rcSpan *FindSeamFloor(const rcSpan *column, int floor, const rcConfig &config)
+    {
+        const rcSpan *closest = nullptr;
+        int difference = config.walkableClimb + 1;
+        for (auto *span = column; span; span = span->next)
+        {
+            const int delta = std::abs(static_cast<int>(span->smax) - floor);
+            if (delta < difference && HasStandingFloor(*span, config.walkableHeight))
+            {
+                closest = span;
+                difference = delta;
+            }
+        }
+        return closest;
+    }
+
+    /** Bridge only short unsupported raster seams between two standing floors.
+     * The unsupported width cannot exceed the agent's footprint radius. Both
+     * endpoints must fit the climb limit, and every inserted column must have
+     * unobstructed standing volume. The higher endpoint supplies the seam height,
+     * so the crossing is a bounded step rather than a fabricated deep floor.
+     * Proposals read the original field: repairs cannot chain across a wider void.
+     * Ledge, clearance and radius filtering still run on the completed field.
+     */
+    std::size_t BridgeRasterFloorSeams(rcContext &context, rcHeightfield &field, const rcConfig &config, float radius)
+    {
+        const int maximumGap = static_cast<int>(std::floor(radius / config.cs));
+        if (maximumGap == 0)
+        {
+            return 0;
+        }
+        using Seam = std::tuple<int, int, int>;
+        std::map<Seam, unsigned char> additions;
+        for (int y{}; y < field.height; ++y)
+        {
+            for (int x{}; x < field.width; ++x)
+            {
+                for (auto *start = field.spans[x + y * field.width]; start; start = start->next)
+                {
+                    if (!HasStandingFloor(*start, config.walkableHeight))
+                    {
+                        continue;
+                    }
+                    for (const auto [dx, dy] : {std::pair{1, 0}, std::pair{0, 1}})
+                    {
+                        for (int distance = 1; distance <= maximumGap + 1; ++distance)
+                        {
+                            const int endX = x + dx * distance;
+                            const int endY = y + dy * distance;
+                            if (endX >= field.width || endY >= field.height)
+                            {
+                                break;
+                            }
+                            const auto *end =
+                                FindSeamFloor(field.spans[endX + endY * field.width], start->smax, config);
+                            if (!end)
+                            {
+                                continue;
+                            }
+                            if (distance == 1)
+                            {
+                                break;
+                            }
+                            const int floor = static_cast<int>(std::max(start->smax, end->smax));
+                            const int lowerFloor = static_cast<int>(std::min(start->smax, end->smax));
+                            bool clear = true;
+                            for (int offset = 1; offset < distance && clear; ++offset)
+                            {
+                                const int column = x + dx * offset + (y + dy * offset) * field.width;
+                                for (auto *solid = field.spans[column]; solid; solid = solid->next)
+                                {
+                                    if ((static_cast<int>(solid->smax) > floor &&
+                                         static_cast<int>(solid->smin) < floor + config.walkableHeight) ||
+                                        (solid->area == RC_NULL_AREA && static_cast<int>(solid->smax) >= lowerFloor &&
+                                         static_cast<int>(solid->smin) <= floor))
+                                    {
+                                        clear = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (clear)
+                            {
+                                for (int offset = 1; offset < distance; ++offset)
+                                {
+                                    additions.try_emplace(Seam{x + dx * offset, y + dy * offset, floor},
+                                                          static_cast<unsigned char>(start->area));
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        for (const auto &[seam, area] : additions)
+        {
+            const auto [x, y, floor] = seam;
+            if (!rcAddSpan(&context, field, x, y, static_cast<unsigned short>(std::max(0, floor - 1)),
+                           static_cast<unsigned short>(floor), area, 0))
+            {
+                throw std::runtime_error("Recast floor seam allocation failed");
+            }
+        }
+        return additions.size();
+    }
+
     /// Own all Recast intermediates; retain height samples in a detail mesh or throw a stage-specific error.
     [[nodiscard]] RecastOwner<rcPolyMeshDetail, rcFreePolyMeshDetail> BuildRecastDetailMesh(
         const RecastInput &input, const rcConfig &config, RegionPartitioningAlgorithm partitioningAlgorithm,
-        CandidateStatistics &statistics, std::vector<std::string> &warnings)
+        CandidateStatistics &statistics, std::vector<std::string> &warnings, float agentRadius)
     {
         const auto &vertices = input.vertices;
         const auto &triangles = input.triangles;
@@ -628,6 +744,15 @@ namespace
                     span->area = RC_NULL_AREA;
                 }
             }
+        }
+        // Tiny seams between collision pieces must have supported crossings
+        // before ledge rejection and erosion expand them into disconnected rooms.
+        const auto bridged = BridgeRasterFloorSeams(context, *heightfield, config, agentRadius);
+        if (bridged != 0)
+        {
+            warnings.push_back(std::format("Recast bridged {} narrow raster seam columns between climb-compatible "
+                                           "floors with unobstructed standing clearance.",
+                                           bridged));
         }
         rcFilterLedgeSpans(&context, config.walkableHeight, config.walkableClimb, *heightfield);
         rcFilterWalkableLowHeightSpans(&context, config.walkableHeight, *heightfield);
@@ -1132,8 +1257,8 @@ namespace navmesh::core
         }
 
         // Voxelize, partition, and restore a neutral mesh before attaching evidence.
-        const auto detailMesh =
-            BuildRecastDetailMesh(input, config, partitioningAlgorithm, result.statistics, result.warnings);
+        const auto detailMesh = BuildRecastDetailMesh(input, config, partitioningAlgorithm, result.statistics,
+                                                      result.warnings, profile.agentRadius);
         result.mesh = ConvertRecastMesh(*detailMesh);
         if (cellBounds)
         {

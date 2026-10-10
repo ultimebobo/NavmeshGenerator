@@ -95,6 +95,8 @@ this reference.
   patches merge before sampling; collapsed regions trigger contour refinement.
   `GeometrySource::navigationObstacle` excludes tagged solids from walkable floors
   while retaining obstruction evidence. Skyrim extraction tags landscape rock assets.
+  Unsupported raster seams can be repaired within the agent radius between
+  climb-compatible standing floors, subject to solid obstruction and clearance.
   Candidate warnings identify adaptive voxel width and climb quantization.
 - `navmesh::core::StitchCandidateBorders`: matches complete neighboring edges and
   reconciles authored partitions before deferred batch linking, including cells
