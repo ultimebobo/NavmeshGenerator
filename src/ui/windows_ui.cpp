@@ -1,6 +1,7 @@
 #include "ui/windows_ui.h"
 #include "app/run.h"
 #include "ui/options_model.h"
+#include "ui/windows_resources.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -1040,18 +1041,25 @@ int navmesh::ui::RunWindowsUi(const app::Options &initialOptions)
     const auto com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     ImGui_ImplWin32_EnableDpiAwareness();
     DesktopHost host;
+    const auto instance = GetModuleHandleW(nullptr);
+    const auto largeIcon =
+        static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_NAVMESH_GENERATOR), IMAGE_ICON,
+                                      GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_SHARED));
+    const auto smallIcon =
+        static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_NAVMESH_GENERATOR), IMAGE_ICON,
+                                      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
     const WNDCLASSEXW klass{sizeof(WNDCLASSEXW),
                             CS_CLASSDC,
                             WindowProcedure,
                             0,
                             0,
-                            GetModuleHandleW(nullptr),
-                            nullptr,
+                            instance,
+                            largeIcon,
                             LoadCursor(nullptr, IDC_ARROW),
                             nullptr,
                             nullptr,
                             L"NavmeshGeneratorWorkspace",
-                            nullptr};
+                            smallIcon};
     if (!RegisterClassExW(&klass))
     {
         if (SUCCEEDED(com))

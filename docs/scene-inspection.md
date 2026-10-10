@@ -112,6 +112,9 @@ human-readable view of the same `analysis.json` → `geometry.json` join.
 
 ## Online 3D Viewer
 
+For still images of exported scenes, see the
+[scene image rendering guide](render-media.md).
+
 Open [Online 3D Viewer](https://3dviewer.net/), then drag `scene.glb` onto the
 page (or use its Open button). The viewer supports binary GLB and locally opened
 models are processed in the browser according to its

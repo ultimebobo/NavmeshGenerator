@@ -1,0 +1,3 @@
+#include "windows_resources.h"
+
+IDI_NAVMESH_GENERATOR ICON "assets/navmesh-generator.ico"
