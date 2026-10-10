@@ -20,7 +20,7 @@ namespace navmesh::app::detail
         // This identity versions both storage and successful generation semantics.
         // Change its pipeline revision when successful output becomes incompatible;
         // executable rebuilds alone must not discard completed generation work.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-6/recast-pipeline-18";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-6/recast-pipeline-20";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)

@@ -77,7 +77,9 @@ namespace navmesh::core
          * Convex patches share height detail with approximation error bounded by the larger
          * of climb and vertical voxel size. Contour error is refined if a retained voxel
          * region would collapse. Unrepresentable watershed contours trigger layer recovery
-         * over the already-retained spans, reported in warnings. Obstacle-only sources cannot supply
+         * over the already-retained spans, reported in warnings. Coarse polygon winding,
+         * convexity and directed edges are validated before sampling; folded partitions
+         * trigger shared contour refinement and watershed layer recovery. Obstacle-only sources cannot supply
          * walkable floors. Retain only components with a shared-edge path to a matched door or exterior
          * boundary edge as provisional anchors under Anchored retention. AllWalkable
          * keeps unanchored floors for whole-batch stitching.

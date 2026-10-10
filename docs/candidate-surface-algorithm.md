@@ -29,12 +29,14 @@ while larger extracted areas can lose them. The navigation profile supplies
 traversable climb and other movement limits. The shared CLI/UI advanced settings
 configure requested horizontal and vertical voxel sizes, contour simplification
 error, optional maximum edge length and merge-area multiplier. Contour error is
-an upper bound: if simplification collapses a surviving voxel region, construction
-retries the complete contour set at finer tolerance until every retained region
-has a contour. Neighboring regions share one simplification pass, preserving their
+an upper bound: if simplification collapses a surviving voxel region or produces
+inverted or nonconvex coarse polygons, construction retries the complete contour
+set at finer tolerance until every retained region has a consistent mesh.
+Coarse polygons must have the expected Recast winding and cannot reuse a directed
+edge on the same floor. Neighboring regions share one simplification pass, preserving their
 common interfaces without overlapping coarse and fine boundaries.
 Recast can collapse a watershed region enclosed by one other region even at zero
-contour error. If refinement cannot represent every retained region, the adapter
+contour error. If refinement cannot produce consistent polygons for every retained region, the adapter
 repartitions the already-retained spans with layer partitioning and rebuilds the
 complete contour set. Recovery preserves the initial walkability and island
 filtering decisions, and reports its use in candidate warnings; the recorded
@@ -105,13 +107,24 @@ and the untouched interior rim. Its repair depth follows the authored floor
 triangle, with height matching accounting for authored endpoint drift. Dynamic
 programming considers alternative diagonals and bounds replacement slopes by the
 configured limit or the existing generated cavity's slope envelope, whichever is
-greater. Near-coincident endpoints align through their incident fans before cavity
+greater; required crossings also retain the selected authored floor's envelope.
+Terminal chains can end short of a portal or turn into the cell: endpoint projection
+and the authored floor's repair bounds select the complete cavity.
+Near-coincident endpoints align through their incident fans before cavity
 construction. Removed seam height detail can become a bounded interior sample
 when rim-only triangulation cannot preserve the floor's slope envelope. Cavity
 growth includes incident triangles reaching the repair band through a vertex;
 their centroids need not be inside it. Source contributors, region membership, door anchors, and other portals
 are remapped transactionally. Missing required crossings fail final validation
 and prevent that candidate's plugin export, including when no candidate floor survives.
+The shared Cell runner supplies generation input to identify authored crossings
+onto excluded obstacle collision. When no compatible generated boundary floor
+survives, positive upward collision support at both interior anchor samples closes
+that crossing with a warning. Render fallback, untagged collision and missing source
+evidence cannot waive a required crossing. Plugin export removes its incoming links.
+At shared CELL corners, separate authored endpoint heights join through internal
+step edges. Strip samples move into supported floor within the strip inset and
+share a slope-bounded plane; the interior floor retains its sampled heights.
 Single-cell generation fails export on invalid topology. Plugin and load-order
 batches skip cell-local generation/topology failures and preserve those cells as
 authored neighbors. Complete successful candidates are reconciled together;
@@ -181,7 +194,11 @@ Removed triangles contribute to `rejected_unreachable`.
 Recast height-detail patches are checked before the compact heightfield is released.
 An overlapping patch is retriangulated with its original boundary and floor samples;
 valid patches keep their triangulation. Exact sampled endpoints remain shared with
-neighboring patches. Repair does not reuse authored geometry.
+neighboring patches. Repair does not reuse authored geometry. The repaired detail
+edges are checked again; unresolved overlaps fail generation. Coarse partition
+validation precedes detail sampling because normalizing an inverted coarse face
+can put it on the same side of a shared edge as its neighbor. Those coplanar
+triangles overlap in horizontal area even when a scene viewer displays a continuous floor.
 
 Source-triangle provenance is recovered by the closest source height at each
 generated triangle's XY centroid. This is an approximate audit join after

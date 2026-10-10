@@ -6,6 +6,13 @@ this reference.
 
 ## Code map
 
+- `navmesh::core::StitchCandidateBorders`: transactional authored portal repair,
+  including terminal boundary chains, authored floor slope envelopes and shared
+  corner height offsets. Optional generation-scene evidence identifies crossings
+  onto excluded obstacle collision; only positive interior support together with
+  an absent compatible boundary floor can close such a crossing with a warning.
+  Unresolved required crossings remain validation failures.
+
 - `navmesh::core::RemoveCandidateIslands`: complete-set floor reachability after
   generated seam linking. Retains matched-door/authored-neighbor access and the
   largest network in each contiguous exterior selection or interior; removes
@@ -24,6 +31,10 @@ this reference.
 - `navmesh::core::detail::BuildRetainedRegionContours`: Recast contour coverage
   and shared-interface refinement, with layer recovery over already-retained
   spans when watershed contours remain incomplete. Recovery adds a warning.
+- `navmesh::core::detail::BuildRetainedRegionMesh`: coarse polygon construction
+  with clockwise convex floor footprints and consistent directed edges. Refines
+  the complete contour partition and permits watershed layer recovery over retained spans.
+  `HasConsistentRegionMesh` checks the coarse mesh without modifying it.
 
 - `navmesh::core::ValidateRecastSceneHeightRange`: validates supported,
   generation-clipped scene heights against Recast's packed raster span range;

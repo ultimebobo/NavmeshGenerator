@@ -2275,7 +2275,119 @@ namespace
     {
         float depth;
         float heightTolerance;
+        /// Required portals also retain the selected authored floor's slope envelope.
+        float maxSlopeDegrees{};
     };
+
+    /** Index positively identified obstacle collision for authored floor checks.
+     * Invalid vertex indices are omitted, preserving a dense triangle/entry join.
+     * Render evidence and untagged collision do not establish excluded support.
+     */
+    navmesh::analysis::SpatialIndex BuildExcludedCollisionIndex(const Scene *scene)
+    {
+        navmesh::analysis::SpatialIndex result;
+        if (!scene)
+        {
+            return result;
+        }
+        if (!scene->HasCompleteTriangleProvenance())
+        {
+            throw std::invalid_argument("Authored border obstacle checks require complete triangle provenance");
+        }
+        std::vector<Triangle> excluded;
+        for (std::size_t index{}; index < scene->mesh.triangles.size(); ++index)
+        {
+            const auto &source = scene->geometrySources[scene->triangleProvenance[index].geometrySource];
+            const auto &triangle = scene->mesh.triangles[index];
+            const bool valid = std::all_of(triangle.vertices.begin(), triangle.vertices.end(),
+                                           [&](auto vertex) { return vertex < scene->mesh.vertices.size(); });
+            if (source.sourceType == GeometrySourceType::Collision && source.navigationObstacle && valid)
+            {
+                excluded.push_back(triangle);
+            }
+        }
+        if (!excluded.empty())
+        {
+            result.Build(excluded, scene->mesh.vertices);
+        }
+        return result;
+    }
+
+    /// Look for surviving generated boundary floor at the authored crossing's height.
+    template <class Border>
+    bool HasPortalBoundarySupport(const NavMesh &mesh, Vec3 first, Vec3 last, const Border &border, float maximumGap,
+                                  float heightTolerance)
+    {
+        const auto side = border(first, last, AuthoredBorderTolerance);
+        const auto direction = last - first;
+        const auto lengthSquared = direction.x * direction.x + direction.y * direction.y;
+        if (lengthSquared <= 0.01F)
+        {
+            return false;
+        }
+        const auto projection = [&](Vec3 point)
+        { return ((point.x - first.x) * direction.x + (point.y - first.y) * direction.y) / lengthSquared; };
+        for (const auto &face : mesh.polygons)
+        {
+            for (std::uint8_t edge{}; edge < 3; ++edge)
+            {
+                const auto a = mesh.vertices[face.vertices[edge]];
+                const auto b = mesh.vertices[face.vertices[(edge + 1) % 3]];
+                const auto start = projection(a);
+                const auto end = projection(b);
+                if (face.neighbors[edge] != NoNeighbor || border(a, b, maximumGap) != side || end <= start ||
+                    end <= 0 || start >= 1)
+                {
+                    continue;
+                }
+                const auto midpoint = (std::max(start, 0.0F) + std::min(end, 1.0F)) * 0.5F;
+                const auto fraction = (midpoint - start) / (end - start);
+                const auto point = Interpolate(a, b, fraction);
+                if (std::abs(point.z - Interpolate(first, last, std::clamp(projection(point), 0.0F, 1.0F)).z) <=
+                    heightTolerance)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Confirm that the authored floor's interior anchor rests on excluded collision tops.
+     * Both interior samples need upward floor evidence near the authored height.
+     * An absent model, render fallback or unsupported floor cannot satisfy this test.
+     */
+    bool HasExcludedFloorAnchor(const navmesh::analysis::SpatialIndex &obstacles, Vec3 opposite, Vec3 midpoint,
+                                const NavigationProfile &profile, float heightTolerance)
+    {
+        for (const auto sample : {opposite, Interpolate(opposite, midpoint, 0.25F)})
+        {
+            AABB bounds{
+                .min = {sample.x - profile.weldTolerance, sample.y - profile.weldTolerance, sample.z - heightTolerance},
+                .max = {sample.x + profile.weldTolerance, sample.y + profile.weldTolerance,
+                        sample.z + heightTolerance}};
+            bool supported{};
+            for (const auto index : obstacles.QueryAABB(bounds))
+            {
+                const auto &face = obstacles.entries[index].triangle;
+                const auto a = obstacles.vertices[face.vertices[0]];
+                const auto b = obstacles.vertices[face.vertices[1]];
+                const auto c = obstacles.vertices[face.vertices[2]];
+                float height{};
+                if (Cross2(a, b, c) > 0.01F && HeightAt(sample, a, b, c, height) &&
+                    std::abs(height - sample.z) <= heightTolerance)
+                {
+                    supported = true;
+                    break;
+                }
+            }
+            if (!supported)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /** Resolve selected-cell exterior links through their reciprocal neighboring edges.
      * A geometric edge match supplies the target only when the return entry is absent.
@@ -2283,8 +2395,10 @@ namespace
      */
     template <class Border>
     auto ResolveAuthoredBorderPortals(const std::vector<NavMesh> &authored, const std::vector<NavMesh> &neighbors,
-                                      const Border &border, const NavigationProfile &profile, float maximumGap)
+                                      const Border &border, CandidateNavMesh &candidate, float maximumGap,
+                                      const navmesh::analysis::SpatialIndex &obstacles)
     {
+        const auto &profile = candidate.profile;
         const auto distance = [](Vec3 a, Vec3 b) { return std::hypot(std::hypot(a.x - b.x, a.y - b.y), a.z - b.z); };
         // Reciprocal identities disambiguate stacked floors and short corners.
         std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint8_t>, BorderCavityLimits> required;
@@ -2340,8 +2454,17 @@ namespace
                     const auto length = std::hypot(d.x - c.x, d.y - c.y);
                     const auto depth = length > 0 ? std::abs(Cross2(c, d, opposite)) / length : maximumGap;
                     const auto heights = profile.stepHeight + std::max(std::abs(a.z - c.z), std::abs(b.z - d.z));
+                    if (!HasPortalBoundarySupport(candidate.mesh, c, d, border, maximumGap, heights) &&
+                        HasExcludedFloorAnchor(obstacles, opposite, (a + b) * 0.5F, profile, heights))
+                    {
+                        candidate.warnings.push_back(std::format(
+                            "Closed authored border portal {:08X}:{}:{}: its floor is excluded obstacle collision.",
+                            neighbor->id, link.targetPolygon, *targetEdge));
+                        continue;
+                    }
                     required.emplace(std::tuple{neighbor->id, link.targetPolygon, *targetEdge},
-                                     BorderCavityLimits{std::max(maximumGap, depth), heights});
+                                     BorderCavityLimits{std::max(maximumGap, depth), heights,
+                                                        BorderFloorProfile(a, b, opposite, profile).maxSlopeDegrees});
                 }
             }
         }
@@ -2564,14 +2687,45 @@ namespace
                     point->y += cellSide == 2 ? inset : -inset;
                 }
             }
-            const auto firstHeight = floorHeight(innerFirst);
-            const auto lastHeight = floorHeight(innerLast);
+            auto firstHeight = floorHeight(innerFirst);
+            auto lastHeight = floorHeight(innerLast);
+            // A terminal portal can extend past the generated boundary. Move its
+            // interior sample along the portal into supported floor, keeping the
+            // complete exterior edge and bounding the shift by the strip inset.
+            const auto length = std::hypot(b.x - a.x, b.y - a.y);
+            const auto fraction = length > 0 ? std::min(inset / length, 0.25F) : 0.0F;
+            const auto originalFirst = innerFirst;
+            const auto beforePoint = revised.vertices[before];
+            const auto afterPoint = revised.vertices[after];
+            if (!firstHeight || (beforePoint.x == a.x && beforePoint.y == a.y))
+            {
+                innerFirst = Interpolate(innerFirst, innerLast, fraction);
+                firstHeight = floorHeight(innerFirst);
+            }
+            if (!lastHeight || (afterPoint.x == b.x && afterPoint.y == b.y))
+            {
+                innerLast = Interpolate(innerLast, originalFirst, fraction);
+                lastHeight = floorHeight(innerLast);
+            }
             if (!firstHeight || !lastHeight || (innerFirst.x == a.x && innerFirst.y == a.y) ||
                 (innerLast.x == b.x && innerLast.y == b.y))
             {
                 continue;
             }
             const auto originalSize = static_cast<std::uint32_t>(revised.vertices.size());
+            // Raise or lower the strip's interior samples toward the supporting
+            // floor within the portal's slope envelope. The remaining height
+            // difference is represented by the climb-compatible internal edge.
+            const auto gradient = (b.z - a.z) / length;
+            const auto limit = std::tan(profile.maxSlopeDegrees * 3.14159265358979323846F / 180.0F);
+            const auto perpendicular = std::sqrt(std::max(0.0F, limit * limit - gradient * gradient));
+            const auto firstDistance = std::abs(Cross2(a, b, innerFirst)) / length;
+            const auto lastDistance = std::abs(Cross2(a, b, innerLast)) / length;
+            const auto desiredGradient =
+                ((*firstHeight - innerFirst.z) / firstDistance + (*lastHeight - innerLast.z) / lastDistance) * 0.5F;
+            const auto stripGradient = std::clamp(desiredGradient, -perpendicular, perpendicular);
+            innerFirst.z += firstDistance * stripGradient;
+            innerLast.z += lastDistance * stripGradient;
             revised.vertices.push_back(innerFirst);
             revised.vertices.push_back(innerLast);
             innerFirst.z = *firstHeight;
@@ -2591,6 +2745,10 @@ namespace
                 const auto p = revised.vertices[face[0]];
                 const auto q = revised.vertices[face[1]];
                 const auto r = revised.vertices[face[2]];
+                if (p.x == q.x && p.y == q.y && std::abs(p.z - q.z) <= profile.stepHeight)
+                {
+                    continue;
+                }
                 if (Cross2(p, q, r) <= 0.01F || !CanSubdivideBorder(p, q, r, p, q, p, q, profile))
                 {
                     valid = false;
@@ -2616,7 +2774,7 @@ namespace
     template <class Border>
     bool RetriangulateBorderPortal(CandidateNavMesh &candidate, const NavMesh &neighbor, std::uint32_t targetPolygon,
                                    std::uint8_t targetEdge, const Border &border, float maximumGap, float cavityDepth,
-                                   float heightTolerance, bool allowStepped = false)
+                                   float heightTolerance, bool allowStepped = false, float authoredSlope = 0)
     {
         const auto &target = neighbor.polygons[targetPolygon];
         const auto c = neighbor.vertices[target.vertices[(targetEdge + 1) % 3]];
@@ -2704,6 +2862,7 @@ namespace
             // Immutable rim edges can already contain steep voxel transitions;
             // replacements must remain within this cavity's slope envelope.
             auto cavityProfile = candidate.profile;
+            cavityProfile.maxSlopeDegrees = std::max(cavityProfile.maxSlopeDegrees, authoredSlope);
             for (const auto polygon : selected)
             {
                 const auto &face = mesh.polygons[polygon];
@@ -2748,17 +2907,38 @@ namespace
             std::optional<std::size_t> first, last;
             if (simple)
             {
+                // The chain can turn into the CELL or end before the authored
+                // endpoint. Test the projected endpoint itself and bound any
+                // extension by the authored floor's repair depth and height.
                 for (std::size_t i{}; i < boundary.size(); ++i)
                 {
                     const auto a = mesh.vertices[boundary[i]];
                     const auto b = mesh.vertices[boundary[(i + 1) % boundary.size()]];
-                    if (border(a, b, maximumGap) == cellSide && projection(b) > projection(a))
+                    const auto start = projection(a);
+                    const auto end = projection(b);
+                    if (end > start)
                     {
-                        if (projection(a) <= 0 && projection(b) > 0)
+                        const auto nearEndpoint = [&](float fraction)
+                        {
+                            const auto point =
+                                Interpolate(a, b, std::clamp((fraction - start) / (end - start), 0.0F, 1.0F));
+                            const auto endpoint = Interpolate(c, d, fraction);
+                            return std::hypot(point.x - endpoint.x, point.y - endpoint.y) <= cavityDepth &&
+                                   std::abs(point.z - endpoint.z) <= heightTolerance;
+                        };
+                        if (start <= 0 && end > 0 && nearEndpoint(0))
                         {
                             first = i;
                         }
-                        if (projection(a) < 1 && projection(b) >= 1)
+                        if (start < 1 && end >= 1 && nearEndpoint(1))
+                        {
+                            last = i;
+                        }
+                        if (!first && start > 0 && start < 1 && border(a, b, maximumGap) == cellSide && nearEndpoint(0))
+                        {
+                            first = i;
+                        }
+                        if (!last && end > 0 && end < 1 && border(a, b, maximumGap) == cellSide && nearEndpoint(1))
                         {
                             last = i;
                         }
@@ -2783,7 +2963,13 @@ namespace
                 };
                 const auto targetFirst = vertex(c);
                 const auto targetLast = vertex(d);
-                std::vector<std::uint32_t> outline{boundary[*first], targetFirst, targetLast};
+                std::vector<std::uint32_t> outline;
+                if (projection(mesh.vertices[boundary[*first]]) <= 0)
+                {
+                    outline.push_back(boundary[*first]);
+                }
+                outline.push_back(targetFirst);
+                outline.push_back(targetLast);
                 auto cursor = (*last + 1) % boundary.size();
                 while (cursor != *first && outline.size() <= boundary.size() + 3)
                 {
@@ -2913,7 +3099,7 @@ namespace
                                     : BorderCavityLimits{std::max(maximumGap, depth), candidate.profile.stepHeight};
                             (void)RetriangulateBorderPortal(candidate, neighbor, polygon, edge, border, maximumGap,
                                                             constraints.depth, constraints.heightTolerance,
-                                                            allowStepped);
+                                                            allowStepped, constraints.maxSlopeDegrees);
                         }
                     }
                 }
@@ -3530,7 +3716,7 @@ namespace navmesh::core
 {
     std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
                                        const std::vector<NavMesh> &neighbors, const std::vector<NavMesh> &authored,
-                                       bool deferUnlinkedBorders)
+                                       bool deferUnlinkedBorders, const Scene *sourceScene)
     {
         if (candidate.polygonSourceTriangles.size() != candidate.mesh.polygons.size() ||
             candidate.polygonContributingTriangles.size() != candidate.mesh.polygons.size())
@@ -3551,7 +3737,9 @@ namespace navmesh::core
             const auto closest = std::min_element(deviations.begin(), deviations.end());
             return *closest <= tolerance ? static_cast<int>(closest - deviations.begin()) : -1;
         };
-        const auto required = ResolveAuthoredBorderPortals(authored, neighbors, border, candidate.profile, maximumGap);
+        const auto obstacles = BuildExcludedCollisionIndex(authored.empty() ? nullptr : sourceScene);
+        const auto required =
+            ResolveAuthoredBorderPortals(authored, neighbors, border, candidate, maximumGap, obstacles);
         CoalesceGeneratedBorders(candidate, neighbors, border, maximumGap);
         std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint8_t>> used;
         for (const auto &link : candidate.borderLinks)
@@ -3691,7 +3879,8 @@ namespace navmesh::core
                              }))
             {
                 (void)RetriangulateBorderPortal(candidate, *neighbor, polygon, edge, border, maximumGap,
-                                                constraints.depth, constraints.heightTolerance);
+                                                constraints.depth, constraints.heightTolerance, false,
+                                                constraints.maxSlopeDegrees);
             }
         }
         BuildAdjacency(candidate.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);

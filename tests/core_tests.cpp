@@ -2538,8 +2538,11 @@ namespace
     }
 } // namespace
 
+void TestBorderCavityRegressions();
+
 int main(int argc, char **argv)
 {
+    TestBorderCavityRegressions();
 #ifdef _WIN32
     // CLI regressions report assertion failures to stderr without opening an interactive CRT dialog.
     _set_error_mode(_OUT_TO_STDERR);

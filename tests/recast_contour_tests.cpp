@@ -5,7 +5,11 @@
 #include "core/navmesh/generator.h"
 #include "core/navmesh/recast_contours.h"
 
+#include <RecastAlloc.h>
+#include <algorithm>
+#include <array>
 #include <cassert>
+#include <cstring>
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
@@ -176,10 +180,124 @@ namespace
                                                                   RegionPartitioningAlgorithm::Watershed, warnings);
         assert(warnings.empty() && HasRegion(*contours, 1) && HasRegion(*contours, 3));
     }
+
+    void CheckCoarsePolygonWinding()
+    {
+        detail::RecastPolyMeshOwner mesh(rcAllocPolyMesh(), rcFreePolyMesh);
+        const std::array<unsigned short, 24> vertices{10, 0, 10, 30, 0, 10, 10, 0, 30, 30, 0, 30,
+                                                      10, 8, 10, 30, 8, 10, 10, 8, 30, 30, 8, 30};
+        mesh->nvp = 3;
+        mesh->npolys = 2;
+        mesh->nverts = 8;
+        mesh->verts = static_cast<unsigned short *>(rcAlloc(sizeof(vertices), RC_ALLOC_PERM));
+        mesh->polys = static_cast<unsigned short *>(rcAlloc(12 * sizeof(unsigned short), RC_ALLOC_PERM));
+        assert(mesh->verts && mesh->polys);
+        std::memcpy(mesh->verts, vertices.data(), sizeof(vertices));
+        std::fill_n(mesh->polys, 12, RC_MESH_NULL_IDX);
+        const auto setFace = [&](int polygon, std::array<unsigned short, 3> face)
+        { std::copy(face.begin(), face.end(), mesh->polys + polygon * 6); };
+        setFace(0, {0, 2, 1});
+        setFace(1, {1, 2, 3});
+        assert(detail::HasConsistentRegionMesh(*mesh));
+
+        // An inverted coarse face must be rejected before conversion can flip
+        // its winding and conceal a folded partition from detail-patch repair.
+        setFace(1, {1, 3, 2});
+        assert(!detail::HasConsistentRegionMesh(*mesh));
+        // Even individually clockwise polygons cannot consume the same directed
+        // edge at the same floor height. A separate stacked floor remains valid.
+        setFace(1, {0, 2, 1});
+        assert(!detail::HasConsistentRegionMesh(*mesh));
+        setFace(1, {4, 6, 5});
+        assert(detail::HasConsistentRegionMesh(*mesh));
+    }
+
+    void CheckCoarseMeshRefinement()
+    {
+        // Synthetic perforated floor whose simplified contour produces a
+        // nonconvex coarse polygon. Keep the irregular boundary location independent.
+        constexpr std::array<std::string_view, 24> rows{
+            "........................", ".######..#.######.#..##.", ".##.##.######.#.#.#####.",
+            "..####.#.#.###########..", ".############.#######.#.", ".##############.#######.",
+            "..####.#####..####.###..", ".#####.####.##.########.", ".####.###.###.####.#..#.",
+            ".##.##################..", ".###.###.########.#.###.", "..###.#.#.#######.####..",
+            ".###########.###..#####.", ".##..#####.#.##..###.#..", ".###############.####.#.",
+            ".#######.#.############.", ".#################..#.#.", ".############.##.##.###.",
+            ".##.##.##.#########.###.", ".####.########.#####.##.", ".....#####.#####..#####.",
+            "..#..###############.##.", ".##..#####..##.########.", "........................"};
+        rcContext context(false);
+        std::unique_ptr<rcHeightfield, decltype(&rcFreeHeightField)> heightfield(rcAllocHeightfield(),
+                                                                                 rcFreeHeightField);
+        const float low[]{0, 0, 0};
+        const float high[]{24, 10, 24};
+        assert(rcCreateHeightfield(&context, *heightfield, 24, 24, low, high, 1, 1));
+        for (int y{}; y < 24; ++y)
+        {
+            for (int x{}; x < 24; ++x)
+            {
+                if (rows[y][x] == '#')
+                {
+                    assert(rcAddSpan(&context, *heightfield, x, y, 0, 1, 1, 0));
+                }
+            }
+        }
+        std::unique_ptr<rcCompactHeightfield, decltype(&rcFreeCompactHeightfield)> compact(rcAllocCompactHeightfield(),
+                                                                                           rcFreeCompactHeightfield);
+        assert(rcBuildCompactHeightfield(&context, 3, 1, *heightfield, *compact));
+        assert(rcBuildDistanceField(&context, *compact));
+        assert(rcBuildRegions(&context, *compact, 0, 0, 0));
+        detail::RecastContourOwner raw(rcAllocContourSet(), rcFreeContourSet);
+        detail::RecastPolyMeshOwner coarse(rcAllocPolyMesh(), rcFreePolyMesh);
+        assert(rcBuildContours(&context, *compact, 2, 0, *raw));
+        assert(rcBuildPolyMesh(&context, *raw, 6, *coarse));
+        assert(!detail::HasConsistentRegionMesh(*coarse));
+
+        const std::vector<unsigned char> areas(compact->areas, compact->areas + compact->spanCount);
+        rcConfig config{};
+        config.maxSimplificationError = 2;
+        config.maxVertsPerPoly = 6;
+        std::vector<std::string> warnings;
+        const auto mesh = detail::BuildRetainedRegionMesh(context, *compact, config,
+                                                          RegionPartitioningAlgorithm::Watershed, warnings);
+        assert(detail::HasConsistentRegionMesh(*mesh));
+        assert(warnings.size() == 1 && warnings.front().contains("refined the complete contour partition"));
+        assert(std::equal(areas.begin(), areas.end(), compact->areas));
+    }
+
+    void CheckCoarseMeshLayerRecovery()
+    {
+        rcContext context(false);
+        auto compact = MakeEnclosedRegionField(context, true);
+        std::vector<unsigned short> heights;
+        std::vector<bool> retained;
+        for (int span{}; span < compact->spanCount; ++span)
+        {
+            heights.push_back(compact->spans[span].y);
+            retained.push_back(compact->spans[span].reg != 0 && compact->areas[span] != RC_NULL_AREA);
+        }
+        rcConfig config{};
+        config.maxSimplificationError = 2;
+        config.maxVertsPerPoly = 6;
+        config.minRegionArea = compact->spanCount + 1;
+        std::vector<std::string> warnings;
+        const auto mesh = detail::BuildRetainedRegionMesh(context, *compact, config,
+                                                          RegionPartitioningAlgorithm::Watershed, warnings);
+        assert(detail::HasConsistentRegionMesh(*mesh));
+        assert(std::any_of(warnings.begin(), warnings.end(),
+                           [](const auto &warning) { return warning.contains("layer region recovery"); }));
+        for (int span{}; span < compact->spanCount; ++span)
+        {
+            assert(compact->spans[span].y == heights[span]);
+            assert((compact->areas[span] != RC_NULL_AREA) == retained[span]);
+        }
+    }
 } // namespace
 
 void TestRecastContourRecovery()
 {
+    CheckCoarsePolygonWinding();
+    CheckCoarseMeshRefinement();
+    CheckCoarseMeshLayerRecovery();
     for (const auto error : {0.0F, 2.0F, 6.0F})
     {
         CheckEnclosedRegionRecovery(error);

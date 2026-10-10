@@ -885,7 +885,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                         }
                     }
                     (void)navmesh::core::StitchCandidateBorders(*candidate, *analysisConfig.cellBounds, adjacent,
-                                                                cell->navMeshes);
+                                                                cell->navMeshes, false, &geometry.scene);
                 }
                 navmesh::core::TagCandidateTriangles(*candidate, cell->navMeshes, cell->waterHeight,
                                                      options.tagTriangles);
@@ -971,7 +971,12 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             scenePath.string(), sceneExport.objects, sceneExport.triangles, sceneExport.culledTriangles);
         if (candidate && !candidate->topology.valid)
         {
-            std::cerr << "Candidate topology validation failed; see candidate-navm.json.\n";
+            const auto failure = std::format(
+                "Candidate topology validation failed: {}. Inspection scene saved to {}; see candidate-navm.json.",
+                candidate->topology.findings.empty() ? "invalid candidate" : candidate->topology.findings.front(),
+                scenePath.string());
+            update(88, failure);
+            std::cerr << failure << '\n';
             return 2;
         }
         // Serialization requires a valid candidate and retains the resolved source master ordering.

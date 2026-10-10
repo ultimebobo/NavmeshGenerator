@@ -1,7 +1,10 @@
 # Project guidance for AI coding agents
 
-- Read the relevant design notes in `docs/` before changing behavior. Keep those
-  notes and the README aligned with user-visible changes.
+- Read the relevant design notes in `docs/` before changing behavior and keep
+  those notes aligned with the changes. The README is a welcome page for users,
+  not a technical change log. Update it only when the introduction, getting-started
+  steps, or user workflow meaningfully changes; document implementation details,
+  bug fixes, and algorithm contracts in the relevant `docs/` pages instead.
 - Add Doxygen comments when adding or changing project-owned C++ public APIs in
   `src/`: types, functions, methods, and non-obvious fields. Put comments by the
   declaration in the header. Describe the purpose, units and coordinate space,

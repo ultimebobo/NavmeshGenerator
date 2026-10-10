@@ -75,6 +75,12 @@ and validates relevant values before running. Developer input routes, custom OBJ
 paths, exterior coordinates, terrain-only and diagnostic HTML controls are CLI
 options.
 
+Candidate warnings do not fail a run. A candidate topology validation error is a
+failure and appears in red with the validation reason. The inspection scene and
+candidate exports are written before this check so they remain available for
+diagnosis; a viewable scene does not establish that navigation links are valid.
+Plugin writing requires a valid candidate.
+
 ## Advanced generation settings
 
 **Tag water and preferred path triangles** enables generated classification and

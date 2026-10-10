@@ -435,7 +435,7 @@ namespace
         }
         else
         {
-            workspace.status.text = std::format("{} in {}. {}", code == 3 ? "Cancelled" : "Stopped", elapsed, summary);
+            workspace.status.text = std::format("{} in {}. {}", code == 3 ? "Cancelled" : "Failed", elapsed, summary);
         }
         workspace.status.complete = true;
     }

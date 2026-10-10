@@ -67,7 +67,8 @@ The goal is to make a real downstream generation pass possible without hard-codi
 ## 5. Candidate generation
 
 `core/navmesh/recast_contours` owns complete contour-set refinement and verifies
-coverage of retained voxel regions. When watershed contours remain incomplete,
+coverage of retained voxel regions and coarse polygon winding, convexity and directed
+edge consistency before height sampling. When watershed contours or polygons remain invalid,
 it repartitions the retained floor with layer partitioning and reports recovery.
 It preserves initial island filtering and rebuilds all shared interfaces together.
 The Recast adapter rejects supported geometry outside its packed vertical span
@@ -119,6 +120,14 @@ triangulation while preserving the complete portal. Unpaired nonplanar fans try
 individual floor-centroid directions, with a roundoff allowance in slope comparisons.
 Missing required crossings invalidate the final candidate;
 seam retraction cannot silently remove them.
+Required cavities also accommodate the selected authored floor's slope envelope.
+Endpoint projection handles terminal chains and boundaries turning into the cell.
+Shared corner height offsets use separate vertices and slope-bounded strips joined
+to the unchanged floor through climb-compatible internal edges.
+The Cell runner passes the generation scene to neutral border stitching. Positive
+excluded-collision support at the authored interior anchor can close a crossing
+with a warning when no compatible boundary floor survives. Missing or unsupported
+evidence cannot waive a crossing. The writer clears incoming links to closed edges.
 Single-cell generation provisionally retains components with a shared-edge path to a matched
 door or a boundary edge on the selected exterior CELL. Filtering follows CELL clipping and
 door matching, preserving source joins while compacting polygon, neighbor,

@@ -662,13 +662,10 @@ namespace
         {
             throw std::runtime_error("Recast region partition failed");
         }
-        const auto contours =
-            detail::BuildRetainedRegionContours(context, *compact, config, partitioningAlgorithm, warnings);
-        RecastOwner<rcPolyMesh, rcFreePolyMesh> polyMesh(rcAllocPolyMesh(), rcFreePolyMesh);
-        if (!polyMesh || !rcBuildPolyMesh(&context, *contours, config.maxVertsPerPoly, *polyMesh))
-        {
-            throw std::runtime_error("Recast polygon construction failed");
-        }
+        // Coarse polygon winding and shared boundaries must be consistent before
+        // sampling heights. A folded partition cannot be repaired within one detail patch.
+        const auto polyMesh =
+            detail::BuildRetainedRegionMesh(context, *compact, config, partitioningAlgorithm, warnings);
 
         // Contour vertices describe horizontal boundaries, not the height changes
         // inside a polygon. Sample the surviving compact spans before releasing
@@ -682,6 +679,10 @@ namespace
         if (!HasValidDetailEdges(*detail))
         {
             RepairDetailTriangles(*detail, *polyMesh);
+            if (!HasValidDetailEdges(*detail))
+            {
+                throw std::runtime_error("Recast height detail repair left overlapping floor edges");
+            }
             warnings.push_back(
                 "Recast retriangulated overlapping height detail while retaining its boundary and floor samples.");
         }

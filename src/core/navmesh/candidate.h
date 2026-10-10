@@ -158,10 +158,14 @@ namespace navmesh::core
      * @param neighbors Existing NAVMs in adjacent cells of the same worldspace.
      * @param authored Winning selected-cell NAVMs. Their resolved exterior portals are required
      * crossings, retaining the neighboring edge's exact position and destination.
-     * Required crossings that cannot be repaired invalidate the candidate, even when empty.
+     * Required crossings that cannot be repaired invalidate the candidate, even when empty,
+     * except for crossings positively identified as excluded obstacle floors by sourceScene.
      * @param deferUnlinkedBorders Preserve unpaired seams and all components for batch linking.
      * Authored partitions and required crossings are repaired before returning;
      * only matched portals are validated, and final seam/reachability filtering is deferred.
+     * @param sourceScene Optional generation input with complete triangle provenance. A crossing
+     * with no surviving boundary floor and positive obstacle-top support at its authored interior
+     * anchor is closed with a warning. Missing or unsupported source evidence does not waive a crossing.
      * @return Number of reciprocal border portals added. candidate.topology reports
      * dangling targets, endpoint mismatches, reused portals, unmatched border vertices
      * or remaining open CELL seams.
@@ -176,7 +180,8 @@ namespace navmesh::core
      * Terminal endpoint alignment moves complete incident fans while pinning existing portals.
      * Required portal cavities preserve their interior rim and other portals. Authored floor
      * triangles bound repair depth and height drift. Cavity triangulation and fan alignment
-     * respect the greater of the configured slope and the affected generated floor's slope envelope.
+     * respect the configured and affected generated floor slope envelopes; required cavities
+     * also accommodate the selected authored floor's slope envelope.
      * Near-coincident endpoints align through their fans. Removed seam height detail may become
      * a bounded interior sample when the unchanged rim needs it to meet that slope envelope.
      * Boundary preparation can retriangulate compatible fans even without a final match.
@@ -188,14 +193,17 @@ namespace navmesh::core
      * is bounded by stepHeight. Continuous floor repairs precede border strips joined
      * through climb-compatible interior edges; strip and floor triangles retain their
      * slope envelopes and the original floor heights remain on the interior side.
+     * Shared corner height offsets use separate vertices and climb-compatible internal edges.
+     * Terminal strip samples move into supported floor within their inset distance.
      * Geometry, region membership, source joins, contour,
      * door and portal indices, and topology are updated consistently; neighbors are unchanged.
-     * @throws std::invalid_argument when polygon source evidence is incomplete.
+     * @throws std::invalid_argument when polygon source evidence or supplied scene provenance is incomplete.
      */
     [[nodiscard]] std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
                                                      const std::vector<NavMesh> &neighbors,
                                                      const std::vector<NavMesh> &authored = {},
-                                                     bool deferUnlinkedBorders = false);
+                                                     bool deferUnlinkedBorders = false,
+                                                     const Scene *sourceScene = nullptr);
     /// Check candidate polygon topology without modifying its geometry.
     [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh &candidate);
     /** Rebuild adjacency, boundary contours, region areas, output counts and topology after mesh edits.

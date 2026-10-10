@@ -14,6 +14,32 @@ namespace navmesh::core
         /// Own a complete Recast contour set and release its buffers with the Recast allocator.
         using RecastContourOwner = std::unique_ptr<rcContourSet, decltype(&rcFreeContourSet)>;
 
+        /// Own a Recast polygon mesh and release its buffers with the Recast allocator.
+        using RecastPolyMeshOwner = std::unique_ptr<rcPolyMesh, decltype(&rcFreePolyMesh)>;
+
+        /** Check that coarse floor polygons have clockwise, convex Recast XZ footprints.
+         * @param mesh Polygon mesh using valid vertex indices and Recast voxel coordinates.
+         * @return False for collapsed or inverted polygons, nonconvex turns, or repeated directed
+         * edges on the same floor. Does not change vertices, polygons, or adjacency.
+         */
+        [[nodiscard]] bool HasConsistentRegionMesh(const rcPolyMesh &mesh);
+
+        /** Build a coarse floor mesh suitable for height-detail sampling.
+         * @param context Recast logging and allocation context.
+         * @param compact Partitioned Recast Y-up heightfield; watershed recovery can change region IDs
+         * and clear previously rejected areas, preserving retained floor heights and connections.
+         * @param config Contour error and edge length in voxels, with a supported polygon vertex limit.
+         * @param algorithm Initial region strategy; watershed permits layer recovery.
+         * @param warnings Receives diagnostics for refinement or layer recovery.
+         * @return Owned mesh covering every retained region with consistent coarse polygon winding.
+         * Refines the complete contour partition together before trying layer recovery over retained spans.
+         * @throws std::runtime_error For allocation, construction, or an unrepresentable retained partition.
+         */
+        [[nodiscard]] RecastPolyMeshOwner BuildRetainedRegionMesh(rcContext &context, rcCompactHeightfield &compact,
+                                                                  const rcConfig &config,
+                                                                  RegionPartitioningAlgorithm algorithm,
+                                                                  std::vector<std::string> &warnings);
+
         /** Build one consistent contour partition covering every retained walkable region.
          * @param context Recast logging and allocation context.
          * @param compact Partitioned Recast Y-up heightfield. Watershed recovery can change region IDs

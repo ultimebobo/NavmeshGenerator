@@ -235,6 +235,16 @@ usage, see [implemented improvements](performance-improvements.md) and the
 [before/after snapshot](performance-improvements-measurements.json). The
 [original analysis](performance-analysis.md) preserves the baseline investigation.
 
+## Cell border repair
+
+Cell-scope border repair preserves required authored connections through terminal
+boundary cavities and shared corner height offsets. Required cavities accommodate
+the selected authored floor's slope envelope. A crossing onto explicitly excluded
+obstacle collision closes with a warning only when no compatible generated boundary
+floor survives and both authored interior anchor samples have positive collision
+support. Missing models or unsupported geometry do not waive a crossing. The patch
+removes incoming links to closed edges; inspect candidate warnings during review.
+
 ## Generated triangle tagging
 
 Generation enables water and preferred-path tagging by default in Cell, Plugin
