@@ -33,6 +33,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <optional>
 #include <source_location>
 #include <set>
 #include <sstream>
@@ -2387,6 +2389,70 @@ void TestCellSceneAccumulation();
 void TestNavigationObstacleFixture();
 void TestRecastContourRecovery();
 void ExportNavigationObstacleFixture(const std::filesystem::path &directory);
+void ExportSpiralNavigationFixture(const std::filesystem::path &directory);
+void TestSpiralNavigationFixture();
+
+namespace
+{
+    struct SceneFixture
+    {
+        std::string_view name;
+        void (*test)();
+        void (*exportScene)(const std::filesystem::path &);
+    };
+
+    const std::array SceneFixtures{
+        SceneFixture{"navigation-obstacles", TestNavigationObstacleFixture, ExportNavigationObstacleFixture},
+        SceneFixture{"spirals", TestSpiralNavigationFixture, ExportSpiralNavigationFixture}};
+
+    // The catalog is the discovery and dispatch boundary. Geometry and expected
+    // behavior stay in each builder; new entries need no command-specific branch.
+    std::optional<int> RunSceneFixtureCommand(int argc, char **argv)
+    {
+        if (argc < 2)
+        {
+            return std::nullopt;
+        }
+        const std::string_view command = argv[1];
+        if (command == "--list-fixtures" && argc == 2)
+        {
+            for (const auto &fixture : SceneFixtures)
+            {
+                std::cout << fixture.name << '\n';
+            }
+            return 0;
+        }
+        if (command != "--list-fixtures" && command != "--fixture" && command != "--export-fixture")
+        {
+            return std::nullopt;
+        }
+        const bool exporting = command == "--export-fixture";
+        if (command == "--list-fixtures" || argc != (exporting ? 4 : 3))
+        {
+            std::cerr << "Usage: navmesh-tests --list-fixtures | --fixture <name> | "
+                         "--export-fixture <name> <output>\n";
+            return 1;
+        }
+        for (const auto &fixture : SceneFixtures)
+        {
+            if (fixture.name != argv[2])
+            {
+                continue;
+            }
+            if (exporting)
+            {
+                fixture.exportScene(argv[3]);
+            }
+            else
+            {
+                fixture.test();
+            }
+            return 0;
+        }
+        std::cerr << "Unknown fixture: " << argv[2] << ". Use --list-fixtures.\n";
+        return 1;
+    }
+} // namespace
 
 int main(int argc, char **argv)
 {
@@ -2397,6 +2463,20 @@ int main(int argc, char **argv)
     _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 #endif
+    if (const auto result = RunSceneFixtureCommand(argc, argv))
+    {
+        return *result;
+    }
+    if (argc == 3 && std::string_view(argv[1]) == "--export-spiral-fixture")
+    {
+        ExportSpiralNavigationFixture(argv[2]);
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--spirals-only")
+    {
+        TestSpiralNavigationFixture();
+        return 0;
+    }
     if (argc > 1 && std::string_view(argv[1]) == "--collision-impact-only")
     {
         TestCollisionImpactSelection();
@@ -2504,6 +2584,7 @@ int main(int argc, char **argv)
     TestCandidateGeneration();
     TestRecastSceneGeneration();
     TestNavigationObstacleFixture();
+    TestSpiralNavigationFixture();
     if (std::filesystem::exists("output/riverwood03-recast-repro/geometry.obj"))
         TestLocalStairs("output/riverwood03-recast-repro/geometry.obj");
     navmesh::core::Mesh mesh{ .vertices = { { -1.0F, 2.0F, 3.0F }, { 4.0F, -5.0F, 6.0F } } };

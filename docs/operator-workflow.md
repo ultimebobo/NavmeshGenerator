@@ -141,8 +141,6 @@ region. Use **Reset** to adopt current defaults in an existing saved configurati
 Landscape rock collision contributes obstacles without walkable tops; architectural
 stone and terrain remain eligible. This cannot recover geometry that
 was lost during voxelization, lacks supported collision, or fails clearance.
-The redistributable [obstacle fixture](../fixtures/README.md#stairs-and-overpasses)
-provides repeatable coverage and connectivity checks plus a visual scene.
 
 ## MO2 command input
 

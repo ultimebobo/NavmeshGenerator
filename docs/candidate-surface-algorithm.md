@@ -64,26 +64,15 @@ patch vertices before adjacency and reachability filtering. Landings and stair
 interiors therefore retain floor evidence beyond the contour corners. Long
 contour edges and detail sampling limits still require scene inspection.
 
-The [synthetic obstacle fixture](../fixtures/README.md#stairs-and-overpasses)
-checks central tread heights and landing connectivity for narrow, rotated and
-switchback stairs, open and obstructed underpasses, separated road/deck levels,
-stair access to a bridge, and nontraversable oversized steps. It runs with every
-supported partitioning strategy and exports the same scene for visual review.
-A corner descent with taller uneven risers checks the upper street, every tread,
-lower landing and under-bridge road as one shared-edge component. Its exterior
-variant has no doors and must be anchored by true street boundary edges after
-CELL clipping. An insufficient climb must disconnect that lower route.
+Automated checks verify coverage at matching floor heights, shared-edge
+reachability, clearance rejection and separation of stacked levels. Geometry,
+parameters and expectations live in the test builders; exported scenes and
+reports provide inspection evidence. Coverage and route connectivity are checked
+separately from topology, since a valid mesh can still omit intended routes.
 Coarse voxels can erase valid treads before detail sampling; climb is rounded
 down to whole vertical voxels. Candidate warnings report quantization and
 adaptive horizontal resolution instead of silently presenting requested values
 as the effective constraints.
-
-Local stair collision checks exercise isolated placements and wider extracted
-scene bounds with the current movement defaults. The tread faces are flat and
-the normal agent radius fits; a climb below their risers separates the landings.
-These optional checks consume locally supplied game-data exports. The source
-assets are not committed; the synthetic fixtures provide portable regression
-coverage.
 
 After polygon construction and CELL clipping, single-cell generation retains only
 shared-edge components reaching a matched door or a boundary edge on the selected

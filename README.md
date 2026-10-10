@@ -16,7 +16,7 @@ The comparison uses a fresh combined scene of Riverwood's village cells from
 the official game plugins, with the same camera and depth testing in both
 panels. Gray geometry shows terrain and collision. This is a rendered program export, not an in-game
 NPC test. See [the scene image rendering guide](docs/render-media.md)
-for export instructions and the synthetic stairs-and-bridges presets.
+for export instructions.
 
 ## Before you start
 

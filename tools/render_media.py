@@ -209,48 +209,56 @@ def comparison(scene, output):
     image.save(output / "riverwood-navmesh-comparison.png")
 
 
-def fixture_image(scene, output, filename, title, subtitle, bounds=None, azimuth=-24, elevation=48):
+def scene_image(scene, output, filename, title, subtitle, bounds=None, azimuth=-24, elevation=48,
+                navigation="Candidate NAVM"):
     image = Image.new("RGB", (2400, 1500), BACKGROUND)
     draw = ImageDraw.Draw(image)
-    text(draw, (60, 30), "NAVMESHGENERATOR  /  SYNTHETIC REGRESSION FIXTURE", 22, MUTED)
+    text(draw, (60, 30), "NAVMESHGENERATOR  /  EXPORTED SCENE", 22, MUTED)
     text(draw, (60, 72), title, 48, bold=True)
     text(draw, (60, 139), subtitle, 26, MUTED)
-    panel = render(scene, "Candidate NAVM", bounds, 2280, 1120, azimuth, elevation)
+    panel = render(scene, navigation, bounds, 2280, 1120, azimuth, elevation)
     image.paste(panel, (60, 210))
-    draw.rounded_rectangle((64, 1373, 88, 1397), radius=3, fill=GENERATED)
-    text(draw, (104, 1364), "Generated navigation", 26)
+    authored = navigation.startswith("Original")
+    draw.rounded_rectangle((64, 1373, 88, 1397), radius=3, fill=AUTHORED if authored else GENERATED)
+    text(draw, (104, 1364), "Authored navigation" if authored else "Generated navigation", 26)
     draw.rounded_rectangle((485, 1373, 509, 1397), radius=3, fill=(118, 130, 138))
     text(draw, (525, 1364), "Collision geometry", 26)
-    text(draw, (60, 1430), "Project-authored test geometry • Actual generated triangles • Shared depth testing • No AI imagery", 24, MUTED)
+    text(draw, (60, 1430), "Unmodified exported triangles • Shared depth testing", 24, MUTED)
     image.save(output / filename)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--riverwood", type=Path, required=True)
-    parser.add_argument("--fixture", type=Path, required=True)
+    parser.add_argument("--riverwood", type=Path)
+    parser.add_argument("--scene", "--fixture", dest="scene", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--title", default="Navigation scene")
+    parser.add_argument("--bounds", nargs=4, type=float, metavar=("XMIN", "YMIN", "XMAX", "YMAX"))
+    parser.add_argument("--azimuth", type=float, default=-24)
+    parser.add_argument("--elevation", type=float, default=48)
+    parser.add_argument("--navigation", choices=("Candidate NAVM", "Original NAVM (current cell)"),
+                        default="Candidate NAVM")
     args = parser.parse_args()
+    if not args.scene and not args.riverwood:
+        parser.error("Provide --scene or --riverwood")
+    if args.bounds and (args.bounds[0] >= args.bounds[2] or args.bounds[1] >= args.bounds[3]):
+        parser.error("Bounds must have XMIN < XMAX and YMIN < YMAX")
     args.output.mkdir(parents=True, exist_ok=True)
-    riverwood = read_scene(args.riverwood)
-    fixture = read_scene(args.fixture)
-    comparison(riverwood, args.output)
-    print("Rendered Riverwood comparison", flush=True)
-    fixture_image(fixture, args.output, "stairs-and-bridges.png", "Stairs, bridges and stacked routes",
-                  "A visual fixture exported by the same generator used for Skyrim cells.")
-    print("Rendered fixture overview", flush=True)
-    fixture_image(fixture, args.output, "bridge-and-underpass.png", "A bridge above a separate road",
-                  "Stair access reaches the deck; the road below remains a separate floor network.",
-                  (1300, 1500, 3300, 2450), -18, 58)
-    print("Rendered bridge detail", flush=True)
-    fixture_image(fixture, args.output, "corner-descent.png", "Down the stairs and beneath the bridge",
-                  "Uneven risers connect the upper street to a lower route beneath the crossing deck.",
-                  (-350, 2500, 1500, 3300), -25, 58)
-    print("Rendered corner descent", flush=True)
+    sources = []
+    if args.riverwood:
+        comparison(read_scene(args.riverwood), args.output)
+        sources.append(("riverwood", args.riverwood))
+        print("Rendered Riverwood comparison", flush=True)
+    if args.scene:
+        scene_image(read_scene(args.scene), args.output, "scene.png", args.title,
+                    "Navigation and supporting geometry from the same export.",
+                    args.bounds, args.azimuth, args.elevation, args.navigation)
+        sources.append(("scene", args.scene))
+        print("Rendered scene", flush=True)
     manifest = {
         "renderer": "tools/render_media.py",
         "sources": {name: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-                    for name, path in (("riverwood", args.riverwood), ("fixture", args.fixture))},
+                    for name, path in sources},
         "images": sorted(path.name for path in args.output.glob("*.png")),
         "presentation": "Orthographic software rendering; shared terrain/collision/navigation depth testing; unmodified exported triangles.",
     }

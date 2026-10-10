@@ -61,6 +61,10 @@ repository. See the [fixture policy](../fixtures/README.md) and
 [optional local-game checks](../tests/integration/README.md). Restore the desired
 build mode with `xmake f -m releasedbg` after running debug tests.
 
+Synthetic scene fixtures share the selection, testing and export commands in the
+[fixture workflow](../fixtures/README.md). Discover available fixtures through
+the test executable; their builders and generated reports define their details.
+
 ## Source documentation and formatting
 
 Follow [AGENTS.md](../AGENTS.md) and the repository `.clang-format`. Restrict
