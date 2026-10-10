@@ -288,7 +288,14 @@ is independent of plugin I/O: it plans seam intersections and corner heights acr
 all generated candidates, refines triangles while preserving joins, revisits
 intervals made reachable by corner welding, and adds exact
 reciprocal links addressed by opaque CELL keys. It retains unanchored floors and
-never substitutes authored meshes from rebuilding targets. Invalid topology or
+never substitutes authored meshes from rebuilding targets. `core/navmesh/candidate_reachability`
+then evaluates the complete floor graph through shared edges and reciprocal generated
+portals. It retains door/authored-neighbor access and the largest floor network in
+each contiguous exterior selection or interior, removing isolated roofs even when
+they span CELL seams. It owns stable geometry/evidence compaction and reciprocal
+destination remapping, contour rebuilding and final topology validation. This stage
+runs after linking for both generated and cached candidates; cache entries continue
+to store complete pre-link floors. Invalid topology or
 refinement prevents export. Authored border subdivision commits only when all
 consumed portals survive. `app/candidate_cache` stores candidates before generated
 seam refinement with bounded reads and a versioned dependency fingerprint. The

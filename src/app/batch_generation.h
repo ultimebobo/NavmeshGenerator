@@ -54,12 +54,14 @@ namespace navmesh::app::detail
      */
     [[nodiscard]] BatchCellResult BuildBatchCandidate(BatchGenerationInput input, const Options &options);
 
-    /** Join the complete generated exterior set without consulting replaced authored geometry.
+    /** Join generated exterior seams and remove isolated floor networks across the complete set.
      * @param results Completed targets with full generated geometry and compact source joins.
      * Candidates remain present when an adjacent target has no walkable floor.
      * Skipped generation targets retain their authored NAVMs as untouched border constraints.
      * Recovery validates existing authored portals together with newly available neighbors.
-     * Neighbors without authored NAVM leave open borders and walkable components intact.
+     * Reachability retains door/authored-neighbor access and the largest floor network in
+     * each contiguous exterior selection or interior. Generated portals alone do not anchor islands.
+     * Polygon, vertex, evidence, region, door and reciprocal portal indices are compacted together.
      * @param resolved Winning CELL worldspace/coordinate ownership and decoded authored portal destinations.
      * @return Empty on success, or a fatal refinement/ownership error. Generated links
      * identify destination CELLs until the writer allocates every primary NAVM identity.

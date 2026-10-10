@@ -15,6 +15,18 @@ checks water-height inheritance, and independently reads exported NVNM flags and
 GLB groups. Cell and batch paths exercise enabled and disabled classification and
 cache invalidation. No location names or game assets enter these fixtures.
 
+## Disconnected floors
+
+`tests/batch_generation_tests.cpp` constructs stacked floors and a roof spanning
+neighboring CELLs. It checks complete-set island removal, stable source and door
+joins, reciprocal portal remapping, empty replacements, separate selected areas,
+worldspace ownership and upper landings reached by ramps. Vertex-only contact
+does not retain an isolated surface. Recast generation exercises upper-platform
+removal after fresh and cached generation with every partitioning strategy.
+`tools/test_batch_rebuild.py` supplies a synthetic steep-sided LAND plateau,
+checks its removal through the CLI and independently reads exported plugin portals.
+These builders contain no game assets or location-specific rules.
+
 ## Stairs and overpasses
 
 `tests/navigation_obstacle_tests.cpp` builds a synthetic collision scene from

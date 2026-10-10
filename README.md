@@ -110,11 +110,14 @@ crossings invalidate the candidate. Cell-scope plugin export stops on an invalid
 candidate. Plugin and Load order batches regenerate every selected live cell,
 including cells without existing NAVM. All walkable candidates are retained until neighboring
 candidates are available. Shared seams receive matching partitions and reciprocal
-links; only untouched cells supply authored border constraints. The dedicated
+links; only untouched cells supply authored border constraints. Final filtering
+removes isolated roof and other floor islands, including islands spanning CELL seams.
+It retains routes to matched doors or authored neighbors and the largest connected
+floor network in each contiguous selected area or interior. The dedicated
 skip-existing option protects authored cells. Cell-local generation and topology
 failures are logged and skipped, retaining their authored geometry while other
 cells complete. Recovery preserves links to untouched neighbors; cells without
-authored NAVM leave open borders and supported walkable floors intact.
+authored NAVM leave open borders subject to complete-batch island filtering.
 Global seam and writer validation failures stop export.
 Compatible executable rebuilds reuse completed candidate caches through versioned
 pipeline identities; legacy executable-hash entries require verified migration.

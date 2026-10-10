@@ -109,7 +109,7 @@ namespace navmesh::core
     {
         std::size_t inputTriangles{}, eligibleTriangles{}, rejectedSlope{}, rejectedClearance{}, rejectedObstruction{},
             rejectedSource{}, rejectedDegenerate{}, rejectedSmallRegion{};
-        /// Generated triangles discarded because their component reaches neither a border nor a matched door.
+        /// Generated triangles discarded by standalone or complete-batch reachability filtering.
         std::size_t rejectedUnreachable{};
         /// Polygon count after filtering and before conservative interior simplification.
         std::size_t polygonsBeforeSimplification{};

@@ -2,6 +2,7 @@
 
 #include "app/candidate_cache.h"
 #include "core/navmesh/batch_stitching.h"
+#include "core/navmesh/candidate_reachability.h"
 #include "core/navmesh/generator.h"
 #include "core/navmesh/triangle_tagging.h"
 #include "core/reproducibility/export_metadata.h"
@@ -231,7 +232,7 @@ namespace navmesh::app::detail
                              .terrainSupported = input.geometry.terrainSupported,
                              .collisionGeometrySupported = input.geometry.collisionModelsLoaded != 0},
                 .warnings = {"Batch candidates are linked after every target has been generated.",
-                             "Empty candidates have no supported walkable floor; authored geometry is not reused."}};
+                             "Empty candidates have no retained walkable floor; authored geometry is not reused."}};
             result.metadata = reproducibility::ToJson(metadata, "    ");
             result.status = "generated";
         }
@@ -246,6 +247,7 @@ namespace navmesh::app::detail
     std::string ReconcileBatchBorders(std::vector<BatchCellResult> &results, const skyrim::ResolvedLoadOrder &resolved)
     {
         std::vector<core::GeneratedCellCandidate> exterior;
+        std::vector<core::CandidateReachabilityTarget> reachability;
         std::map<std::uint32_t, std::array<std::int32_t, 2>> generatedCoordinates;
         std::vector<const BatchCellResult *> skippedExteriors;
         for (auto &result : results)
@@ -254,8 +256,13 @@ namespace navmesh::app::detail
             {
                 skippedExteriors.push_back(&result);
             }
-            if (result.status != "generated" || !result.cell->exteriorCoordinates)
+            if (result.status != "generated")
             {
+                continue;
+            }
+            if (!result.cell->exteriorCoordinates)
+            {
+                reachability.push_back({result.cell->id, std::nullopt, std::nullopt, &result.candidate});
                 continue;
             }
             const auto *record = resolved.FindWinning(result.cell->id);
@@ -269,6 +276,7 @@ namespace navmesh::app::detail
                                     .max = {(static_cast<float>(x) + 1) * 4096.0F,
                                             (static_cast<float>(y) + 1) * 4096.0F, std::numeric_limits<float>::max()}};
             exterior.push_back({result.cell->id, *record->worldspaceFormId, bounds, &result.candidate});
+            reachability.push_back({result.cell->id, *record->worldspaceFormId, bounds, &result.candidate});
         }
         try
         {
@@ -330,6 +338,7 @@ namespace navmesh::app::detail
                 }
             }
             (void)core::StitchGeneratedCandidates(exterior);
+            (void)core::RemoveCandidateIslands(reachability);
         }
         catch (const std::exception &error)
         {

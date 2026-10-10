@@ -6,6 +6,13 @@ this reference.
 
 ## Code map
 
+- `navmesh::core::RemoveCandidateIslands`: complete-set floor reachability after
+  generated seam linking. Retains matched-door/authored-neighbor access and the
+  largest network in each contiguous exterior selection or interior; removes
+  isolated floor networks even across CELL seams. Compacts source, geometry,
+  region, door and reciprocal portal indices, then rebuilds contours and topology.
+  `CandidateReachabilityTarget` supplies borrowed candidates and neutral ownership keys.
+
 - `navmesh::app::detail::CellScene`: optional complete Cell-selection scene
   accumulation, source-triangle deduplication, authored navigation and exit joins,
   and checked GLB/sidecar export. Storage retains native Skyrim coordinates.

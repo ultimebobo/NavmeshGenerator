@@ -5,6 +5,7 @@
 #include "app/batch_generation.h"
 #include "app/candidate_cache.h"
 #include "core/navmesh/batch_stitching.h"
+#include "core/navmesh/candidate_reachability.h"
 #include "core/navmesh/detail_triangulation.h"
 #include "core/navmesh/generator.h"
 
@@ -12,6 +13,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <limits>
 #include <set>
@@ -80,11 +82,180 @@ namespace
             }
         }
     }
+
+    /// Append a disconnected floor with distinct evidence to exercise stable index compaction.
+    void AppendFloor(navmesh::core::CandidateNavMesh &candidate, navmesh::core::CandidateNavMesh floor)
+    {
+        const auto vertexOffset = static_cast<std::uint32_t>(candidate.mesh.vertices.size());
+        const auto polygonOffset = static_cast<std::uint32_t>(candidate.mesh.polygons.size());
+        candidate.mesh.vertices.insert(candidate.mesh.vertices.end(), floor.mesh.vertices.begin(),
+                                       floor.mesh.vertices.end());
+        for (auto polygon : floor.mesh.polygons)
+        {
+            for (auto &vertex : polygon.vertices)
+            {
+                vertex += vertexOffset;
+            }
+            candidate.mesh.polygons.push_back(polygon);
+            candidate.polygonSourceTriangles.push_back(11);
+            candidate.polygonContributingTriangles.push_back({11, 12});
+        }
+        for (auto region : floor.regions)
+        {
+            region.id = static_cast<std::uint32_t>(candidate.regions.size());
+            for (auto &polygon : region.polygons)
+            {
+                polygon += polygonOffset;
+            }
+            candidate.regions.push_back(std::move(region));
+        }
+        navmesh::core::RefreshCandidateTopology(candidate);
+        assert(candidate.topology.valid);
+    }
+
+    void TestCandidateIslandRemoval()
+    {
+        using namespace navmesh::core;
+        // This roof spans a CELL seam and acquires reciprocal portals, but has no
+        // route to the larger ground network. Put it first so retained identities move.
+        std::array<CandidateNavMesh, 2> candidates{Floor(0, 0, 400), Floor(4096, 0, 400, true)};
+        for (std::size_t index{}; index < candidates.size(); ++index)
+        {
+            for (auto &vertex : candidates[index].mesh.vertices)
+            {
+                vertex.y = 512 + vertex.y / 4;
+            }
+            RefreshCandidateTopology(candidates[index]);
+            AppendFloor(candidates[index], Floor(static_cast<float>(index) * 4096, 0, 0, index == 1));
+        }
+        candidates[0].exits = {{100, {100, 100, 0}, 1, 2}, {101, {100, 100, 800}, std::nullopt, std::nullopt}};
+        std::array<GeneratedCellCandidate, 2> cells{{{1, 1, {{0, 0, -100}, {4096, 4096, 1000}}, &candidates[0]},
+                                                     {2, 1, {{4096, 0, -100}, {8192, 4096, 1000}}, &candidates[1]}}};
+        assert(StitchGeneratedCandidates(cells) >= 4);
+        VerifyPortals(cells);
+        std::array<CandidateReachabilityTarget, 2> targets{
+            {{1, 1, cells[0].bounds, &candidates[0]}, {2, 1, cells[1].bounds, &candidates[1]}}};
+        assert(RemoveCandidateIslands(targets) > 0);
+        VerifyPortals(cells);
+        for (const auto &candidate : candidates)
+        {
+            assert(candidate.regions.size() == 1 && candidate.regions[0].id == 0);
+            assert(candidate.regions[0].reachesBorder);
+            assert(candidate.statistics.rejectedUnreachable > 0);
+            assert(candidate.statistics.outputPolygons == candidate.mesh.polygons.size());
+            assert(candidate.regions[0].sourceTriangles == std::vector<std::size_t>({11, 12}));
+            for (const auto vertex : candidate.mesh.vertices)
+            {
+                assert(vertex.z == 0);
+            }
+            for (std::size_t polygon{}; polygon < candidate.mesh.polygons.size(); ++polygon)
+            {
+                assert(candidate.mesh.polygons[polygon].flags == 0x40);
+                assert(candidate.polygonSourceTriangles[polygon] == 11);
+                assert(candidate.polygonContributingTriangles[polygon] == std::vector<std::size_t>({11, 12}));
+            }
+            for (const auto &contour : candidate.contours)
+            {
+                assert(contour.region == 0 && contour.closed);
+                for (const auto vertex : contour.vertices)
+                {
+                    assert(vertex < candidate.mesh.vertices.size());
+                }
+            }
+        }
+        assert(candidates[0].exits[0].region == 0 && candidates[0].exits[0].polygon);
+        assert(!candidates[0].exits[1].region && !candidates[0].exits[1].polygon);
+        assert(RemoveCandidateIslands(targets) == 0);
+        VerifyPortals(cells);
+
+        // A target containing only the rejected cross-CELL roof becomes an empty
+        // replacement, and both directions of its generated portals disappear.
+        candidates = {Floor(0, 0, 400), Floor(4096, 0, 400)};
+        for (auto &candidate : candidates)
+        {
+            for (auto &vertex : candidate.mesh.vertices)
+            {
+                vertex.y /= 4;
+            }
+            RefreshCandidateTopology(candidate);
+        }
+        AppendFloor(candidates[0], Floor(0, 0, 0));
+        assert(StitchGeneratedCandidates(cells) > 0);
+        assert(RemoveCandidateIslands(targets) > 0);
+        VerifyPortals(cells);
+        assert(candidates[0].mesh.polygons.size() == 2 && candidates[0].borderLinks.empty());
+        assert(candidates[1].mesh.polygons.empty() && candidates[1].mesh.vertices.empty());
+        assert(candidates[1].regions.empty() && candidates[1].contours.empty() && candidates[1].borderLinks.empty());
+
+        // Doorless interiors retain their primary floor; smaller disconnected
+        // surfaces survive only when a matched door or authored portal provides access.
+        auto interior = Floor(0, 0, 400);
+        for (auto &vertex : interior.mesh.vertices)
+        {
+            vertex.x /= 4;
+            vertex.y /= 4;
+        }
+        RefreshCandidateTopology(interior);
+        AppendFloor(interior, Floor(0, 0, 0));
+        auto door = interior;
+        door.exits = {{200, {100, 100, 400}, 0, 0}};
+        auto authored = interior;
+        authored.borderLinks = {{0, 0, 300, 0, 0}};
+        std::array<CandidateReachabilityTarget, 3> interiors{
+            {{10, {}, {}, &interior}, {11, {}, {}, &door}, {12, {}, {}, &authored}}};
+        assert(RemoveCandidateIslands(interiors) == 2);
+        assert(interior.mesh.polygons.size() == 2 && interior.regions.size() == 1);
+        assert(door.mesh.polygons.size() == 4 && door.exits[0].polygon == 0 && door.exits[0].region == 0);
+        assert(authored.mesh.polygons.size() == 4 && authored.borderLinks.size() == 1);
+
+        // Spatially separate selections and overlapping grids in another worldspace
+        // each retain their own primary floor, including a valid empty target.
+        candidates = {Floor(0, 0, 0), Floor(8192, 0, 0)};
+        auto otherWorld = Floor(0, 0, 400);
+        CandidateNavMesh empty;
+        std::array<CandidateReachabilityTarget, 4> separate{
+            {{1, 1, cells[0].bounds, &candidates[0]},
+             {2, 1, AABB{{8192, 0, -100}, {12288, 4096, 1000}}, &candidates[1]},
+             {3, 2, cells[0].bounds, &otherWorld},
+             {4, {}, {}, &empty}}};
+        assert(RemoveCandidateIslands(separate) == 0);
+        assert(candidates[0].mesh.polygons.size() == 2 && candidates[1].mesh.polygons.size() == 2);
+        assert(otherWorld.mesh.polygons.size() == 2 && empty.topology.valid && empty.mesh.vertices.empty());
+
+        // A walkable ramp keeps its elevated landing in the primary network.
+        // Another floor touching that landing at one vertex remains an island.
+        const auto platform = [](float x, float y, float height)
+        {
+            auto result = Floor(0, 0, height);
+            for (auto &vertex : result.mesh.vertices)
+            {
+                vertex.x = x + vertex.x / 8;
+                vertex.y = y + vertex.y / 8;
+            }
+            RefreshCandidateTopology(result);
+            return result;
+        };
+        auto accessedRoof = platform(0, 0, 0);
+        auto ramp = platform(512, 0, 0);
+        for (auto &vertex : ramp.mesh.vertices)
+        {
+            vertex.z = (vertex.x - 512) * 400 / 512;
+        }
+        AppendFloor(accessedRoof, std::move(ramp));
+        AppendFloor(accessedRoof, platform(1024, 0, 400));
+        AppendFloor(accessedRoof, platform(1536, 512, 400));
+        CandidateReachabilityTarget accessed{20, {}, {}, &accessedRoof};
+        assert(RemoveCandidateIslands(std::span(&accessed, 1)) == 2);
+        assert(accessedRoof.topology.valid && accessedRoof.mesh.polygons.size() == 6);
+        assert(std::any_of(accessedRoof.mesh.vertices.begin(), accessedRoof.mesh.vertices.end(),
+                           [](auto vertex) { return vertex.z == 400; }));
+    }
 } // namespace
 
 void TestGeneratedBatchTopology()
 {
     using namespace navmesh::core;
+    TestCandidateIslandRemoval();
     // Batch interiors retain a supported floor even without any authored NAVM,
     // exterior boundary or door anchor, under every partitioning strategy.
     Scene interior;
@@ -372,6 +543,35 @@ void TestBatchGenerationFailurePolicy()
     assert(successful.status == "generated" && successful.error.empty() && !successful.candidate.mesh.polygons.empty());
     const auto reused = app::detail::BuildBatchCandidate(input(floor, goodCell), options);
     assert(reused.status == "generated" && reused.reused);
+
+    // Recast floors are filtered after reconciliation for every partition strategy
+    // and for cache hits. An inaccessible upper platform must not reach final export.
+    auto roofScene = floor;
+    roofScene.mesh.vertices.insert(roofScene.mesh.vertices.end(),
+                                   {{160, 160, 400}, {352, 160, 400}, {352, 352, 400}, {160, 352, 400}});
+    roofScene.mesh.triangles.insert(roofScene.mesh.triangles.end(), {{{4, 5, 6}}, {{4, 6, 7}}});
+    roofScene.triangleProvenance.insert(roofScene.triangleProvenance.end(), {{0, 2, {}}, {0, 3, {}}});
+    for (const auto algorithm :
+         {core::RegionPartitioningAlgorithm::Watershed, core::RegionPartitioningAlgorithm::Monotone,
+          core::RegionPartitioningAlgorithm::Layers})
+    {
+        auto roofOptions = options;
+        roofOptions.partitioningAlgorithm = algorithm;
+        for (const bool cached : {false, true})
+        {
+            auto roof = app::detail::BuildBatchCandidate(input(roofScene, goodCell), roofOptions);
+            assert(roof.status == "generated" && roof.reused == cached && roof.candidate.regions.size() == 2);
+            std::vector<app::detail::BatchCellResult> roofResults{std::move(roof)};
+            assert(app::detail::ReconcileBatchBorders(roofResults, {}).empty());
+            const auto &retained = roofResults[0].candidate;
+            assert(retained.topology.valid && retained.regions.size() == 1);
+            assert(retained.statistics.rejectedUnreachable > 0);
+            for (const auto vertex : retained.mesh.vertices)
+            {
+                assert(std::abs(vertex.z) <= roofOptions.recastSettings.cellHeight);
+            }
+        }
+    }
 
     // Cached candidates must not hide a scene whose solids exceed raster height storage.
     const auto key = app::detail::CandidateFingerprint(oversized, options.navigationProfile, {}, {}, {}, "watershed",

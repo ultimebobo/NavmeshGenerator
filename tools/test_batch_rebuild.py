@@ -134,6 +134,40 @@ class BatchRebuild(unittest.TestCase):
             manifest.write(str(output / "generated-navmesh.esp") + "\n")
         self.run_cli("--list-cells", output="read-back")
 
+    def test_isolated_upper_floor_is_removed_for_fresh_and_cached_candidates(self):
+        # A steep-sided terrain plateau supplies an upper floor disconnected from
+        # the surrounding ground, without depending on a proprietary model asset.
+        heights = [[64 if 8 <= x <= 16 and 8 <= y <= 16 else 0
+                    for x in range(33)] for y in range(33)]
+        deltas = []
+        previous_row = 0
+        for row in heights:
+            deltas.append(row[0] - previous_row)
+            deltas.extend(row[x] - row[x - 1] for x in range(1, 33))
+            previous_row = row[0]
+        plateau = sub("VHGT", struct.pack("<f", 0)
+                      + struct.pack("<" + "b" * len(deltas), *deltas) + bytes(3))
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        header += sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
+        edits = group(0x100, 6, group(0x100, 9, record("LAND", 0x300, plateau)))
+        (self.root / "Patch.esp").write_bytes(record("TES4", 0, header)
+            + group(int.from_bytes(b"WRLD", "little"), 0, group(0x400, 1, edits)))
+        for algorithm in ("watershed", "monotone", "layers"):
+            for cached in (False, True):
+                with self.subTest(algorithm=algorithm, cached=cached):
+                    output = self.run_cli("--cells", "100,101", "--generate-plugin",
+                                          "--partitioning-algorithm", algorithm,
+                                          output=f"islands-{algorithm}-{cached}")
+                    report = json.loads((output / "batch-report.json").read_text())
+                    self.assertEqual(report["candidate_cache_hits"], 2 if cached else 0)
+                    self.assertEqual(report["status"], "complete")
+                    candidate = json.loads((output / "cells/00000100/candidate-navm.json").read_text())
+                    self.assertTrue(candidate["topology"]["valid"])
+                    self.assertGreater(candidate["statistics"]["rejected_unreachable"], 0)
+                    self.assertGreater(len(candidate["polygons"]), 0)
+                    self.assertTrue(all(vertex[2] < 256 for vertex in candidate["vertices"]))
+                    self.assert_plugin_portals(output / "generated-navmesh.esp")
+
     def test_generation_failure_is_logged_and_other_cells_write(self):
         # Independent exterior targets: one usable floor and one unrepresentable
         # vertical terrain range. The failed cell's authored NAVM must survive.

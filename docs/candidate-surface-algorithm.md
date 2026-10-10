@@ -152,7 +152,7 @@ and the distinction between neighboring geometry and saved return links.
 
 Plugin and load-order scopes retain all surviving Recast floor components, including
 isolated interiors and exterior borders awaiting generated neighbors. Only untouched
-cells supply authored border edges; batch stitching preserves unpaired seams
+cells supply authored border edges; batch stitching provisionally preserves unpaired seams
 and unanchored components. The complete generated set supplies common
 seam partitions, compatible shared heights and reciprocal generated triangle indices.
 Shared corner heights are planned together; established portal endpoints remain pinned.
@@ -165,9 +165,20 @@ XY edge matching and mutual nearest-height adjacency distinguish thin edges and
 stacked floors; contour tracing follows incident triangle adjacency.
 
 `--skip-existing-navmesh` protects cells with winning NAVM records. Other selected
-cells still retain every walkable component and link to each other's generated mesh,
+cells provisionally retain every walkable component and link to each other's generated mesh,
 including when the plugin starts without navmesh. Valid empty targets remain completed
 replacements when source geometry contains no supported walkable floor.
+
+Complete-batch reachability then joins shared-edge components through reciprocal
+generated portals. Matched doors and untouched authored neighbors anchor accessible
+networks. Each contiguous selected exterior area and each interior also retains
+its largest network by horizontal area. Remaining isolated roofs and other floors
+are removed regardless of their area or the number of CELLs they span. Open borders,
+generated portals alone and vertex-only contact do not anchor islands. Separate
+selected areas and worldspaces retain independent primary networks. Filtering runs
+for fresh and cached candidates, remapping geometry, evidence, regions, doors and
+both generated portal destinations before rebuilding contours and validating topology.
+Removed triangles contribute to `rejected_unreachable`.
 
 Recast height-detail patches are checked before the compact heightfield is released.
 An overlapping patch is retriangulated with its original boundary and floor samples;

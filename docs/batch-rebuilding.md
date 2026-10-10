@@ -203,15 +203,27 @@ Targets skipped after generation failure become untouched neighbors for border
 matching, including reciprocal connection updates when required.
 Recovery validates the complete set of established authored portal destinations
 together with the skipped neighbors. A skipped neighbor without authored NAVM
-adds no border constraint; supported floors remain intact with open seams.
+adds no border constraint; open seams remain subject to complete-set reachability.
 After every target is ready, `core/navmesh/batch_stitching` intersects neighboring
 candidate seam partitions, splits triangles with stable evidence and door joins,
 and welds compatible heights within movement limits. Corner endpoints are planned
 together. Linking revisits intervals made compatible by corner welding while
 keeping existing portal endpoints pinned; different authored corner heights remain pinned and connect through
 climb-compatible internal edges. Missing or unreachable
-neighbor floors leave valid candidate geometry intact. Compatible shared edges
+neighbor floors leave unpaired seams open. Compatible shared edges
 receive exact reversed endpoints and unique reciprocal generated triangle targets.
+
+After linking, `core/navmesh/candidate_reachability` floods shared-edge adjacency
+and reciprocal generated portals across the complete successful set. It retains
+floor networks reaching matched doors or untouched authored neighbors, together
+with the largest network by horizontal area in each contiguous exterior selection
+and each interior. Separate selections and worldspaces are evaluated independently.
+Generated portals and open CELL borders alone do not provide access: an isolated
+roof spanning multiple CELLs is removed as one component. Vertex-only contact does
+not connect floors. Filtering compacts geometry, source joins, regions, doors and
+both portal destinations, rebuilds contours and validates final topology.
+Removed triangles appear in `rejected_unreachable`; empty targets remain completed
+replacements. Cached candidates are filtered after linking on every run.
 
 The combined plugin overrides each target's existing NAVMs. Generated geometry
 occupies its largest source NAVM and the others become empty. Uncovered targets
