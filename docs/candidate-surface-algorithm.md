@@ -90,6 +90,15 @@ walkable seams where supported terrain or collision continues across the border.
 With an adjacent NAVM, stitching matches complete authored boundary edges at
 compatible heights. Selected-cell authored external links also define required
 crossings, resolved through neighboring return entries or a geometric edge match.
+Both single-cell and batch linking repair complete authored partitions spanning
+multiple generated fans, including when there is no selected-cell authored NAVM.
+The neighboring authored floor bounds repair depth in that case. Matching repeats
+after successful repairs so endpoint alignment can expose earlier partitions.
+New authored height bends can use supported interior samples with step-bounded
+height displacement. If continuous floor triangulation cannot preserve the slope
+envelope, a narrow border strip can retain authored heights and join the supporting
+floor at a climb-compatible internal edge. The floor keeps its sampled heights;
+both levels retain their slopes. Cavity growth preserves these step interfaces.
 When direct subdivision cannot retain a crossing, stitching replaces a connected
 boundary cavity with a triangulation constrained by the complete neighboring edge
 and the untouched interior rim. Its repair depth follows the authored floor

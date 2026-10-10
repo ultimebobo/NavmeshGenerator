@@ -115,6 +115,9 @@ Unreadable models and incomplete archive searches stop selection.
 Generated border portals use the neighboring NAVM's exact edge endpoints.
 Border repair aligns nearby endpoints and keeps interior floor-height detail
 when needed to preserve the surrounding slopes, including with finer contours.
+Generated border fans are split or retriangulated to match complete authored
+partitions in both single-cell and batch runs. Short height bends retain supported
+interior detail; compatible height offsets can join through internal step edges.
 In Cell scope, existing exterior crossings are required constraints:
 regeneration retains their locations and destinations. Boundary cavities are
 retriangulated when a direct match cannot retain a crossing; unresolved required

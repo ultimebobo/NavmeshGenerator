@@ -160,8 +160,8 @@ namespace navmesh::core
      * crossings, retaining the neighboring edge's exact position and destination.
      * Required crossings that cannot be repaired invalidate the candidate, even when empty.
      * @param deferUnlinkedBorders Preserve unpaired seams and all components for batch linking.
-     * In this mode only existing matched portals are validated; authored crossing repair
-     * and final seam/reachability filtering are deferred.
+     * Authored partitions and required crossings are repaired before returning;
+     * only matched portals are validated, and final seam/reachability filtering is deferred.
      * @return Number of reciprocal border portals added. candidate.topology reports
      * dangling targets, endpoint mismatches, reused portals, unmatched border vertices
      * or remaining open CELL seams.
@@ -181,6 +181,13 @@ namespace navmesh::core
      * a bounded interior sample when the unchanged rim needs it to meet that slope envelope.
      * Boundary preparation can retriangulate compatible fans even without a final match.
      * Subdivision commits only when every existing portal survives; incompatible proposals are discarded.
+     * All compatible complete neighboring edges are considered for cavity repair,
+     * including when the selected cell has no authored crossings. Neighboring floor
+     * depth bounds those repairs. Repairs repeat while new portals are established.
+     * Authored height bends can add a supported interior sample whose displacement
+     * is bounded by stepHeight. Continuous floor repairs precede border strips joined
+     * through climb-compatible interior edges; strip and floor triangles retain their
+     * slope envelopes and the original floor heights remain on the interior side.
      * Geometry, region membership, source joins, contour,
      * door and portal indices, and topology are updated consistently; neighbors are unchanged.
      * @throws std::invalid_argument when polygon source evidence is incomplete.

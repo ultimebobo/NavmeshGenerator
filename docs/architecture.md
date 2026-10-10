@@ -125,6 +125,13 @@ door matching, preserving source joins while compacting polygon, neighbor,
 region, door and vertex indices. Interiors without a matched door produce empty
 candidates. Final stitching retains only components connected to a real
 neighboring portal or matched door; reaching a border alone is insufficient.
+Authored partition repair runs before deferred batch linking as well as single-cell
+filtering. It repeats direct subdivision and connected cavity repairs, using
+neighboring floor depth when no selected-cell crossing supplies bounds. Supported
+interior samples accommodate authored height bends. Continuous floor repair
+precedes border strips whose authored heights connect to the unchanged supporting
+floor through climb-compatible interior edges. The neutral candidate stitcher
+owns these edits; neighbor NAVM geometry and serialization remain separate.
 Stitching can subdivide a containing
 generated boundary edge to match smaller authored border edges without removing
 the remaining geometry. Collinear generated subdivisions can be coalesced through

@@ -199,6 +199,12 @@ Generation and border linking are separate stages. Workers retain all surviving
 walkable components without requiring authored portals or door anchors. Authored
 NAVMs from other rebuilding targets never constrain their geometry. Borders into
 untouched cells are matched to authored edges while preserving those endpoints.
+Matching repairs every compatible complete authored partition before generated
+seams are reconciled, even without a selected-cell authored crossing. Connected
+border cavities handle partitions spanning several generated fans. Continuous
+floor repairs precede strips connected through climb-compatible interior edges;
+the supporting floor keeps its heights and every replacement obeys its slope
+envelope. Unsupported gaps and incompatible floor levels remain unlinked.
 Targets skipped after generation failure become untouched neighbors for border
 matching, including reciprocal connection updates when required.
 Recovery validates the complete set of established authored portal destinations

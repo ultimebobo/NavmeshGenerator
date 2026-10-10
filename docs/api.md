@@ -86,7 +86,10 @@ this reference.
   while retaining obstruction evidence. Skyrim extraction tags landscape rock assets.
   Candidate warnings identify adaptive voxel width and climb quantization.
 - `navmesh::core::StitchCandidateBorders`: matches complete neighboring edges and
-  accepts selected-cell authored NAVMs as required crossing constraints. Missing
+  reconciles authored partitions before deferred batch linking, including cells
+  without authored crossings. Supported interior samples and climb-compatible
+  border strips preserve floor slope limits and authored endpoint heights.
+  Selected-cell authored NAVMs supply required crossing constraints. Missing
   crossings are repaired by constrained cavity retriangulation with stable source,
   region, door, and portal joins; unresolved crossings invalidate the candidate.
   Near-coincident endpoints align through complete fans, and bounded interior

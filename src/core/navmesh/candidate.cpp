@@ -1580,7 +1580,21 @@ namespace
         }
     }
 
-    /// Reject subdivisions that collapse after welding or exceed the walking slope.
+    /// Preserve steep Recast detail without allowing a subdivision to steepen its original floor.
+    NavigationProfile BorderFloorProfile(Vec3 a, Vec3 b, Vec3 opposite, NavigationProfile profile)
+    {
+        const auto originalFirst = b - a;
+        const auto originalSecond = opposite - a;
+        const auto originalSlope =
+            std::atan2(std::hypot(originalFirst.y * originalSecond.z - originalFirst.z * originalSecond.y,
+                                  originalFirst.z * originalSecond.x - originalFirst.x * originalSecond.z),
+                       Cross2(a, b, opposite)) *
+            180.0F / 3.14159265358979323846F;
+        profile.maxSlopeDegrees = std::max(profile.maxSlopeDegrees, originalSlope);
+        return profile;
+    }
+
+    /// Reject subdivisions that collapse after welding or exceed the supplied floor slope envelope.
     bool CanSubdivideBorder(Vec3 a, Vec3 b, Vec3 opposite, Vec3 start, Vec3 end, Vec3 targetStart, Vec3 targetEnd,
                             const NavigationProfile &profile)
     {
@@ -1613,7 +1627,7 @@ namespace
             const auto normalX = first.y * second.z - first.z * second.y;
             const auto normalY = first.z * second.x - first.x * second.z;
             const auto slope = std::atan2(std::hypot(normalX, normalY), area) * 180.0F / 3.14159265358979323846F;
-            if (slope > profile.maxSlopeDegrees ||
+            if (slope > profile.maxSlopeDegrees + BorderSlopeRoundoff ||
                 Quantize2(face[0], profile.weldTolerance) == Quantize2(face[1], profile.weldTolerance) ||
                 Quantize2(face[1], profile.weldTolerance) == Quantize2(face[2], profile.weldTolerance) ||
                 Quantize2(face[2], profile.weldTolerance) == Quantize2(face[0], profile.weldTolerance))
@@ -1967,8 +1981,10 @@ namespace
                                 }
                             }
                             const auto &mesh = prepared ? prepared->mesh : candidate.mesh;
-                            if (!CanSubdivideBorder(preparedA, preparedB, mesh.vertices[face.vertices[(edge + 2) % 3]],
-                                                    p, q, c, d, candidate.profile))
+                            const auto opposite = mesh.vertices[face.vertices[(edge + 2) % 3]];
+                            const auto floorProfile = BorderFloorProfile(
+                                a, b, candidate.mesh.vertices[face.vertices[(edge + 2) % 3]], candidate.profile);
+                            if (!CanSubdivideBorder(preparedA, preparedB, opposite, p, q, c, d, floorProfile))
                             {
                                 continue;
                             }
@@ -2334,10 +2350,11 @@ namespace
 
     /** Prepare near-coincident portal endpoints through their complete incident fans.
      * Distances and heights are in Skyrim world units. Only vertices on the
-     * target CELL side qualify; existing portals and invalid deformations stay fixed.
+     * target endpoint's boundary neighborhood qualify, including CELL corners;
+     * existing portals and invalid deformations stay fixed.
      */
     template <class Border>
-    void AlignCavityEndpoints(CandidateNavMesh &candidate, Vec3 first, Vec3 last, int cellSide, float heightTolerance,
+    void AlignCavityEndpoints(CandidateNavMesh &candidate, Vec3 first, Vec3 last, float heightTolerance,
                               const Border &border)
     {
         for (const auto endpoint : {first, last})
@@ -2352,7 +2369,7 @@ namespace
                     const auto point = candidate.mesh.vertices[index];
                     if (!visited.insert(index).second ||
                         (point.x == endpoint.x && point.y == endpoint.y && point.z == endpoint.z) ||
-                        border(point, point, AuthoredBorderTolerance) != cellSide ||
+                        border(point, point, AuthoredBorderTolerance) < 0 ||
                         std::hypot(point.x - endpoint.x, point.y - endpoint.y) > AuthoredBorderTolerance ||
                         std::abs(point.z - endpoint.z) > heightTolerance)
                     {
@@ -2415,6 +2432,178 @@ namespace
                 revised.vertices.pop_back();
             }
         }
+        // Authored partitions can introduce a height bend between generated
+        // samples. An interior point near that endpoint gives the bend its own
+        // fan instead of forcing it into a single plane with the distant rim.
+        // Require supporting generated floor and bound its vertical displacement.
+        for (const auto sample : outline)
+        {
+            const auto point = revised.vertices[sample];
+            if (border(point, point, AuthoredBorderTolerance) < 0)
+            {
+                continue;
+            }
+            for (const auto polygon : selected)
+            {
+                const auto &face = original.polygons[polygon];
+                const auto a = original.vertices[face.vertices[0]];
+                const auto b = original.vertices[face.vertices[1]];
+                const auto c = original.vertices[face.vertices[2]];
+                float height{};
+                const auto inset = std::max(profile.agentRadius, profile.weldTolerance * 4.0F);
+                auto position = point;
+                if (cellSide < 2)
+                {
+                    position.x += cellSide == 0 ? inset : -inset;
+                }
+                else
+                {
+                    position.y += cellSide == 2 ? inset : -inset;
+                }
+                if (border(position, position, profile.weldTolerance) >= 0 || !HeightAt(position, a, b, c, height) ||
+                    std::abs(position.z - height) > profile.stepHeight)
+                {
+                    continue;
+                }
+                // Intersect the fan edges' admissible sample heights. The fixed
+                // along-edge gradient leaves only a bounded perpendicular rise;
+                // choosing within that interval avoids a steep diagonal through
+                // an otherwise traversable authored height bend.
+                auto minimumHeight = height - profile.stepHeight;
+                auto maximumHeight = height + profile.stepHeight;
+                const auto gradientLimit = std::tan(profile.maxSlopeDegrees * 3.14159265358979323846F / 180.0F);
+                for (std::size_t edge{}; edge < outline.size(); ++edge)
+                {
+                    const auto first = revised.vertices[outline[edge]];
+                    const auto last = revised.vertices[outline[(edge + 1) % outline.size()]];
+                    const auto dx = last.x - first.x;
+                    const auto dy = last.y - first.y;
+                    const auto lengthSquared = dx * dx + dy * dy;
+                    const auto area = Cross2(first, last, position);
+                    if (area <= 0.01F || lengthSquared <= 0.01F || border(first, last, AuthoredBorderTolerance) < 0)
+                    {
+                        continue;
+                    }
+                    const auto alongGradient = (last.z - first.z) / std::sqrt(lengthSquared);
+                    const auto perpendicularGradient =
+                        std::sqrt(std::max(0.0F, gradientLimit * gradientLimit - alongGradient * alongGradient));
+                    const auto projection = ((position.x - first.x) * dx + (position.y - first.y) * dy) / lengthSquared;
+                    const auto projectedHeight = Interpolate(first, last, projection).z;
+                    const auto rise = area / std::sqrt(lengthSquared) * perpendicularGradient;
+                    minimumHeight = std::max(minimumHeight, projectedHeight - rise);
+                    maximumHeight = std::min(maximumHeight, projectedHeight + rise);
+                }
+                if (minimumHeight > maximumHeight)
+                {
+                    continue;
+                }
+                position.z = std::clamp(position.z, minimumHeight, maximumHeight);
+                const auto interior = static_cast<std::uint32_t>(revised.vertices.size());
+                revised.vertices.push_back(position);
+                auto replacements = TriangulateBorderOutline(outline, revised, profile, interior);
+                if (!replacements.empty())
+                {
+                    return replacements;
+                }
+                revised.vertices.pop_back();
+            }
+        }
+        return {};
+    }
+
+    /** Join a border strip to the generated floor through climb-compatible internal edges.
+     * Authored heights stay on the exterior strip. The supporting floor keeps its
+     * sampled heights at the same interior XY edge, with each difference bounded
+     * by the profile's step height. Every face still respects the slope envelope.
+     */
+    std::vector<std::array<std::uint32_t, 3>> TriangulateSteppedBorderCavity(NavMesh &revised, const NavMesh &original,
+                                                                             const std::vector<std::uint32_t> &outline,
+                                                                             const std::set<std::uint32_t> &selected,
+                                                                             std::uint32_t first, std::uint32_t last,
+                                                                             const NavigationProfile &profile,
+                                                                             int cellSide)
+    {
+        const auto firstIt = std::find(outline.begin(), outline.end(), first);
+        const auto lastIt = std::find(outline.begin(), outline.end(), last);
+        if (firstIt == outline.end() || lastIt == outline.end() || firstIt + 1 != lastIt)
+        {
+            return {};
+        }
+        const auto a = revised.vertices[first];
+        const auto b = revised.vertices[last];
+        const auto before = outline[(firstIt - outline.begin() + outline.size() - 1) % outline.size()];
+        const auto after = outline[(lastIt - outline.begin() + 1) % outline.size()];
+        const auto floorHeight = [&](Vec3 point) -> std::optional<float>
+        {
+            for (const auto polygon : selected)
+            {
+                const auto &face = original.polygons[polygon];
+                float height{};
+                if (HeightAt(point, original.vertices[face.vertices[0]], original.vertices[face.vertices[1]],
+                             original.vertices[face.vertices[2]], height) &&
+                    std::abs(height - point.z) <= profile.stepHeight)
+                {
+                    return height;
+                }
+            }
+            return std::nullopt;
+        };
+        const auto initialInset = std::max(profile.agentRadius, profile.weldTolerance * 4.0F);
+        for (auto inset = initialInset; inset >= profile.weldTolerance * 4.0F; inset *= 0.5F)
+        {
+            auto innerFirst = a;
+            auto innerLast = b;
+            for (auto *point : {&innerFirst, &innerLast})
+            {
+                if (cellSide < 2)
+                {
+                    point->x += cellSide == 0 ? inset : -inset;
+                }
+                else
+                {
+                    point->y += cellSide == 2 ? inset : -inset;
+                }
+            }
+            const auto firstHeight = floorHeight(innerFirst);
+            const auto lastHeight = floorHeight(innerLast);
+            if (!firstHeight || !lastHeight || (innerFirst.x == a.x && innerFirst.y == a.y) ||
+                (innerLast.x == b.x && innerLast.y == b.y))
+            {
+                continue;
+            }
+            const auto originalSize = static_cast<std::uint32_t>(revised.vertices.size());
+            revised.vertices.push_back(innerFirst);
+            revised.vertices.push_back(innerLast);
+            innerFirst.z = *firstHeight;
+            innerLast.z = *lastHeight;
+            revised.vertices.push_back(innerFirst);
+            revised.vertices.push_back(innerLast);
+            auto interiorOutline = outline;
+            interiorOutline[firstIt - outline.begin()] = originalSize + 2;
+            interiorOutline[lastIt - outline.begin()] = originalSize + 3;
+            auto faces = TriangulateBorderOutline(interiorOutline, revised, profile);
+            const std::array stripFaces{
+                std::array{first, last, originalSize + 1}, std::array{first, originalSize + 1, originalSize},
+                std::array{before, first, originalSize}, std::array{last, after, originalSize + 1}};
+            bool valid = !faces.empty();
+            for (const auto &face : stripFaces)
+            {
+                const auto p = revised.vertices[face[0]];
+                const auto q = revised.vertices[face[1]];
+                const auto r = revised.vertices[face[2]];
+                if (Cross2(p, q, r) <= 0.01F || !CanSubdivideBorder(p, q, r, p, q, p, q, profile))
+                {
+                    valid = false;
+                    break;
+                }
+                faces.push_back(face);
+            }
+            if (valid)
+            {
+                return faces;
+            }
+            revised.vertices.resize(originalSize);
+        }
         return {};
     }
 
@@ -2427,7 +2616,7 @@ namespace
     template <class Border>
     bool RetriangulateBorderPortal(CandidateNavMesh &candidate, const NavMesh &neighbor, std::uint32_t targetPolygon,
                                    std::uint8_t targetEdge, const Border &border, float maximumGap, float cavityDepth,
-                                   float heightTolerance)
+                                   float heightTolerance, bool allowStepped = false)
     {
         const auto &target = neighbor.polygons[targetPolygon];
         const auto c = neighbor.vertices[target.vertices[(targetEdge + 1) % 3]];
@@ -2442,7 +2631,7 @@ namespace
         }
         const auto projection = [&](Vec3 p) { return ((p.x - c.x) * dx + (p.y - c.y) * dy) / lengthSquared; };
         auto prepared = candidate;
-        AlignCavityEndpoints(prepared, c, d, cellSide, heightTolerance, border);
+        AlignCavityEndpoints(prepared, c, d, heightTolerance, border);
         const auto &mesh = prepared.mesh;
         std::set<std::uint32_t> selected;
         for (std::uint32_t polygon{}; polygon < mesh.polygons.size(); ++polygon)
@@ -2492,8 +2681,10 @@ namespace
                 for (const auto vertex : {face.vertices[edge], face.vertices[(edge + 1) % 3]})
                 {
                     const auto point = mesh.vertices[vertex];
+                    const auto matchesEndpoint = [&](Vec3 endpoint)
+                    { return point.x == endpoint.x && point.y == endpoint.y && point.z == endpoint.z; };
                     if (border(point, point, maximumGap) == cellSide && projection(point) >= 0 &&
-                        projection(point) <= 1)
+                        projection(point) <= 1 && !matchesEndpoint(c) && !matchesEndpoint(d))
                     {
                         seamVertices.insert(vertex);
                     }
@@ -2608,6 +2799,11 @@ namespace
                     replacements = TriangulateCavityWithHeightSample(revised.mesh, mesh, boundary, outline, selected,
                                                                      cavityProfile, cellSide, maximumGap, border);
                 }
+                if (replacements.empty() && allowStepped)
+                {
+                    replacements = TriangulateSteppedBorderCavity(revised.mesh, mesh, outline, selected, targetFirst,
+                                                                  targetLast, cavityProfile, cellSide);
+                }
                 if (!replacements.empty() &&
                     CommitBorderCavity(candidate, std::move(revised), selected, replacements, targetFirst, targetLast,
                                        neighbor, targetPolygon, targetEdge))
@@ -2620,13 +2816,25 @@ namespace
             // centroids lie outside it. Keep those incident rim choices available.
             for (const auto polygon : selected)
             {
-                for (const auto next : mesh.polygons[polygon].neighbors)
+                const auto &source = mesh.polygons[polygon];
+                for (std::uint8_t edge{}; edge < 3; ++edge)
                 {
+                    const auto next = source.neighbors[edge];
                     if (next == NoNeighbor)
                     {
                         continue;
                     }
                     const auto &face = mesh.polygons[next];
+                    // A climb-compatible edge can join distinct floor heights.
+                    // Keep that interface on the rim rather than merging both
+                    // levels into a cavity with conflicting endpoint identities.
+                    const auto sourceFirst = source.vertices[edge];
+                    const auto sourceLast = source.vertices[(edge + 1) % 3];
+                    if (std::find(face.vertices.begin(), face.vertices.end(), sourceFirst) == face.vertices.end() ||
+                        std::find(face.vertices.begin(), face.vertices.end(), sourceLast) == face.vertices.end())
+                    {
+                        continue;
+                    }
                     if (std::any_of(face.vertices.begin(), face.vertices.end(),
                                     [&](auto vertex)
                                     {
@@ -2645,6 +2853,71 @@ namespace
                 return false;
             }
             selected = std::move(expanded);
+        }
+    }
+
+    /** Reconcile complete authored partitions before generated seams or filtering.
+     * Direct splits and connected cavity repairs preserve existing portals and the
+     * generated interior rim. Neighboring floor depth bounds cavity growth when
+     * no selected-cell crossing supplies a stronger repair constraint. Repeat
+     * after successful repairs because shared endpoint alignment can expose an
+     * earlier partition; every pass must add a unique portal to continue.
+     */
+    template <class Border>
+    void StitchAuthoredBorderPartitions(
+        CandidateNavMesh &candidate, const std::vector<NavMesh> &neighbors, const Border &border, float maximumGap,
+        const std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint8_t>, BorderCavityLimits> &required)
+    {
+        for (const bool allowStepped : {false, true})
+        {
+            std::size_t previousLinks;
+            do
+            {
+                previousLinks = candidate.borderLinks.size();
+                StitchPartitionedBorders(candidate, neighbors, border, maximumGap);
+                // An authored edge can span several nonplanar generated fans. Constrain
+                // their shared cavity to the complete authored edge before batch linking
+                // or seam retraction consumes the remaining boundary.
+                for (const auto &neighbor : neighbors)
+                {
+                    for (std::uint32_t polygon{}; polygon < neighbor.polygons.size(); ++polygon)
+                    {
+                        const auto &face = neighbor.polygons[polygon];
+                        for (std::uint8_t edge{}; edge < 3; ++edge)
+                        {
+                            if (face.vertices[edge] >= neighbor.vertices.size() ||
+                                face.vertices[(edge + 1) % 3] >= neighbor.vertices.size() ||
+                                (!(face.flags & (1U << edge)) && face.neighbors[edge] != NoNeighbor &&
+                                 face.neighbors[edge] != 0xffffU) ||
+                                border(neighbor.vertices[face.vertices[edge]],
+                                       neighbor.vertices[face.vertices[(edge + 1) % 3]], AuthoredBorderTolerance) < 0 ||
+                                std::any_of(candidate.borderLinks.begin(), candidate.borderLinks.end(),
+                                            [&](const auto &link)
+                                            {
+                                                return link.neighborNavmeshId == neighbor.id &&
+                                                       link.neighborPolygon == polygon && link.neighborEdge == edge;
+                                            }))
+                            {
+                                continue;
+                            }
+                            const auto first = neighbor.vertices[face.vertices[edge]];
+                            const auto last = neighbor.vertices[face.vertices[(edge + 1) % 3]];
+                            const auto opposite = neighbor.vertices.at(face.vertices[(edge + 2) % 3]);
+                            const auto length = std::hypot(last.x - first.x, last.y - first.y);
+                            const auto depth =
+                                length > 0 ? std::abs(Cross2(first, last, opposite)) / length : maximumGap;
+                            const auto established = required.find({neighbor.id, polygon, edge});
+                            const auto constraints =
+                                established != required.end()
+                                    ? established->second
+                                    : BorderCavityLimits{std::max(maximumGap, depth), candidate.profile.stepHeight};
+                            (void)RetriangulateBorderPortal(candidate, neighbor, polygon, edge, border, maximumGap,
+                                                            constraints.depth, constraints.heightTolerance,
+                                                            allowStepped);
+                        }
+                    }
+                }
+            } while (candidate.borderLinks.size() > previousLinks);
         }
     }
 
@@ -3344,8 +3617,10 @@ namespace navmesh::core
                                 std::abs(a.z - c.z) > candidate.profile.stepHeight ||
                                 std::abs(b.z - d.z) > candidate.profile.stepHeight || Cross2(a, c, b) <= 0.01F ||
                                 Cross2(b, c, d) <= 0.01F ||
-                                !CanSubdivideBorder(a, b, candidate.mesh.vertices[face.vertices[(side + 2) % 3]], a, b,
-                                                    c, d, candidate.profile))
+                                !CanSubdivideBorder(
+                                    a, b, candidate.mesh.vertices[face.vertices[(side + 2) % 3]], a, b, c, d,
+                                    BorderFloorProfile(a, b, candidate.mesh.vertices[face.vertices[(side + 2) % 3]],
+                                                       candidate.profile)))
                             {
                                 continue;
                             }
@@ -3392,7 +3667,7 @@ namespace navmesh::core
                 used.emplace(best->navmesh, best->polygon, best->side);
             }
         }
-        StitchPartitionedBorders(candidate, neighbors, border, maximumGap);
+        StitchAuthoredBorderPartitions(candidate, neighbors, border, maximumGap, required);
         CompactBorderVertices(candidate);
         if (deferUnlinkedBorders)
         {

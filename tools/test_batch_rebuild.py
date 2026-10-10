@@ -608,6 +608,44 @@ class BatchRebuild(unittest.TestCase):
                     pending.extend(neighbor for neighbor in polygons[index]["neighbors"] if neighbor is not None)
                 self.assertEqual(reachable, set(range(len(polygons))))
 
+    def test_authored_border_partitions_match_in_cell_and_batch_exports(self):
+        vertices = [(4096, 0, 0), (4096, 1536, 18), (4096, 3072, -10),
+                    (4096, 4096, 0), (8192, 2048, 0)]
+        faces = [(0, 4, 1), (1, 4, 2), (2, 4, 3)]
+        body = struct.pack("<IIIhhI", 12, 0, 0x400, 0, 1, len(vertices))
+        body += b"".join(struct.pack("<3f", *point) for point in vertices)
+        body += struct.pack("<I", len(faces))
+        for face, adjacency in zip(faces, [(65535, 1, 65535), (0, 2, 65535), (1, 65535, 65535)]):
+            body += struct.pack("<8H", *face, *adjacency, 0, 0)
+        body += struct.pack("<4I8fI3H", 0, 0, 0, 1, *([0] * 8), len(faces), 0, 1, 2)
+        authored = sub("NVNM", body)
+        self.write_baseline(navmeshes={0: navm(0), 1: authored, 2: navm(2)})
+        single = self.run_cli("--cell-formid", "100", "--generate-plugin", output="partition-cell")
+        batch = self.run_cli("--cells", "100,102", "--generate-plugin", output="partition-batch")
+        cached = self.run_cli("--cells", "100,102", "--generate-plugin", output="partition-cached")
+        self.assertEqual(json.loads((cached / "batch-report.json").read_text())["candidate_cache_hits"], 2)
+        for output, path in [(single, single / "candidate-navm.json"),
+                             (batch, batch / "cells/00000100/candidate-navm.json"),
+                             (cached, cached / "cells/00000100/candidate-navm.json")]:
+            with self.subTest(output=output):
+                candidate = json.loads(path.read_text())
+                self.assertTrue(candidate["topology"]["valid"], candidate["topology"])
+                links = [link for link in candidate["border_links"]
+                         if link["neighbor_navmesh_id"] == "00000201"]
+                self.assertEqual({(link["neighbor_polygon"], link["neighbor_edge"]) for link in links},
+                                 {(index, 2) for index in range(len(faces))})
+                self.assertEqual(len(links), len(faces))
+                for link in links:
+                    face = candidate["polygons"][link["polygon"]]["vertices"]
+                    target = faces[link["neighbor_polygon"]]
+                    self.assertEqual(tuple(candidate["vertices"][face[link["edge"]]]), vertices[target[0]])
+                    self.assertEqual(tuple(candidate["vertices"][face[(link["edge"] + 1) % 3]]), vertices[target[2]])
+                patch = output / "generated-navmesh.esp"
+                self.assert_plugin_portals(patch)
+                neighbor = next(payload for kind, form, _, payload in read_records(patch)
+                                if kind == "NAVM" and form == 0x201)
+                self.assertEqual(navm_geometry(neighbor), navm_geometry(authored))
+
     def test_isolated_candidates_are_skipped_without_a_patch(self):
         self.write_baseline({})
         single = self.run_cli("--cell-formid", "100", "--generate-plugin", "--skip-existing-navmesh",

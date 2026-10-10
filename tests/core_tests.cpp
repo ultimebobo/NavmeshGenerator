@@ -763,7 +763,8 @@ namespace
                 generated.exits.front().position = rotate(generated.exits.front().position);
             }
             auto unconstrained = generated;
-            Require(StitchCandidateBorders(unconstrained, bounds, {neighbor}) == 0);
+            Require(StitchCandidateBorders(unconstrained, bounds, {neighbor}) == 1);
+            RequireCompleteBorderStitch(unconstrained, bounds, {neighbor});
             Require(StitchCandidateBorders(generated, bounds, {neighbor}, {authored}) == 1);
             RequireCompleteBorderStitch(generated, bounds, {neighbor});
             Require(generated.exits.front().polygon.has_value());
@@ -1174,6 +1175,9 @@ namespace
                     Require(StitchCandidateBorders(unlinked, bounds, {elevated}) == 0 && unlinked.topology.valid &&
                             unlinked.borderLinks.empty() && unlinked.exits.front().polygon &&
                             unlinked.regions.size() == 1);
+                    auto deferred = candidate;
+                    Require(StitchCandidateBorders(deferred, bounds, {neighbor}, {}, true) == 1);
+                    Require(deferred.topology.valid && deferred.borderLinks.size() == 1);
                     const auto added = StitchCandidateBorders(candidate, bounds, {neighbor});
                     if (added != 1 || !candidate.topology.valid)
                     {
@@ -1197,6 +1201,86 @@ namespace
                             candidate.polygonContributingTriangles.size() == candidate.mesh.polygons.size());
                     Require(candidate.exits.front().polygon &&
                             *candidate.exits.front().polygon < candidate.mesh.polygons.size());
+                }
+            }
+        }
+    }
+
+    void TestAuthoredBorderHeightBends()
+    {
+        using namespace navmesh::core;
+        const auto open = std::numeric_limits<std::uint32_t>::max();
+        const AABB bounds{.min = {0, 0, -100}, .max = {500, 500, 100}};
+        for (int rotation{}; rotation < 4; ++rotation)
+        {
+            for (const bool deferred : {false, true})
+            {
+                for (const bool stepped : {false, true})
+                {
+                    CandidateNavMesh candidate;
+                    NavMesh neighbor{.id = 0x201};
+                    if (stepped)
+                    {
+                        // A thin supporting floor accepts the authored height through
+                        // a traversable internal step while both floors keep their slopes.
+                        candidate.mesh.vertices = {{500, 0, 0}, {500, 400, -22}, {432, 436, -22}, {488, 24, 0}};
+                        candidate.mesh.polygons = {{.vertices = {0, 1, 2}}, {.vertices = {0, 2, 3}}};
+                        neighbor.vertices = {{500.002F, 386.73F, -22.72F}, {501.16F, 57.93F, -27.61F}, {664, 110, 0}};
+                        neighbor.polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}};
+                    }
+                    else
+                    {
+                        // A short authored height bend spans a shallow generated fan;
+                        // its interior sample must leave both complete partitions intact.
+                        candidate.mesh.vertices = {{0, 107, -29}, {0, 0, 0}, {120, 356, -54}};
+                        candidate.mesh.polygons = {{.vertices = {0, 1, 2}}};
+                        neighbor.vertices = {{0, 0, 0}, {0, 64, 5.36F}, {0, 107, -29}, {-120, 50, -20}};
+                        neighbor.polygons = {{.vertices = {0, 1, 3}, .neighbors = {open, open, open}},
+                                             {.vertices = {1, 2, 3}, .neighbors = {open, open, open}}};
+                    }
+                    for (std::uint32_t polygon{}; polygon < candidate.mesh.polygons.size(); ++polygon)
+                    {
+                        candidate.mesh.polygons[polygon].flags = WaterFlag;
+                        candidate.polygonSourceTriangles.push_back(polygon);
+                        candidate.polygonContributingTriangles.push_back({polygon});
+                    }
+                    CandidateRegion region{.id = 0};
+                    for (std::uint32_t polygon{}; polygon < candidate.mesh.polygons.size(); ++polygon)
+                    {
+                        region.polygons.push_back(polygon);
+                    }
+                    candidate.regions.push_back(region);
+                    for (int turn{}; turn < rotation; ++turn)
+                    {
+                        for (auto *mesh : {&candidate.mesh, &neighbor})
+                        {
+                            for (auto &point : mesh->vertices)
+                            {
+                                point = {500 - point.y, point.x, point.z};
+                            }
+                        }
+                    }
+                    RefreshCandidateTopology(candidate);
+                    Require(candidate.topology.valid);
+                    Require(StitchCandidateBorders(candidate, bounds, {neighbor}, {}, deferred) ==
+                            neighbor.polygons.size());
+                    Require(candidate.topology.valid);
+                    Require(candidate.polygonSourceTriangles.size() == candidate.mesh.polygons.size() &&
+                            candidate.polygonContributingTriangles.size() == candidate.mesh.polygons.size());
+                    for (const auto &face : candidate.mesh.polygons)
+                    {
+                        const auto a = candidate.mesh.vertices[face.vertices[0]];
+                        const auto u = candidate.mesh.vertices[face.vertices[1]] - a;
+                        const auto v = candidate.mesh.vertices[face.vertices[2]] - a;
+                        const auto slope = std::atan2(std::hypot(u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z),
+                                                      u.x * v.y - u.y * v.x) *
+                                           180 / 3.14159265358979323846F;
+                        Require(slope <= candidate.profile.maxSlopeDegrees + 0.001F && face.flags == WaterFlag);
+                    }
+                    if (!deferred)
+                    {
+                        RequireCompleteBorderStitch(candidate, bounds, {neighbor});
+                    }
                 }
             }
         }
@@ -2527,6 +2611,7 @@ int main(int argc, char **argv)
         TestBorderCavityEndpointAlignment();
         TestPartitionedBorderRetention();
         TestGeneratedBorderPartitions();
+        TestAuthoredBorderHeightBends();
         TestAdjacentBorderBridges();
         TestReciprocalCellTransitions();
         TestReciprocalCellTransitions(2.5F, true);
@@ -2571,6 +2656,7 @@ int main(int argc, char **argv)
     TestAuthoredBorderTolerance();
     TestPartitionedBorderRetention();
     TestGeneratedBorderPartitions();
+    TestAuthoredBorderHeightBends();
     TestReciprocalCellTransitions(2.5F,true);
     TestExteriorLandTerrain();
     TestExportMetadata();
