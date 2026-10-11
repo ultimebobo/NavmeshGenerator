@@ -1,4 +1,5 @@
 #include "app/candidate_cache.h"
+#include "app/gzip_file.h"
 #include "core/navmesh/generator.h"
 
 #include "core/io/content_hash.h"
@@ -232,14 +233,6 @@ namespace navmesh::app::detail
             std::size_t limit_{MaximumBytes};
         };
 
-        gzFile Open(const std::filesystem::path &path, const char *mode)
-        {
-#ifdef _WIN32
-            return gzopen_w(path.c_str(), mode);
-#else
-            return gzopen(path.c_str(), mode);
-#endif
-        }
         // Writes and hashes never mutate fields. Reading alone changes the supplied object.
         template <class T> T &Writable(const T &value)
         {
@@ -267,10 +260,11 @@ namespace navmesh::app::detail
                         const core::Scene &evidence)
     {
         static std::atomic_size_t sequence{};
-        std::filesystem::create_directories(path.parent_path());
-        auto temporary = path;
+        const auto nativePath = core::NativeFilePath(path);
+        std::filesystem::create_directories(nativePath.parent_path());
+        auto temporary = nativePath;
         temporary += "." + std::to_string(++sequence) + ".tmp";
-        auto file = Open(temporary, "wb");
+        auto file = OpenGzipFile(temporary, "wb");
         if (!file)
         {
             return false;
@@ -282,7 +276,7 @@ namespace navmesh::app::detail
         std::error_code error;
         if (archive.good && closed)
         {
-            std::filesystem::rename(temporary, path, error);
+            std::filesystem::rename(temporary, nativePath, error);
             if (!error)
             {
                 return true;
@@ -294,7 +288,8 @@ namespace navmesh::app::detail
 
     bool LoadCandidate(const std::filesystem::path &path, core::CandidateNavMesh &candidate, core::Scene &evidence)
     {
-        std::ifstream compressed(path, std::ios::binary | std::ios::ate);
+        const auto nativePath = core::NativeFilePath(path);
+        std::ifstream compressed(nativePath, std::ios::binary | std::ios::ate);
         if (compressed.tellg() < 18)
         {
             return false;
@@ -309,7 +304,7 @@ namespace navmesh::app::detail
         {
             return false;
         }
-        auto file = Open(path, "rb");
+        auto file = OpenGzipFile(nativePath, "rb");
         if (!file)
         {
             return false;
@@ -420,7 +415,7 @@ namespace navmesh::app::detail
                 }
             }
             std::error_code error;
-            std::filesystem::last_write_time(path, std::filesystem::file_time_type::clock::now(), error);
+            std::filesystem::last_write_time(nativePath, std::filesystem::file_time_type::clock::now(), error);
             candidate = std::move(loaded);
             evidence = std::move(sources);
             return true;

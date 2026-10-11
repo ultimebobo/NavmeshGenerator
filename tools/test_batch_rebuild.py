@@ -1601,6 +1601,41 @@ class BatchRebuild(unittest.TestCase):
                                "--asset-cache", str(self.root / "limited-cache"), output="limited")
         self.assertEqual(json.loads((limited / "batch-report.json").read_text())["workers_peak"], 1)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows native file path regression")
+    def test_long_cache_paths_spool_reuse_and_export_candidates(self):
+        import gzip
+
+        # Keep the snapshot directory short enough for ordinary directory setup,
+        # while its digest-named candidates exceed the legacy Windows file limit.
+        cache = self.root / ("cache-\u00e9-" + "x" * max(16, 125 - len(str(self.root)) - 9))
+        outputs = []
+        for mode in ("full", "compact", "plugin_only"):
+            output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin",
+                                  "--workers", "2", "--batch-output", mode,
+                                  "--asset-cache", str(cache), output=f"long-cache-{mode}")
+            outputs.append(output)
+            report = json.loads((output / "batch-report.json").read_text())
+            self.assertEqual(report["candidate_cache_hits"], 0 if mode == "full" else 2)
+            candidates = list(cache.glob("*/candidates/*.gz"))
+            self.assertEqual(len(candidates), 2)
+            self.assertTrue(all(len(str(path)) > 260 for path in candidates))
+            self.assertFalse(list(cache.glob("*/candidates/*.tmp")))
+
+        full, compact, minimal = outputs
+        for output in (compact, minimal):
+            self.assertEqual((full / "generated-navmesh.esp").read_bytes(),
+                             (output / "generated-navmesh.esp").read_bytes())
+        for directory in (full / "cells").iterdir():
+            self.assertEqual(json.loads((directory / "candidate-navm.json").read_text()),
+                             json.loads(gzip.decompress((compact / "cells" / directory.name /
+                                                       "candidate-navm.json.gz").read_bytes())))
+        pruned = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin",
+                              "--batch-output", "plugin_only", "--cache-budget-mib", "0",
+                              "--asset-cache", str(cache), output="long-cache-pruned")
+        self.assertEqual((full / "generated-navmesh.esp").read_bytes(),
+                         (pruned / "generated-navmesh.esp").read_bytes())
+        self.assertFalse(list(cache.glob("*/candidates/*.gz")))
+
     def test_zero_cache_budget_prunes_only_generated_files(self):
         cache = self.root / "cache"
         (cache / "operator-files").mkdir(parents=True)

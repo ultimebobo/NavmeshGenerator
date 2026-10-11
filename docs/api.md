@@ -62,6 +62,8 @@ this reference.
 - `navmesh::core::SharedBytes`: immutable shared byte ownership and bounded slices
   for parser payload/subrecord data without repeated copies.
 - `navmesh::core::ContentHash`: incremental SHA-256 identities for cache dependencies.
+- `navmesh::core::NativeFilePath`: native I/O path preparation, including
+  normalized Windows extended local and UNC paths for candidate cache files.
 - `navmesh::skyrim::ModelGeometryCache`: byte-budgeted model-local and
   transformed-placement reuse with extraction-policy/provider revision keys.
 - `navmesh::skyrim::BsaModelExtractor`: run-scoped lazy archive indexes,

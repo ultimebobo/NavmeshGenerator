@@ -14,6 +14,12 @@ This keeps extraction/orchestration in the app and serialization in the core.
 Requested scene storage is owned for the run, independently of cache retention and
 generation admission budgets. Scene and sidecar failures stop plugin publishing.
 
+The `core/io/file_path` helper prepares native filesystem paths without reading
+game data. Candidate cache publication, reads and audit pinning use it at their
+I/O boundaries. The app-owned gzip opener shares that preparation between
+private candidate evidence and streaming compressed JSON exports, preserving
+cache identities while supporting long Windows local and UNC paths.
+
 ## 1. Plugin parsing
 
 The parser layer is responsible for reading a Bethesda plugin file directly from disk.

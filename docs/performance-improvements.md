@@ -97,6 +97,12 @@ generation. Both source-triangle and geometry-source evidence tables are
 compacted and written to private gzip cache data. Inspection audits are pinned
 through reconciliation/export and staging links or copies are removed on exit.
 
+On Windows, candidate gzip I/O and cache publication use normalized native
+extended paths, including UNC paths. Digest-named candidate files and their
+temporary siblings can exceed the legacy file-path limit without preventing
+spooling, reuse, audit pinning or retention-budget cleanup. Cache identities and stored formats remain
+independent of this file-opening representation.
+
 Eviction only touches recognized generated cache files inside the cache root.
 Game inputs and operator-owned exports are excluded. Ownership/statistics markers
 and active audit pins are outside the retention budget; active work can temporarily

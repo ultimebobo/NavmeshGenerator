@@ -1,4 +1,5 @@
 #include "app/candidate_artifacts.h"
+#include "app/gzip_file.h"
 
 #include <array>
 #include <limits>
@@ -51,11 +52,7 @@ namespace navmesh::app::detail
     bool WriteCompressedCandidateJson(const std::filesystem::path &path, const core::CandidateNavMesh &candidate,
                                       const core::Scene &scene, const std::string &metadata)
     {
-#ifdef _WIN32
-        auto file = gzopen_w(path.c_str(), "wb");
-#else
-        auto file = gzopen(path.c_str(), "wb");
-#endif
+        auto file = OpenGzipFile(path, "wb");
         if (!file)
         {
             return false;

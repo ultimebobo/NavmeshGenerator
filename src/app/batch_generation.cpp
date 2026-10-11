@@ -1,6 +1,7 @@
 #include "app/batch_generation.h"
 
 #include "app/candidate_cache.h"
+#include "core/io/file_path.h"
 #include "core/navmesh/batch_stitching.h"
 #include "core/navmesh/candidate_reachability.h"
 #include "core/navmesh/generator.h"
@@ -107,12 +108,14 @@ namespace navmesh::app::detail
         std::filesystem::path PinAudit(const std::filesystem::path &source, const std::filesystem::path &directory,
                                        std::uint32_t cellId)
         {
-            std::filesystem::create_directories(directory);
+            std::filesystem::create_directories(core::NativeFilePath(directory));
             const auto pinned = directory / std::format("{:08X}.gz", cellId);
+            const auto nativeSource = core::NativeFilePath(source);
+            const auto nativePinned = core::NativeFilePath(pinned);
             std::error_code error;
-            std::filesystem::create_hard_link(source, pinned, error);
-            if (error &&
-                !std::filesystem::copy_file(source, pinned, std::filesystem::copy_options::overwrite_existing, error))
+            std::filesystem::create_hard_link(nativeSource, nativePinned, error);
+            if (error && !std::filesystem::copy_file(nativeSource, nativePinned,
+                                                     std::filesystem::copy_options::overwrite_existing, error))
             {
                 throw std::runtime_error("Cannot retain candidate evidence for export");
             }
@@ -212,7 +215,7 @@ namespace navmesh::app::detail
                 if (!StoreCandidate(result.auditPath, result.candidate, evidence))
                 {
                     std::error_code error;
-                    std::filesystem::remove(result.auditPath, error);
+                    std::filesystem::remove(core::NativeFilePath(result.auditPath), error);
                     if (!StoreCandidate(result.auditPath, result.candidate, evidence))
                     {
                         throw std::runtime_error("Cannot spool candidate evidence");

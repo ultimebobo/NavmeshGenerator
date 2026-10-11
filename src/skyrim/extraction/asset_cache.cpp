@@ -1,6 +1,7 @@
 #include "skyrim/extraction/asset_cache.h"
 
 #include "core/io/content_hash.h"
+#include "core/io/file_path.h"
 #include "skyrim/extraction/bsa_archive.h"
 
 #include <algorithm>
@@ -140,7 +141,15 @@ namespace navmesh::skyrim
             bool protectedCandidate{};
         };
         std::error_code error;
-        const auto root = std::filesystem::weakly_canonical(snapshot.parent_path(), error);
+        // Keep every enumerated file in native path form so long candidate names
+        // participate in size accounting, containment checks and eviction.
+        const auto canonicalRoot =
+            std::filesystem::weakly_canonical(core::NativeFilePath(snapshot.parent_path()), error);
+        if (error)
+        {
+            return;
+        }
+        const auto root = core::NativeFilePath(canonicalRoot);
         if (error || !std::filesystem::is_directory(root))
         {
             return;
@@ -202,7 +211,13 @@ namespace navmesh::skyrim
                 continue;
             }
             // Recheck canonical containment at the deletion boundary, including links introduced during a run.
-            const auto target = std::filesystem::weakly_canonical(entry.path, error);
+            const auto canonicalTarget = std::filesystem::weakly_canonical(entry.path, error);
+            if (error)
+            {
+                error.clear();
+                continue;
+            }
+            const auto target = core::NativeFilePath(canonicalTarget);
             const auto relative = target.lexically_relative(root);
             if (!error && !relative.empty() && *relative.begin() != ".." &&
                 !std::filesystem::is_symlink(entry.path, error) && std::filesystem::remove(entry.path, error))
