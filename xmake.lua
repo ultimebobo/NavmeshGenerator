@@ -12,7 +12,7 @@ add_requires("zlib 1.3.2", { configs = { shared = false } })
 add_requires("lz4 1.10.0", { configs = { shared = false } })
 
 -- add common rules
-add_rules("mode.debug", "mode.releasedbg")
+add_rules("mode.debug", "mode.release", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
 target("recast")
