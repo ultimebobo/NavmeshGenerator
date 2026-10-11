@@ -30,12 +30,34 @@ namespace navmesh::ui
     app::Options PrepareDesktopOptions(const app::Options &draft, bool listOnly)
     {
         auto result = draft;
-        if (result.mo2.empty() || result.profile.empty() || result.output.empty())
+        if (result.modManager != app::ModManager::Mo2 && result.modManager != app::ModManager::Vortex)
         {
-            throw std::invalid_argument("Choose an MO2 folder, an existing profile and an output folder.");
+            throw std::invalid_argument("Choose MO2 or Vortex as the mod manager.");
+        }
+        if (result.output.empty())
+        {
+            throw std::invalid_argument("Choose an output folder.");
+        }
+        if (result.modManager == app::ModManager::Mo2)
+        {
+            if (result.mo2.empty() || result.profile.empty())
+            {
+                throw std::invalid_argument("Choose an MO2 folder and an existing profile.");
+            }
+            result.vortex.clear();
+            result.vortexPlugins.clear();
+        }
+        else
+        {
+            if (result.vortex.empty())
+            {
+                throw std::invalid_argument("Choose the Skyrim installation folder deployed by Vortex.");
+            }
+            result.mo2.clear();
+            result.profile.clear();
         }
 
-        // The desktop resolves inputs through MO2 and writes standard artifact paths.
+        // The selected manager resolves inputs and the desktop writes standard artifact paths.
         // Clearing escape-hatch and hidden selectors prevents persisted state leaking into another scope.
         result.plugin.clear();
         result.data.clear();

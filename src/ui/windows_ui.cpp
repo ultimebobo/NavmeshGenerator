@@ -179,7 +179,7 @@ namespace
         std::mutex mutex;
         std::atomic_bool cancel{};
         int percent{}, code{};
-        std::string text{"Ready. Select an MO2 profile and a rebuild target."};
+        std::string text{"Ready. Select a mod manager, its inputs and a rebuild target."};
         bool complete{};
     };
 
@@ -207,6 +207,8 @@ namespace
         auto &options = workspace.draft;
         workspace.config = ConfigPath();
         workspace.text = {{"mo2", PathText(options.mo2)},
+                          {"vortex", PathText(options.vortex)},
+                          {"vortex_plugins", PathText(options.vortexPlugins)},
                           {"profile", options.profile},
                           {"output", PathText(options.output)},
                           {"asset_cache", PathText(options.assetCache)},
@@ -218,6 +220,9 @@ namespace
         {
             value = ReadConfig(workspace.config, key.c_str(), value);
         }
+        const auto manager = ReadConfig(workspace.config, "mod_manager",
+                                        options.modManager == navmesh::app::ModManager::Vortex ? "vortex" : "mo2");
+        options.modManager = manager == "vortex" ? navmesh::app::ModManager::Vortex : navmesh::app::ModManager::Mo2;
         const auto savedIdentification = ReadConfig(workspace.config, "target", options.editorId.empty() ? "0" : "1");
         const auto cellFallback = options.cellSelection.empty()
                                       ? workspace.text.at(savedIdentification == "1" ? "editor" : "form")
@@ -311,6 +316,8 @@ namespace
 
     void SaveSettings(Workspace &workspace)
     {
+        WriteConfig(workspace.config, "mod_manager",
+                    workspace.draft.modManager == navmesh::app::ModManager::Vortex ? "vortex" : "mo2");
         for (const auto &[key, value] : workspace.text)
         {
             if (key == "selected_cells")
@@ -368,6 +375,8 @@ namespace
                                               : text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
         };
         options.mo2 = Wide(value("mo2"));
+        options.vortex = Wide(value("vortex"));
+        options.vortexPlugins = Wide(value("vortex_plugins"));
         options.profile = value("profile");
         options.output = Wide(value("output"));
         options.assetCache = Wide(value("asset_cache"));
@@ -704,7 +713,7 @@ namespace
         else
         {
             ImGui::TextWrapped(
-                "Rebuild cells affected by changes after the baseline plugin and MO2 model replacements.");
+                "Rebuild cells affected by changes after the baseline plugin and available model replacements.");
         }
         EndCard();
     }
@@ -869,7 +878,7 @@ namespace
         ImGui::PushFont(nullptr, 28);
         ImGui::TextUnformatted("Navmesh Generator");
         ImGui::PopFont();
-        ImGui::TextDisabled("Inspect cells and rebuild navigation from your MO2 profile.");
+        ImGui::TextDisabled("Inspect cells and rebuild navigation from your mod manager.");
         ImGui::Spacing();
         // Settings scroll independently so progress, cancellation and run actions stay visible.
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
@@ -880,9 +889,38 @@ namespace
         if (ImGui::BeginTable("setup", columns, ImGuiTableFlags_SizingStretchSame))
         {
             ImGui::TableNextColumn();
-            BeginCard("source", "INPUT PROFILE", "Use an existing MO2 instance and profile.");
-            TextField(workspace, window, "mo2", "Mod Organizer 2 folder", "Instance folder or portable MO2 root", true);
-            TextField(workspace, window, "profile", "MO2 profile", "Existing profile name");
+            BeginCard("source", "INPUT PROFILE", "Choose the manager that supplies your Skyrim mods.");
+            // Radio circles follow frame height; compact padding preserves the normal label size.
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6 * scale, 2 * scale));
+            if (ImGui::RadioButton("MO2", workspace.draft.modManager == navmesh::app::ModManager::Mo2))
+            {
+                workspace.draft.modManager = navmesh::app::ModManager::Mo2;
+                SaveSettings(workspace);
+            }
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Vortex", workspace.draft.modManager == navmesh::app::ModManager::Vortex))
+            {
+                workspace.draft.modManager = navmesh::app::ModManager::Vortex;
+                SaveSettings(workspace);
+            }
+            ImGui::PopStyleVar();
+            if (workspace.draft.modManager == navmesh::app::ModManager::Mo2)
+            {
+                TextField(workspace, window, "mo2", "Mod Organizer 2 folder", "Instance folder or portable MO2 root",
+                          true);
+                TextField(workspace, window, "profile", "MO2 profile", "Existing profile name");
+            }
+            else
+            {
+                TextField(workspace, window, "vortex", "Skyrim installation folder",
+                          "Game folder containing deployed Data", true);
+                TextField(workspace, window, "vortex_plugins", "Game application data folder",
+                          "Optional: folder containing active plugins.txt", true);
+                ImGui::TextWrapped(
+                    "Activate your Vortex profile and deploy mods before running. Leave the application data "
+                    "folder blank for standard Skyrim SE; select it for other store editions. Use Cell scope for "
+                    "loose-only model replacements.");
+            }
             EndCard();
             ImGui::TableNextColumn();
             DrawTarget(workspace, window);

@@ -2,7 +2,7 @@
 
 NavmeshGenerator helps Skyrim Special Edition and Anniversary Edition modders
 inspect and rebuild navmeshes: the walkable areas that NPCs use to move through
-the world. It uses your existing Mod Organizer 2 profile and can export a patch
+the world. It uses your existing Mod Organizer 2 profile or active Vortex deployment and can export a patch
 or a copy of a selected plugin with regenerated navigation.
 
 The tool is experimental. Review generated navigation before using it in a
@@ -24,7 +24,7 @@ This is a rendered program export, not an in-game NPC test. See the
 You need:
 
 - Windows and a Skyrim SE/AE installation.
-- An existing Mod Organizer 2 instance with a configured profile.
+- An existing Mod Organizer 2 instance with a configured profile, or Vortex with the intended profile active and deployed.
 - The mods you want to work with enabled in that profile.
 
 Start with `NavmeshGenerator.exe`. Archived models are read by the native
@@ -34,7 +34,7 @@ application and cached on demand. For source builds, follow the
 ## Get started
 
 1. Open `NavmeshGenerator.exe` to launch the desktop window.
-2. Choose your **MO2 folder** and enter your existing **Profile** name.
+2. Select **MO2** (the default) or **Vortex**. For MO2, choose your **Mod Organizer 2 folder** and enter your existing **MO2 profile**. For Vortex, activate your profile and deploy mods, then choose your **Skyrim installation folder**. The optional **Game application data folder** selects the folder containing the game's active `plugins.txt` for installations using a different location.
 3. Choose a fresh **Output folder** for the results.
 4. Select a **Rebuild scope** from the table below.
 5. Choose the output you want, then run the operation.
@@ -100,11 +100,11 @@ handling, and failure policies.
 
 ### Install and test
 
-Install a generated patch through MO2 and load it after the plugins it depends
+Install a generated patch through your selected mod manager and load it after the plugins it depends
 on. A **Copy selected plugin** export replaces the selected plugin; use it with
 the original mod's assets and language files.
 
-Input plugins and MO2 profile files are left untouched. Existing output plugins
+Input plugins, game files and mod-manager configuration are left untouched. Existing output plugins
 are not overwritten, so choose a new output folder when repeating an export.
 
 ## Current limitations

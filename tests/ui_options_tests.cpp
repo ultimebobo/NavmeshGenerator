@@ -191,4 +191,32 @@ void TestDesktopOptionsAndRecastSettings()
     assert(rejected(std::numeric_limits<float>::quiet_NaN()));
     assert(rejected(std::numeric_limits<float>::infinity()));
     assert(rejected(std::numeric_limits<float>::denorm_min()));
+
+    app::Options source;
+    assert(source.modManager == app::ModManager::Mo2);
+    source.mo2 = "fixture-mo2";
+    source.profile = "fixture-profile";
+    source.vortex = "fixture-game";
+    source.vortexPlugins = "fixture-game-appdata";
+    auto prepared = ui::PrepareDesktopOptions(source, true);
+    assert(prepared.vortex.empty() && prepared.vortexPlugins.empty());
+    assert(prepared.mo2 == source.mo2 && prepared.profile == source.profile);
+    source.modManager = app::ModManager::Vortex;
+    prepared = ui::PrepareDesktopOptions(source, true);
+    assert(prepared.vortex == source.vortex && prepared.vortexPlugins == source.vortexPlugins);
+    assert(prepared.mo2.empty() && prepared.profile.empty() && prepared.data.empty() && prepared.loadOrder.empty());
+    source.vortexPlugins.clear();
+    prepared = ui::PrepareDesktopOptions(source, true);
+    assert(prepared.vortexPlugins.empty());
+    source.vortex.clear();
+    bool missingGameRejected{};
+    try
+    {
+        (void)ui::PrepareDesktopOptions(source, true);
+    }
+    catch (const std::invalid_argument &)
+    {
+        missingGameRejected = true;
+    }
+    assert(missingGameRejected);
 }

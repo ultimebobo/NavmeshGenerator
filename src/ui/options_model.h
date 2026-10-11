@@ -15,11 +15,12 @@ namespace navmesh::ui
     /** Prepare a desktop action using only settings relevant to its current scope.
      * @param draft Persisted desktop choices; hidden choices remain in the draft for later use.
      * @param listOnly Export the cell catalog without generation, selection or estimation.
-     * @return MO2-only shared-run inputs, with dependent generation flags resolved.
-     * Mod storage is resolved from the MO2 INI; desktop actions clear directory overrides.
+     * @return Shared-run inputs for the selected manager, with dependent generation flags resolved.
+     * MO2 resolves mod storage from its INI; Vortex reads the active deployment and game plugin list.
+     * Desktop actions clear developer directory overrides and the unselected manager's inputs.
      * Cell scope retains its explicit list and enabled copy source; hidden cell lists are cleared in other scopes.
      * Make scene is retained only for Cell runs and clears cost estimation so the complete selection is exported.
-     * @throws std::invalid_argument When required visible MO2, output or target inputs are missing.
+     * @throws std::invalid_argument When the manager is invalid or required visible source, output or target inputs are missing.
      */
     [[nodiscard]] app::Options PrepareDesktopOptions(const app::Options &draft, bool listOnly);
 } // namespace navmesh::ui

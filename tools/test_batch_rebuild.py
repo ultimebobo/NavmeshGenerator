@@ -1,5 +1,6 @@
 """CLI regressions using redistributable synthetic plugins, without opening the UI."""
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -152,6 +153,79 @@ class BatchRebuild(unittest.TestCase):
                 self.assertEqual(Path(report["mods_directory"]), mods)
                 self.assertEqual(ini.read_bytes(), original_ini)
                 self.assertTrue((output / "cells.json").exists())
+
+    def vortex_deployment(self):
+        game = self.root / "Game"
+        data = game / "Data"
+        data.mkdir(parents=True)
+        for name in ("Baseline.esm", "Patch.esp"):
+            (data / name).write_bytes((self.root / name).read_bytes())
+        application = self.root / "Local" / "Skyrim Special Edition"
+        application.mkdir(parents=True)
+        (application / "plugins.txt").write_text("# Vortex fixture\n*Baseline.esm\n*Patch.esp\n", encoding="utf-8-sig")
+        return game, application
+
+    def run_vortex(self, game, application, *args, code=0, output="vortex-output", env=None):
+        completed = subprocess.run(
+            [str(EXE), "--vortex", str(game),
+             *(["--vortex-plugins", str(application)] if application else []),
+             "--output", str(self.root / output), "--asset-cache", str(self.root / "cache"), *args],
+            capture_output=True, text=True, timeout=90, env=env)
+        self.assertEqual(completed.returncode, code, completed.stdout + completed.stderr)
+        return self.root / output
+
+    def test_vortex_listing_and_default_application_directory(self):
+        game, application = self.vortex_deployment()
+        original = (application / "plugins.txt").read_bytes()
+        output = self.run_vortex(game, application, "--list-cells")
+        report = json.loads((output / "input-report.json").read_text())
+        self.assertEqual(report["mod_manager"], "vortex")
+        self.assertEqual([Path(path).name for path in report["active_plugins"]], ["Baseline.esm", "Patch.esp"])
+        self.assertTrue((output / "cells.json").exists())
+        self.assertEqual((application / "plugins.txt").read_bytes(), original)
+        self.run_vortex(game, None, "--list-cells", output="default-appdata",
+                        env={**os.environ, "LOCALAPPDATA": str(application.parent)})
+
+    def test_vortex_generation_scopes(self):
+        game, application = self.vortex_deployment()
+        for scope, args in [
+            ("plugin", ["--rebuild-plugin", "Patch.esp"]),
+            ("load-order", ["--rebuild-load-order"]),
+            ("cell", ["--cell-formid", "00000100"]),
+            ("cell-copy", ["--cells", "00000100", "--copy-plugin", "--copy-plugin-source", "Patch.esp"]),
+        ]:
+            with self.subTest(scope=scope):
+                output = self.run_vortex(game, application, *args, "--generate-plugin", "--terrain-only", output=scope)
+                self.assertTrue((output / ("Patch.esp" if scope == "cell-copy" else "generated-navmesh.esp")).exists())
+
+    def test_vortex_active_archives_contribute_to_batch_selection(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from tools.test_bsa_index import write_bsa
+        game, application = self.vortex_deployment()
+        data = game / "Data"
+        write_bsa(data / "Baseline.bsa", [("baseline.nif", b"fixture", False)])
+        write_bsa(data / "Patch.bsa", [("replacement.nif", b"fixture", False)])
+        (data / "Inactive.bsa").write_bytes(b"invalid inactive archive")
+        for scope, args in [("plugin-archives", ["--rebuild-plugin", "Patch.esp"]),
+                            ("load-order-archives", ["--rebuild-load-order"])]:
+            output = self.run_vortex(game, application, *args, "--terrain-only", output=scope)
+            inputs = json.loads((output / "input-report.json").read_text())
+            self.assertEqual([Path(path).name for path in inputs["archives"]], ["Baseline.bsa", "Patch.bsa"])
+            report = json.loads((output / "batch-report.json").read_text())
+            self.assertGreater(report["archive_io"]["metadata_bytes_read"] + report["archive_io"]["index_hits"], 0)
+
+    def test_vortex_missing_deployment_and_invalid_source_combinations(self):
+        game, application = self.vortex_deployment()
+        for option in ["--mo2", "--load-order", "--data", "--plugin", "--profile", "--mods-dir"]:
+            with self.subTest(option=option):
+                self.run_vortex(game, application, "--list-cells", option, "conflicting-input", code=1)
+        (application / "plugins.txt").write_text("*Baseline.esm\n*Absent.esp\n")
+        output = self.run_vortex(game, application, "--list-cells", code=2)
+        report = json.loads((output / "input-report.json").read_text())
+        self.assertEqual(report["active_plugins"], [])
+        self.assertIn("Deploy", report["diagnostics"][0]["message"])
+        (application / "plugins.txt").unlink()
+        self.run_vortex(game, application, "--list-cells", code=2, output="missing-list")
 
     def test_plugin_scope_and_single_patch(self):
         output = self.run_cli("--rebuild-plugin", "pAtCh.EsP", "--generate-plugin")

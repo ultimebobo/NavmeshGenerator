@@ -18,7 +18,7 @@ namespace navmesh::app::detail
     /** Rebuild affected or explicitly selected cells from an already resolved input snapshot.
      * @param options Validated batch options; output names the export directory.
      * @param resolved Winning records and ownership, retained throughout the run.
-     * @param assets Optional MO2 model winners; null uses the configured Data directory.
+     * @param assets Optional mod-manager model winners; null uses the configured Data directory.
      * @param paths Source plugin paths in resolved load-order order.
      * @param progress Optional synchronous progress sink.
      * @param cancelled Optional cancellation query between processing stages.

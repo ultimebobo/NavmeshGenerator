@@ -2489,6 +2489,7 @@ void TestCollisionImpactSelection();
 void TestTriangleTagging();
 
 void TestDesktopOptionsAndRecastSettings();
+void TestVortexDeploymentImport();
 void TestCellSceneAccumulation();
 void TestNavigationObstacleFixture();
 void TestRecastContourRecovery();
@@ -2660,6 +2661,7 @@ int main(int argc, char **argv)
         return 0;
     }
     TestDesktopOptionsAndRecastSettings();
+    TestVortexDeploymentImport();
     TestCellSceneAccumulation();
     TestGeometryNeighborhoodCulling();
     TestAffectedCells();

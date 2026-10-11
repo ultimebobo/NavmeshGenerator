@@ -844,8 +844,8 @@ namespace navmesh::skyrim
                                                                   : core::GeometryCoverage::Unsupported;
                 report.failure =
                     status == core::GeometryCoverage::Missing
-                        ? (assets ? "model not found in MO2 loose assets or enabled BSAs" : "missing loose NIF")
-                    : unavailableLooseWinner                       ? "MO2 loose model provider is unavailable"
+                        ? (assets ? "model not found in resolved loose assets or enabled BSAs" : "missing loose NIF")
+                    : unavailableLooseWinner                       ? "resolved loose model provider is unavailable"
                     : status == core::GeometryCoverage::Unreadable ? "NIF could not be read"
                                                                    : "NIF contains no supported triangle geometry";
                 if (status == core::GeometryCoverage::Unsupported)

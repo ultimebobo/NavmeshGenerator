@@ -1,9 +1,9 @@
-# Mod Organizer 2 operator workflow
+# Mod-manager operator workflow
 
 For a desktop quick start, see [the README](../README.md). Current CLI examples
 and detailed export descriptions are in the [command-line reference](command-line.md).
 
-This document defines the user-facing command contract. You select an existing Mod Organizer 2 (MO2) instance and one of its existing profiles. You do **not** create plugin manifests, copy assets, deploy mods, edit `plugins.txt`, or change MO2's virtual file system.
+This document defines the user-facing command contract. Select an existing Mod Organizer 2 (MO2) instance and profile, or the currently active Vortex deployment. MO2 inputs are resolved from its virtual file priorities. For Vortex, activate the intended profile and deploy in Vortex before running; the tool reads the deployed game Data and active game plugin list. Neither route requires hand-authored manifests or changes to manager configuration.
 
 Analysis commands read the input profile without changing it. The guarded plugin-generation option writes a new plugin only beneath the `--output` directory supplied by the user.
 
@@ -32,7 +32,21 @@ the layout scrolls while progress and actions remain visible. The title bar uses
 the Windows dark appearance where supported. Keyboard navigation and DPI scaling
 are enabled.
 
-Select an MO2 folder, an existing profile name and an output folder. **List cells
+The input card has **MO2** and **Vortex** radio buttons, with MO2 as the initial
+default. The controls use compact circles and normal-size labels, scaling with
+the desktop DPI. The choice and each manager's folder fields are saved between sessions.
+An unknown saved manager value falls back to MO2. Only the selected manager's
+inputs are passed to the shared runner; switching managers preserves the other
+manager's visible settings for later use.
+
+For MO2, select its instance folder and existing profile name. For Vortex,
+select **Skyrim installation folder**, containing the deployed Data directory.
+**Game application data folder** is optional for standard Skyrim SE; select the
+folder containing the active game's `plugins.txt` for other store editions or
+custom locations. Use Vortex's game application data folder action to locate it.
+Vortex's saved profile and staging folders are not game input folders.
+
+Select an output folder. **List cells
 to file** exports `cells.json`; it is an action rather than a saved run mode and
 does not require a selected cell or valid generation settings. Cell rows are
 written only to the catalog, including for CLI `--list-cells` runs.
@@ -40,6 +54,14 @@ written only to the catalog, including for CLI `--list-cells` runs.
 Mod storage is read from `ModOrganizer.ini` using `mod_directory`, with
 `mods_directory` as a fallback. Desktop actions use the configured location
 automatically; the application settings do not supply a mod-directory override.
+
+Vortex runs read the current deployment, including winning loose models and
+archives attached to active plugins. They do not deploy or switch profiles.
+Automatic Plugin and Load order selection can compare record changes and
+plugin archives, but cannot attribute loose-only replacements to their original
+mods or recover overwritten loose providers from Data. Use **Cell** scope for
+those changes. Custom INI archive lists are not imported. The input report
+records these limitations and the exact deployed files consumed.
 
 **Rebuild scope** controls which settings appear:
 

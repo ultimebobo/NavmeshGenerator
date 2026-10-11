@@ -10,8 +10,8 @@
 namespace navmesh::skyrim
 {
     /** Resolve a shared extracted-asset snapshot without modifying game inputs.
-     * @param dataDirectory Game Data root; its archive set is used without MO2 assets.
-     * @param assets Optional ordered MO2 archive providers.
+     * @param dataDirectory Game Data root; its archive set is used without mod-manager assets.
+     * @param assets Optional ordered mod-manager archive providers.
      * @param cacheRoot Optional owned-cache root; empty uses the system temporary directory.
      * @return Snapshot directory keyed by provider paths, sizes, timestamps, priority, and schema.
      */
@@ -40,8 +40,8 @@ namespace navmesh::skyrim
 
     /** Resolve BSA providers without opening payloads.
      * @param dataDirectory Direct-input Data root, enumerated when assets is null.
-     * @param assets Optional MO2 providers already ordered by increasing priority.
-     * @return MO2 order or sorted case-insensitive-extension BSA paths from Data.
+     * @param assets Optional mod-manager providers already ordered by increasing priority.
+     * @return Supplied provider order or sorted case-insensitive-extension BSA paths from Data.
      */
     [[nodiscard]] std::vector<std::filesystem::path> ModelArchives(const std::filesystem::path &dataDirectory,
                                                                    const ModelAssetSources *assets);

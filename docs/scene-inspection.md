@@ -88,7 +88,10 @@ warnings and coverage report rather than treating it as fallback geometry.
 
 MO2 scene extraction uses the profile's winning loose meshes and enabled mod
 archives. A CELL records the origin of each reference, but its NIF may be in
-another enabled mod. For an exterior structure whose reference origin falls in
+another enabled mod. Vortex scene extraction uses winning loose meshes in
+deployed Data and base/active-plugin archives; record and physical-file
+provenance remain available without staging-mod ownership.
+For an exterior structure whose reference origin falls in
 a neighboring CELL, use `--neighboring-cell-radius 1` in the CLI or set
 **Neighboring cells** to `1` in the Windows UI (the UI default). Set it to `0`
 for an exact single-CELL inspection without candidate generation.

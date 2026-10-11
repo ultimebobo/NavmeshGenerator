@@ -232,9 +232,27 @@ bundled framework core and matching upstream backends. Drawing, folder browsing,
 INI persistence and graphics stay on the UI thread. A joined background worker
 invokes the shared runner; mutex-protected progress and atomic cancellation keep
 rendering responsive and closing waits for a safe completion boundary.
-`ui/options_model` prepares MO2 desktop actions independently of rendering,
+`ui/options_model` prepares selected mod-manager desktop actions independently of rendering,
 clearing hidden selectors and resolving scope-dependent generation/export flags.
 It can be exercised by automated tests without opening the desktop.
+
+`app::ModManager` carries the persisted desktop source choice, defaulting to MO2.
+The desktop passes only the selected source to `app::Run`; CLI source flags are
+validated before I/O to reject Vortex mixed with MO2 or developer inputs.
+`skyrim/vortex/vortex_importer` reads the active deployed Data directory and
+game application plugin files independently of Vortex's internal database.
+It preserves SSE activation/order from `plugins.txt`, prepends installed native
+masters and installed `Skyrim.ccc` entries, and resolves case-insensitive physical
+plugin names. Deployed loose models override base and active-plugin archives;
+archive priority follows the resolved plugin order. The importer emits a report
+before record resolution, and rechecks plugin-list content plus deployed file
+membership, sizes and modification times before processing cells. Missing active
+plugins or invalid lists fail rather than producing a partial load order.
+Its physical winners use the existing `ModelAssetSources` extraction boundary.
+Data does not expose staging-mod ownership or overwritten loose providers, so
+automatic selection cannot identify loose-only replacements; explicit Cell
+selection supplies those targets. Custom INI archive lists are outside this input
+contract. MO2 retains its independent virtual-file importer and catalog cache.
 
 `app::Options::cellSelection` carries an explicit list independently of single-cell
 selectors and automatic impact selection. `ParseCellSelection` shares delimiter

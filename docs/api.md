@@ -121,7 +121,12 @@ this reference.
 - `navmesh::core::AuthoredBorderTolerance`: shared world-unit bound for authored
   portal drift from exterior CELL borders, used by stitching and the guarded writer.
 - `navmesh::skyrim`: plugin/load-order reading, guarded NAVM override
-  writing, Mod Organizer 2 input, and terrain/model extraction.
+  writing, Mod Organizer 2 and Vortex input, and terrain/model extraction.
+- `navmesh::skyrim::ImportVortexDeployment`, `VortexInput`, `VortexSnapshotMatches`:
+  read-only active deployment import, case-insensitive plugin and model winners,
+  ordered active archives, input reporting and coherence checks. No Vortex
+  database or staging-folder changes are required.
+- `navmesh::app::ModManager`: persisted desktop source choice with MO2 as default.
 - `navmesh::analysis`: spatial queries and navmesh discrepancy analysis.
 - `navmesh::validation`: cell validation findings.
 - `navmesh::app`: command-line options and the shared application runner.
@@ -129,7 +134,7 @@ this reference.
   shared Cell-mode list parsing and coordinated generation dispatch. Identifiers are Form
   IDs or editor IDs; unknown or ambiguous matches fail before generation, and
   aliases deduplicate by resolved CELL identity.
-- `navmesh::ui::RunWindowsUi`: dark Dear ImGui desktop host, persisted MO2
+- `navmesh::ui::RunWindowsUi`: dark Dear ImGui desktop host, persisted manager selection and source
   controls, background shared-run execution, progress and safe cancellation.
 - `navmesh::ui::PrepareDesktopOptions`: rendering-independent contextual option
   preparation for cell lists, plugin, load-order and catalog-export actions.

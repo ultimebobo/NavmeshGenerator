@@ -83,6 +83,15 @@ namespace navmesh::app
             {
                 options.mo2 = argv[++index];
             }
+            else if (argument == "--vortex" && index + 1 < argc)
+            {
+                options.modManager = ModManager::Vortex;
+                options.vortex = argv[++index];
+            }
+            else if (argument == "--vortex-plugins" && index + 1 < argc)
+            {
+                options.vortexPlugins = argv[++index];
+            }
             else if (argument == "--profile" && index + 1 < argc)
             {
                 options.profile = argv[++index];
@@ -300,6 +309,10 @@ namespace navmesh::app
             else if (argument == "--rebuild-plugin")
             {
                 throw std::invalid_argument("--rebuild-plugin requires an active plugin filename");
+            }
+            else if (argument == "--vortex" || argument == "--vortex-plugins")
+            {
+                throw std::invalid_argument(argument + " requires a folder path");
             }
             else if (argument == "--cells")
             {

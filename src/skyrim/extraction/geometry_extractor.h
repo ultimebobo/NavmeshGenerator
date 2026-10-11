@@ -65,7 +65,7 @@ namespace navmesh::skyrim
         bool collisionGeometrySupported{};
     };
 
-    /// Physical MO2 asset winners and archives in increasing mod priority.
+    /// Physical mod-manager asset winners and archives in increasing priority.
     /// Logical paths use lowercase forward slashes and begin with meshes/.
     struct ModelAssetSources
     {
@@ -105,13 +105,13 @@ namespace navmesh::skyrim
                                                   ModelGeometryCache *, bool);
     };
 
-    /// Extract placed model geometry using MO2 assets when provided.
+    /// Extract placed model geometry using resolved mod-manager assets when provided.
     /// @param dataDirectory Game Data directory for direct input and vanilla BSAs.
     /// @param cell Cell whose references are decoded in world coordinates.
     /// @param cacheDirectory Writable cache for requested archived NIFs.
     /// @param progress Optional per-reference progress callback.
     /// @param cancelled Optional cancellation callback; returns partial geometry if true.
-    /// @param assets Optional MO2 loose winners and archive paths.
+    /// @param assets Optional mod-manager loose winners and ordered archive paths.
     /// @param modelCache Optional run-scoped model and placement cache, shared safely by workers.
     /// @param navigationOnly Materialize supported collision and coverage without render display meshes.
     /// @return Geometry and per-reference failures, with archiveSearchComplete distinguishing absence from lookup failure.

@@ -5,7 +5,8 @@ This guide covers current commands, input resolution, exports, and implementatio
 ## Example
 
 Launch the executable without switches for the dark Dear ImGui desktop workspace.
-Select an existing MO2 folder and profile, choose a rebuild scope, and choose an
+Select MO2 and its existing folder/profile, or Vortex and its deployed Skyrim
+installation folder, then choose a rebuild scope and an
 output folder. **Cell** shows a multiline **Cells** field accepting Form IDs
 and editor IDs. Its **Copy selected plugin** option reveals **Plugin to copy**
 with a filename input and Browse button. **Plugin** shows the affected plugin and
@@ -16,8 +17,9 @@ a target.
 **Advanced settings** starts collapsed. It contains numerical analysis and
 performance controls, plus Recast agent, voxel, contour and region inputs when
 generation is enabled. Choices are persisted in the local application settings;
-hidden target/export choices are excluded from the run. The desktop uses MO2
-input and standard artifact paths. Direct plugin/Data/manifest input, custom
+hidden target/export choices are excluded from the run. The desktop uses the selected
+mod manager and standard artifact paths. MO2 is the initial default; the radio
+button choice is saved. Direct plugin/Data/manifest input, custom
 OBJ paths, exterior coordinates, diagnostic HTML and terrain-only switches
 remain CLI developer/inspection options. See the
 [desktop workflow](operator-workflow.md#desktop-workspace) and
@@ -163,7 +165,7 @@ Enable **Skip cells with existing navmesh** in the Windows UI, or add
 `--skip-existing-navmesh` to a generation command, to fill uncovered selected
 cells when explicitly enabled. The setting is optional and saved
 with the other UI options. It applies to Cell, Plugin, and Load order scopes and
-requires resolved MO2 or load-order input. Any winning NAVM record protects its
+requires resolved MO2, Vortex or load-order input. Any winning NAVM record protects its
 cell, including empty, unsupported, and deleted records. Batch reports identify
 these cells as `skipped_existing_navm`; a skipped single cell produces
 `generation-report.json` and completes without extraction or generation.
@@ -201,6 +203,46 @@ Split MO2 layouts are supported: when `ModOrganizer.ini` has a relative `base_di
 
 The direct reader currently resolves its fixture-tested full/light identities and override chains, and reports missing masters/cycles/duplicates. Its deliberately narrow coverage is documented in [the parser evaluation](parser-library-evaluation.md).
 
+## Vortex input
+
+Activate the intended profile in Vortex and deploy its mods before running.
+Choose **Vortex** in the desktop input card and select the Skyrim installation
+folder containing Data. The CLI equivalent is:
+
+```powershell
+NavmeshGenerator.exe --vortex "<Skyrim installation>" --list-cells --output "<output folder>"
+NavmeshGenerator.exe --vortex "<Skyrim installation>" --rebuild-plugin "<active plugin.esp>" --generate-plugin --output "<new output folder>"
+```
+
+The active game's `plugins.txt` is read from the standard Skyrim SE local
+application data directory by default. For another store edition or a custom
+location, use **Game application data folder** in the desktop, or add
+`--vortex-plugins "<folder containing active plugins.txt>"`. The installation
+folder and plugin directory must describe the same active game. Vortex's game
+application data folder action can locate this directory. No profile name,
+saved-profile directory or staging path is required. Vortex input cannot be
+combined with MO2/profile or developer plugin/Data/manifest/mod-directory inputs.
+
+SSE's `plugins.txt` supplies both activation markers and plugin ordering.
+Installed native masters and installed `Skyrim.ccc` entries load first even if
+omitted from that list. Plugin names are resolved case insensitively against
+deployed Data. Loose model files are deployed winners; base-game BSAs load
+before archives attached to active plugins in plugin order. Inactive plugin
+archives are excluded. Custom INI archive lists are not imported.
+
+Every Vortex run writes `input-report.json` before record resolution, with the
+source directories, active plugin paths, archive order, loose model winners,
+snapshot identity, diagnostics and limitations. Missing lists, undeployed active
+plugins, duplicates and invalid names fail import. The runner rejects changes
+to the plugin-list contents or deployed file membership, size or modification
+times observed during load-order resolution.
+
+Cell, Plugin and Load order operations use the same generation and writer path
+as MO2. Deployed Data does not retain staging-mod ownership or overwritten loose
+providers. Automatic impact selection therefore cannot attribute loose-only
+replacements to a selected mod; choose their cells explicitly with Cell scope.
+The tool reads the current deployment and does not switch or deploy Vortex profiles.
+
 ## Output
 
 The CLI writes files into the target output directory:
@@ -214,7 +256,7 @@ The CLI writes files into the target output directory:
 - `scene-report.html` — standalone classification report grouped by support-source and geometry-coverage status. Its support-triangle indices join `analysis.json` to `geometry.json`; this report does not change classifications.
 - `analysis.json` — stable, report-only discrepancy evidence: seven-point polygon coverage, selected source type and confidence, explicit `ambiguous`/`out_of_coverage` states, topology findings, and manual-review repair candidates. It never contains replacement NAVM geometry or a plugin write instruction.
 - With `--generate-candidate`, Recast creates a neutral candidate NAVM from supported terrain and collision. Convex patch merging and movement-bounded height detail simplify stairs and terrain; landscape rock collision blocks movement without supplying walkable tops. Contour simplification automatically refines if a retained voxel region would collapse. If watershed contours remain incomplete at zero error, generation recovers with layer regions over the already-retained spans and records a candidate warning; the partitioning setting remains the requested strategy. `candidate-navm.json` contains profile parameters, approximate source-triangle provenance, obstacle tags, regions, matched door triangles, reciprocal border-link matches, adjacency, statistics, and topology validation. `candidate-navm.obj` is a mesh view, and `scene.glb` gains a blue-green Candidate NAVM layer beside the existing scene layers. These files do not contain plugin records.
-- `input-report.json` — MO2 profile snapshot, emitted first for every MO2 run. Compact/plugin-only batches reference a shared loose-asset catalog; full inspection includes every winner.
+- `input-report.json` — selected mod-manager snapshot, emitted first for MO2 and Vortex runs. Compact/plugin-only batches omit the full loose-winner table; MO2 reports reference its shared loose-asset catalog.
 - `load-order.json` — full inspection of resolved inputs: every winning record with its plugin and ordered origin chain. Compact/plugin-only batches omit this table.
 - With `--generate-plugin`, `generated-navmesh.esp` overrides existing NAVM records or allocates new records for uncovered cells. The ESP receives the ESL flag when its master table and new identities fit a light plugin. Single-cell writing also generates candidate exports; batch writing follows `--batch-output`. The writer refuses to replace an existing output file and verifies every NAVM by reading it back.
 - With `--copy-plugin` in Cell or Plugin scope, the selected plugin's original filename is used for a complete copy with generated NAVMs. Source flags and master indices are preserved. `batch-report.json` records `copy_plugin`; when no eligible navigation is generated, no plugin is written.
@@ -225,7 +267,7 @@ The combined-scene workflow, material legend, provenance joins, and Online 3D Vi
 
 To generate an inspection candidate from the selected cell, add `--generate-candidate`. Candidate generation uses the human navigation profile. Recast rasterizes supported terrain and collision, filters slopes and clearance, erodes walkable spans by the profile's agent radius, and creates polygonal regions. Region partitioning defaults to watershed; choose `--partitioning-algorithm monotone` or `--partitioning-algorithm layers` to use Recast's other strategies. The Windows UI provides the same selector and saves it with the other options. The selected strategy is recorded in `candidate-navm.json`. Voxel resolution adapts to the extracted area's size. Contours use the configured simplification error and edge subdivision settings, and Recast builds triangles directly to avoid long triangle fans from larger polygons. Regions below the profile's minimum region area are removed; watershed and monotone can merge small adjacent regions, while layers does not use the merge threshold. Candidate output is clipped to the selected exterior CELL independently of its neighboring geometry suppliers, with bounded extensions at matched authored border portal endpoints. Generation provisionally retains shared-edge components reaching a matched door or the selected exterior CELL border. Final stitching retains only components reaching a real neighboring portal or matched door. Unreachable roof and stone-top islands are removed regardless of area; surfaces merely near a border do not qualify. Interiors without a matched door produce empty candidates. Filtering preserves source evidence and remaps geometry and door indices, with discarded triangles recorded in `rejected_unreachable`. Exterior rasterization includes a supported neighboring halo before the generated mesh is clipped to the selected CELL, so radius erosion does not treat the CELL seam as an obstacle. With a resolved load order and a selected exterior cell, matching adjacent NAVM edges are joined to the candidate border and recorded in `border_links`. Stitching can coalesce compatible collinear generated subdivisions and split containing edges to match the neighbor's complete edges. Terminal seam endpoints extend through their incident fans, and unmatched seam wedges retract into the CELL. Every remaining seam must have a unique portal with exact reversed neighboring endpoints. Inward offsets trim generated fans and outward offsets use bounded extensions; distance, height, slope, and topology constrain the result. Candidate triangles and orange entrance markers appear in the scene GLB. Source-triangle joins are approximate because voxelization does not retain input triangle IDs. See [the current algorithm and historical comparison](candidate-surface-algorithm.md) for scope and limits.
 
-To write a plugin, use a resolved MO2 profile or the developer load-order route, select a cell or batch rebuild scope, and add `--generate-plugin`. The desktop UI has the same **Write plugin** option; neighboring geometry remains available during generation. The writer puts the generated geometry in the selected cell's largest existing NAVM and replaces its other existing NAVMs with empty overrides. It retains their group hierarchy and includes the source plugins and their masters as dependencies. Parent CELL and worldspace records remain supplied by the load order. Install the generated ESP after its source plugins. It is ESL-flagged when its master table and newly allocated identities fit the light format, even when a source is a regular ESP. Matched entrances become NAVM door links, and matched cell-border edges become reciprocal external links in overrides of the adjacent NAVMs. In Cell scope, each portal matches a complete authored edge; containing generated edges can be subdivided to fit it. Small authored deviations from the nominal CELL boundary are accepted within a shared tolerance; matched endpoints preserve the exact neighboring edge, and other generated vertices stay inside the CELL. Every authored NAVM with an incoming portal to replaced geometry receives an override. Those entries are removed and retained portal indices are remapped before matched borders receive fresh reciprocal links to generated triangles. Unmatched incoming edges remain open boundaries. Read-back validation checks portal indices and emitted destination triangle ranges. Cell-scope components without real neighboring portals or matched doors are removed.
+To write a plugin, use a resolved MO2 profile, active Vortex deployment or the developer load-order route, select a cell or batch rebuild scope, and add `--generate-plugin`. The desktop UI has the same **Write plugin** option; neighboring geometry remains available during generation. The writer puts the generated geometry in the selected cell's largest existing NAVM and replaces its other existing NAVMs with empty overrides. It retains their group hierarchy and includes the source plugins and their masters as dependencies. Parent CELL and worldspace records remain supplied by the load order. Install the generated ESP after its source plugins. It is ESL-flagged when its master table and newly allocated identities fit the light format, even when a source is a regular ESP. Matched entrances become NAVM door links, and matched cell-border edges become reciprocal external links in overrides of the adjacent NAVMs. In Cell scope, each portal matches a complete authored edge; containing generated edges can be subdivided to fit it. Small authored deviations from the nominal CELL boundary are accepted within a shared tolerance; matched endpoints preserve the exact neighboring edge, and other generated vertices stay inside the CELL. Every authored NAVM with an incoming portal to replaced geometry receives an override. Those entries are removed and retained portal indices are remapped before matched borders receive fresh reciprocal links to generated triangles. Unmatched incoming edges remain open boundaries. Read-back validation checks portal indices and emitted destination triangle ranges. Cell-scope components without real neighboring portals or matched doors are removed.
 Batch scopes provisionally retain all surviving floors and join generated neighbors after all cells are ready, then remove disconnected islands through complete-set reachability. Empty single-cell plugin candidates complete with skipped_empty_candidate in generation-report.json and no patch. Scene previews replace authored bars involving the original cell NAVMs with generated bars. Other authored connections, cover data, NAVI, and teleport-door XNDP references are not rebuilt; those can still prevent NPC navigation. Inspect the plugin in independent tooling and validate navigation on a disposable game profile before use.
 
 Record the command inputs using [docs/run-manifest.example.json](run-manifest.example.json) before a benchmark. The current CLI does not consume this file; map its fields to the existing command-line flags so milestone 0 does not alter parser input behavior.

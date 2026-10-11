@@ -12,6 +12,13 @@
 
 namespace navmesh::app
 {
+    /// Desktop input source; MO2 is selected when no preference has been saved.
+    enum class ModManager
+    {
+        Mo2,
+        Vortex
+    };
+
     /// Selection of navigation targets within a resolved load order.
     enum class RebuildScope
     {
@@ -23,6 +30,12 @@ namespace navmesh::app
     /// Shared CLI/desktop inputs for cell analysis and affected-cell rebuild runs.
     struct Options
     {
+        /// Persisted desktop manager choice; CLI selects its source through --mo2 or --vortex.
+        ModManager modManager{ModManager::Mo2};
+        /// Skyrim installation root with Vortex's deployed Data directory; empty disables Vortex input.
+        std::filesystem::path vortex;
+        /// Directory containing the active game's plugins.txt; empty uses the standard local application folder.
+        std::filesystem::path vortexPlugins;
         std::filesystem::path plugin, data, loadOrder, mo2, modsDirectory, output{"."}, exportGeometry, exportAnalysis,
             exportScene;
         std::string profile, cell, editorId, worldspace, geometryLayers{"navmesh,terrain,collision,render,diagnostics"},
@@ -30,7 +43,7 @@ namespace navmesh::app
         std::optional<std::int32_t> cellX, cellY;
         std::optional<std::uint32_t> cellFormId;
         bool listCells{}, diagnostics{}, terrainOnly{}, generateCandidate{};
-        /// Cells to rebuild; batch scopes require resolved MO2 or manifest input.
+        /// Cells to rebuild; batch scopes require resolved mod-manager or manifest input.
         RebuildScope rebuildScope{RebuildScope::Cell};
         /// Active plugin filename whose edits select affected cells in Plugin scope.
         std::string affectedPlugin;
@@ -52,7 +65,7 @@ namespace navmesh::app
         /// keeps the source filename and master indices.
         bool copyPlugin{};
         /// Skip generation for cells with any winning NAVM record, including empty or unsupported records.
-        /// Requires resolved MO2/load-order input; uncovered cells may receive new NAVM records.
+        /// Requires resolved mod-manager/load-order input; uncovered cells may receive new NAVM records.
         bool skipExistingNavmesh{};
         /// Recast region strategy used for candidate generation; watershed is the default.
         core::RegionPartitioningAlgorithm partitioningAlgorithm{core::RegionPartitioningAlgorithm::Watershed};

@@ -6,7 +6,7 @@ neighboring connection updates, see the [navmesh glossary](glossary.md).
 The shared application runner supports **Cell**, **Plugin**, and **Load order**
 scopes. Cell accepts one or multiple explicit cells. The Windows UI persists the
 scope and affected-plugin filename with the other settings. Affected-cell scopes
-require a resolved MO2 profile or the developer load-order manifest. They generate candidates;
+require a resolved MO2 profile, active Vortex deployment or the developer load-order manifest. They generate candidates;
 **Write plugin** / `--generate-plugin` additionally writes a combined patch.
 Automatic batch output retains full inspection without writing, and reports plus
 the plugin when writing. **Batch output** / `--batch-output` selects full,
@@ -100,6 +100,12 @@ has no plugin edits to rebuild. The MO2 route also includes cells using replaced
 loose model assets. Enabled mod archives can replace models without any record
 edit; their winning NIF names are indexed to select affected uses. Index failures
 conservatively include all model-bearing reference locations.
+
+Vortex uses the active deployment with the same record-transition selection.
+Archives attached to the selected plugin, or to plugins after the baseline in
+Load order scope, also contribute model impacts. Deployed loose winners supply
+extraction geometry, but Data does not retain their staging-mod ownership or
+overwritten providers. Use explicit Cell selections for loose-only replacements.
 
 ## Impact selection and geometry inputs
 

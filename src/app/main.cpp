@@ -13,6 +13,7 @@
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
 #include "skyrim/mo2/mo2_importer.h"
+#include "skyrim/vortex/vortex_importer.h"
 #include "skyrim/parser/affected_cells.h"
 #include "skyrim/parser/plugin_writer.h"
 #include "validation/validation.h"
@@ -91,7 +92,7 @@ namespace
     int ValidateRunOptions(navmesh::app::Options &options)
     {
         using namespace navmesh::app;
-        if (options.mo2.empty() && options.plugin.empty() && options.loadOrder.empty())
+        if (options.mo2.empty() && options.vortex.empty() && options.plugin.empty() && options.loadOrder.empty())
         {
             std::cerr
                 << "Usage: NavmeshGenerator --mo2 <instance-or-portable-root> --profile <existing-profile> "
@@ -101,8 +102,19 @@ namespace
                    "[--no-triangle-tagging] [--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
                    "[--cache-budget-mib <MiB>] [--working-memory-mib <MiB>] [--workers <count>] [--estimate-only] "
                    "--output "
-                   "<dir>\nDeveloper/test override: "
+                   "<dir>\nVortex input: --vortex <Skyrim-installation> [--vortex-plugins "
+                   "<game-application-data-folder>] "
+                   "<operation> --output <dir>\nDeveloper/test override: "
                    "--data <Data> --load-order <plugins.txt>.\n";
+            return 1;
+        }
+        if ((!options.vortex.empty() &&
+             (!options.mo2.empty() || !options.plugin.empty() || !options.loadOrder.empty() || !options.data.empty() ||
+              !options.profile.empty() || !options.modsDirectory.empty())) ||
+            (!options.vortexPlugins.empty() && options.vortex.empty()))
+        {
+            std::cerr << "--vortex selects deployed game input and cannot combine MO2 or developer input options; "
+                         "--vortex-plugins requires --vortex.\n";
             return 1;
         }
         if (!options.mo2.empty() && options.profile.empty())
@@ -110,9 +122,10 @@ namespace
             std::cerr << "--mo2 requires --profile naming an existing MO2 profile.\n";
             return 1;
         }
-        if (options.generatePlugin && (options.listCells || (options.mo2.empty() && options.loadOrder.empty())))
+        if (options.generatePlugin &&
+            (options.listCells || (options.mo2.empty() && options.vortex.empty() && options.loadOrder.empty())))
         {
-            std::cerr << "Plugin generation requires a resolved MO2/load-order input and a rebuild selection.\n";
+            std::cerr << "Plugin generation requires resolved mod-manager/load-order input and a rebuild selection.\n";
             return 1;
         }
         if (options.copyPlugin && (options.rebuildScope == RebuildScope::LoadOrder || !options.generatePlugin ||
@@ -151,9 +164,9 @@ namespace
         }
         if (options.rebuildScope != RebuildScope::Cell)
         {
-            if (options.mo2.empty() && options.loadOrder.empty())
+            if (options.mo2.empty() && options.vortex.empty() && options.loadOrder.empty())
             {
-                std::cerr << "Batch rebuilding requires MO2 or --load-order input.\n";
+                std::cerr << "Batch rebuilding requires MO2, Vortex or --load-order input.\n";
                 return 1;
             }
             if (options.listCells || !options.cell.empty() || options.cellFormId || !options.editorId.empty() ||
@@ -173,9 +186,9 @@ namespace
         }
         if (options.skipExistingNavmesh &&
             (options.listCells || (!options.generateCandidate && !options.generatePlugin) ||
-             (options.mo2.empty() && options.loadOrder.empty())))
+             (options.mo2.empty() && options.vortex.empty() && options.loadOrder.empty())))
         {
-            std::cerr << "--skip-existing-navmesh requires generation with resolved MO2/load-order input.\n";
+            std::cerr << "--skip-existing-navmesh requires generation with resolved mod-manager/load-order input.\n";
             return 1;
         }
         if (options.estimateOnly && (!batchGeneration || options.listCells))
@@ -278,6 +291,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     // Resolve one coherent input snapshot shared by listing, single-cell, and batch processing.
     std::optional<navmesh::skyrim::ResolvedLoadOrder> resolved;
     std::optional<navmesh::skyrim::Mo2ProfileInput> mo2Input;
+    std::optional<navmesh::skyrim::VortexInput> vortexInput;
     navmesh::skyrim::ModelAssetSources modelAssets;
     const auto sharedCacheRoot = options.assetCache.empty()
                                      ? std::filesystem::temp_directory_path() / "NavmeshGenerator" / "assets"
@@ -361,6 +375,52 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             return 2;
         }
     }
+    else if (!options.vortex.empty())
+    {
+        std::filesystem::create_directories(options.output);
+        update(5, "Reading Vortex deployment");
+        std::cerr << "Importing active Vortex deployment...\n";
+        vortexInput = navmesh::skyrim::ImportVortexDeployment(options.vortex, options.vortexPlugins);
+        if (!navmesh::skyrim::WriteInputReport(options.output / "input-report.json", *vortexInput,
+                                               options.listCells || !UsesBatchGeneration(options) ||
+                                                   options.batchOutput == "full"))
+        {
+            std::cerr << "Failed to write input-report.json.\n";
+            return 2;
+        }
+        for (const auto &diagnostic : vortexInput->diagnostics)
+        {
+            std::cerr << diagnostic.plugin << ": " << diagnostic.message << "\n";
+        }
+        if (vortexInput->pluginPaths.empty())
+        {
+            std::cerr << "Vortex import found no usable active deployment; see input-report.json.\n";
+            return 2;
+        }
+        options.data = vortexInput->gameData;
+        modelAssets = std::move(vortexInput->assets);
+        std::cerr << "Using deployed Data: " << options.data.string() << "\n";
+        update(20, "Resolving active plugin load order");
+        try
+        {
+            resolved = navmesh::skyrim::ResolveLoadOrder(
+                {.dataDirectory = options.data,
+                 .plugins = vortexInput->pluginPaths,
+                 .indexReferencesAndNavmeshes = !options.listCells,
+                 .progress = [&](std::size_t completed, std::size_t total, const std::filesystem::path &plugin)
+                 {
+                     const auto percent = total == 0 ? 30 : 20 + static_cast<int>((10 * completed) / total);
+                     update(percent, completed == total ? "Load order records resolved"
+                                                        : std::format("Resolving plugin {} of {}: {}", completed + 1,
+                                                                      total, plugin.filename().string()));
+                 }});
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << "Load-order resolution failed: " << error.what() << ". See input-report.json.\n";
+            return 2;
+        }
+    }
     else if (!options.loadOrder.empty())
     {
         try
@@ -428,6 +488,12 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         std::cerr << "MO2 profile inputs changed while resolving the load order; rerun so the snapshot is coherent.\n";
         return 2;
     }
+    if (vortexInput && !navmesh::skyrim::VortexSnapshotMatches(*vortexInput))
+    {
+        std::cerr << "Vortex deployment or active plugin inputs changed while resolving the load order; rerun after "
+                     "deployment finishes.\n";
+        return 2;
+    }
     update(30, resolved ? "Load order resolved" : "Plugin input ready");
     if (wasCancelled())
     {
@@ -469,6 +535,10 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         {
             paths = mo2Input->pluginPaths;
         }
+        else if (vortexInput)
+        {
+            paths = vortexInput->pluginPaths;
+        }
         else if (!options.loadOrder.empty())
         {
             for (auto path : navmesh::skyrim::ReadLoadOrderManifest(options.loadOrder))
@@ -480,7 +550,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         {
             paths.push_back(std::filesystem::absolute(options.plugin));
         }
-        return detail::RunBatch(options, *resolved, mo2Input ? &modelAssets : nullptr, paths, progress, cancelled,
+        return detail::RunBatch(options, *resolved, (mo2Input || vortexInput) ? &modelAssets : nullptr, paths, progress,
+                                cancelled,
                                 std::chrono::duration<double>(std::chrono::steady_clock::now() - inputStarted).count());
     };
     if (UsesBatchGeneration(options) && (options.rebuildScope != RebuildScope::Cell || !options.cellSelection.empty()))
@@ -529,7 +600,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     {
         if (resolved)
         {
-            std::cerr << "No matching Skyrim CELL was found in the resolved MO2 load order";
+            std::cerr << "No matching Skyrim CELL was found in the resolved load order";
             if (!options.editorId.empty())
             {
                 std::cerr << " for editor ID '" << options.editorId << "'";
@@ -634,9 +705,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             }
         }
         navmesh::skyrim::GeometryExtraction geometry;
-        const auto assetCacheDirectory =
-            navmesh::skyrim::ModelAssetCacheDirectory(resolved ? options.data : options.plugin.parent_path(),
-                                                      mo2Input ? &modelAssets : nullptr, options.assetCache);
+        const auto assetCacheDirectory = navmesh::skyrim::ModelAssetCacheDirectory(
+            resolved ? options.data : options.plugin.parent_path(), (mo2Input || vortexInput) ? &modelAssets : nullptr,
+            options.assetCache);
         navmesh::skyrim::ModelGeometryCache modelCache(options.workingMemoryMiB * 1024ULL * 1024ULL / 2);
         for (std::size_t cellIndex{}; cellIndex < sceneCells.size(); ++cellIndex)
         {
@@ -652,7 +723,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                               update(percent, std::format("Extracting geometry source cell {}/{}: reference {} of {}",
                                                           cellIndex + 1, sceneCells.size(), completed, total));
                           },
-                          wasCancelled, mo2Input ? &modelAssets : nullptr, &modelCache);
+                          wasCancelled, (mo2Input || vortexInput) ? &modelAssets : nullptr, &modelCache);
             if (!options.terrainOnly)
             {
                 navmesh::skyrim::TrimModelAssetCache(assetCacheDirectory, options.cacheBudgetMiB * 1024ULL * 1024ULL);
@@ -999,6 +1070,10 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             if (mo2Input)
             {
                 inputPaths = mo2Input->pluginPaths;
+            }
+            else if (vortexInput)
+            {
+                inputPaths = vortexInput->pluginPaths;
             }
             else
             {

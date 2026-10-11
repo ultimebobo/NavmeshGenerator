@@ -23,6 +23,7 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <set>
@@ -236,7 +237,31 @@ namespace navmesh::app::detail
                         changedModels.insert(logical);
                     }
                 }
-                archiveModelsChanged = std::any_of(assets->archives.begin(), assets->archives.end(),
+                // Vortex deploys archives inside Data. Plugin association identifies mod archives
+                // after the baseline without needing the staging folders' ownership metadata.
+                if (!options.vortex.empty() && !paths.empty())
+                {
+                    for (const auto &archive : assets->archives)
+                    {
+                        const auto archiveStem = archive.stem().string();
+                        const bool belongsToChangedPlugin = std::any_of(
+                            std::next(paths.begin()), paths.end(),
+                            [&](const auto &plugin)
+                            {
+                                const auto pluginStem = plugin.stem().string();
+                                return EqualsIgnoreCase(archiveStem, pluginStem) ||
+                                       (archiveStem.size() > pluginStem.size() &&
+                                        archiveStem[pluginStem.size()] == ' ' &&
+                                        EqualsIgnoreCase(archiveStem.substr(0, pluginStem.size()), pluginStem));
+                            });
+                        if (belongsToChangedPlugin)
+                        {
+                            changedArchives.insert(archive);
+                        }
+                    }
+                }
+                archiveModelsChanged = !changedArchives.empty() ||
+                                       std::any_of(assets->archives.begin(), assets->archives.end(),
                                                    [&](const auto &archive) { return !inside(archive, options.data); });
             }
             else
