@@ -2,7 +2,9 @@
 
 import importlib.util
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -52,6 +54,34 @@ class NavigationOcclusionTests(unittest.TestCase):
         ]
         image = np.array(renderer.render(scene, "Candidate NAVM", None, 160, 160, 0, 60))
         self.assertEqual(self.navigation_pixels(image), 0)
+
+
+class ComparisonCountsTests(unittest.TestCase):
+    def test_counts_include_hidden_faces_and_all_navigation_materials(self):
+        scene = [
+            ("Collision", "covering deck", square(100, 4)),
+            ("Original NAVM (current cell)", "supported", square(0, 1)),
+            ("Original NAVM (current cell)", "door linked", square(1, 1)),
+            ("Candidate NAVM", "water", square(0, 1)),
+            ("Neighboring NAVM", "outside selection", square(0, 1)),
+            ("NAVM links", "connection bar", square(0, 1)),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(renderer, "render", return_value=renderer.Image.new("RGB", (1, 1))):
+                counts = renderer.comparison(scene, Path(temporary), attribution="Synthetic fixture")
+            self.assertEqual(counts, {"authored": 4, "generated": 2})
+            self.assertTrue((Path(temporary) / "navmesh-comparison.png").exists())
+
+    def test_counts_use_display_crop_and_allow_empty_generated_navigation(self):
+        outside = square(0, 1) + np.array([10, 0, 0])
+        scene = [
+            ("Original NAVM (current cell)", "selected", square(0, 1)),
+            ("Original NAVM (current cell)", "outside", outside),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(renderer, "render", return_value=renderer.Image.new("RGB", (1, 1))):
+                counts = renderer.comparison(scene, Path(temporary), bounds=(-2, -2, 2, 2))
+            self.assertEqual(counts, {"authored": 2, "generated": 0})
 
 
 if __name__ == "__main__":

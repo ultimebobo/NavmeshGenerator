@@ -145,24 +145,25 @@ def rasterize(triangles, color, basis, framing, pixels, depth, wire=False, depth
         target_depth[visible] = z[visible]
 
 
+def crop_triangles(triangles, bounds):
+    """Select faces by world XY centroid, including faces hidden by geometry."""
+    if bounds is None:
+        return triangles
+    xmin, ymin, xmax, ymax = bounds
+    centers = triangles.mean(axis=1)
+    return triangles[(centers[:, 0] >= xmin) & (centers[:, 0] <= xmax)
+                     & (centers[:, 1] >= ymin) & (centers[:, 1] <= ymax)]
+
+
 def render(scene, navigation, bounds, width, height, azimuth, elevation):
     basis = camera_basis(azimuth, elevation)
-    selected = layer_triangles(scene, navigation)
-    if bounds:
-        xmin, ymin, xmax, ymax = bounds
-        def crop(triangles):
-            centers = triangles.mean(axis=1)
-            return triangles[(centers[:, 0] >= xmin) & (centers[:, 0] <= xmax)
-                             & (centers[:, 1] >= ymin) & (centers[:, 1] <= ymax)]
-        selected = crop(selected)
-    else:
-        crop = lambda triangles: triangles
-    terrain = crop(layer_triangles(scene, "Terrain"))
-    collision = crop(layer_triangles(scene, "Collision"))
+    selected = crop_triangles(layer_triangles(scene, navigation), bounds)
+    terrain = crop_triangles(layer_triangles(scene, "Terrain"), bounds)
+    collision = crop_triangles(layer_triangles(scene, "Collision"), bounds)
     # Both comparison panels share the union of navigation extents, including
     # authored and generated triangles, so their camera framing is identical.
-    authored = crop(layer_triangles(scene, "Original NAVM (current cell)"))
-    generated = crop(layer_triangles(scene, "Candidate NAVM"))
+    authored = crop_triangles(layer_triangles(scene, "Original NAVM (current cell)"), bounds)
+    generated = crop_triangles(layer_triangles(scene, "Candidate NAVM"), bounds)
     framing_navigation = np.concatenate((authored, generated))
     framing = frame(np.concatenate((framing_navigation, terrain, collision)), basis, width, height)
     pixels = np.full((height, width, 3), BACKGROUND, dtype=np.uint8)
@@ -187,26 +188,37 @@ def text(draw, xy, value, size=24, color=TEXT, bold=False):
     draw.text(xy, value, font=font(size, bold), fill=color)
 
 
-def comparison(scene, output):
+def comparison(scene, output, title="Authored vs generated", attribution="",
+               filename="navmesh-comparison.png", bounds=None, azimuth=0, elevation=78,
+               note="Experimental output; review and test NPC navigation before use."):
+    """Compare selected CELL navigation with identical cameras and exact face counts.
+
+    Attribution describes the actual winning input, including third-party edits.
+    Counts include occluded faces and use the same centroid crop as rendering.
+    Neighboring NAVM and connection-marker triangles are excluded.
+    """
     width, height = 2560, 1520
     image = Image.new("RGB", (width, height), BACKGROUND)
     draw = ImageDraw.Draw(image)
     text(draw, (60, 30), "NAVMESHGENERATOR  /  EXPORTED SCENE", 22, MUTED)
-    text(draw, (60, 67), "Riverwood: authored vs generated", 50, bold=True)
-    text(draw, (60, 136), "Official game plugins • Same scene, camera and display settings", 27, MUTED)
-    # This area encloses precisely the six selected village CELLs.
-    bounds = (16384, -49152, 28672, -40960)
+    text(draw, (60, 67), title, 50, bold=True)
+    text(draw, (60, 136), attribution, 27, MUTED)
+    counts = {}
     for x, layer, label, color in (
-        (40, "Original NAVM (current cell)", "DEFAULT  /  Bethesda-authored NAVM", AUTHORED),
+        (40, "Original NAVM (current cell)", "AUTHORED  /  Winning input NAVM", AUTHORED),
         (1300, "Candidate NAVM", "GENERATED  /  NavmeshGenerator", GENERATED),
     ):
         text(draw, (x + 20, 202), label, 30, color, True)
-        panel = render(scene, layer, bounds, 1220, 1080, 0, 78)
-        image.paste(panel, (x, 260))
+        count = len(crop_triangles(layer_triangles(scene, layer), bounds))
+        counts["authored" if layer.startswith("Original") else "generated"] = count
+        text(draw, (x + 20, 247), f"{count:,} triangles", 27, color)
+        panel = render(scene, layer, bounds, 1220, 1030, azimuth, elevation)
+        image.paste(panel, (x, 300))
     draw.line((1280, 204, 1280, 1340), fill=(51, 66, 75), width=2)
-    text(draw, (60, 1370), "Depth-tested navigation • Triangle edges visible • Terrain and collision shown in gray", 27, MUTED)
-    text(draw, (60, 1420), "Rendered from the program's GLB export. Experimental output; review and test NPC navigation before use.", 25, MUTED)
-    image.save(output / "riverwood-navmesh-comparison.png")
+    text(draw, (60, 1360), "Same scene and camera • Depth-tested triangles • Counts include occluded faces", 27, MUTED)
+    text(draw, (60, 1410), "Direct GLB render • Terrain and collision in gray • " + note, 25, MUTED)
+    image.save(output / filename)
+    return counts
 
 
 def scene_image(scene, output, filename, title, subtitle, bounds=None, azimuth=-24, elevation=48,
@@ -230,25 +242,43 @@ def scene_image(scene, output, filename, title, subtitle, bounds=None, azimuth=-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--riverwood", type=Path)
+    parser.add_argument("--comparison", type=Path, help="Authored/generated comparison from any exported scene")
     parser.add_argument("--scene", "--fixture", dest="scene", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--title", default="Navigation scene")
+    parser.add_argument("--attribution", help="Winning game plugins and third-party edits, printed on comparisons")
+    parser.add_argument("--filename", default="navmesh-comparison.png")
+    parser.add_argument("--note", default="Experimental output; review and test NPC navigation before use.")
     parser.add_argument("--bounds", nargs=4, type=float, metavar=("XMIN", "YMIN", "XMAX", "YMAX"))
     parser.add_argument("--azimuth", type=float, default=-24)
     parser.add_argument("--elevation", type=float, default=48)
     parser.add_argument("--navigation", choices=("Candidate NAVM", "Original NAVM (current cell)"),
                         default="Candidate NAVM")
     args = parser.parse_args()
-    if not args.scene and not args.riverwood:
-        parser.error("Provide --scene or --riverwood")
+    if not args.scene and not args.riverwood and not args.comparison:
+        parser.error("Provide --scene, --comparison or --riverwood")
+    if args.comparison and not args.attribution:
+        parser.error("--comparison requires --attribution naming the winning inputs")
+    if Path(args.filename).name != args.filename or not args.filename.lower().endswith(".png"):
+        parser.error("--filename must be a PNG filename without a directory")
     if args.bounds and (args.bounds[0] >= args.bounds[2] or args.bounds[1] >= args.bounds[3]):
         parser.error("Bounds must have XMIN < XMAX and YMIN < YMAX")
     args.output.mkdir(parents=True, exist_ok=True)
     sources = []
+    comparisons = {}
     if args.riverwood:
-        comparison(read_scene(args.riverwood), args.output)
+        comparisons["riverwood-navmesh-comparison.png"] = comparison(
+            read_scene(args.riverwood), args.output, "Riverwood: authored vs generated",
+            args.attribution or "Official game plugins • Same scene, camera and display settings",
+            "riverwood-navmesh-comparison.png", (16384, -49152, 28672, -40960))
         sources.append(("riverwood", args.riverwood))
         print("Rendered Riverwood comparison", flush=True)
+    if args.comparison:
+        comparisons[args.filename] = comparison(
+            read_scene(args.comparison), args.output, args.title, args.attribution,
+            args.filename, args.bounds, args.azimuth, args.elevation, args.note)
+        sources.append(("comparison", args.comparison))
+        print("Rendered comparison", flush=True)
     if args.scene:
         scene_image(read_scene(args.scene), args.output, "scene.png", args.title,
                     "Navigation and supporting geometry from the same export.",
@@ -260,6 +290,9 @@ def main():
         "sources": {name: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
                     for name, path in sources},
         "images": sorted(path.name for path in args.output.glob("*.png")),
+        "comparisons": comparisons,
+        "settings": {"title": args.title, "attribution": args.attribution, "note": args.note,
+                     "bounds": args.bounds, "azimuth": args.azimuth, "elevation": args.elevation},
         "presentation": "Orthographic software rendering; shared terrain/collision/navigation depth testing; unmodified exported triangles.",
     }
     (args.output / "render-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
