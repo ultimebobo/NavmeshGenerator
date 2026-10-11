@@ -168,7 +168,7 @@ class InteriorCutawayTests(unittest.TestCase):
         settings = renderer.presentation(scene, Path("unused.glb"), "interior", None,
                                          (-2, -2, 2, 2), 0, None)
         self.assertEqual(settings["cut_height"], 30 + renderer.INTERIOR_CUT_MARGIN)
-        self.assertEqual(settings["elevation"], 90)
+        self.assertEqual(settings["elevation"], 70)
 
     def test_empty_navigation_requires_explicit_cut(self):
         scene = [self.scene[0]]
@@ -191,7 +191,7 @@ class InteriorCutawayTests(unittest.TestCase):
                 sidecar.write_text(json.dumps({"metadata": {"selected_cells": cells}}))
                 settings = renderer.presentation(self.scene, path, "auto", None, None, 0, None)
                 self.assertEqual(settings["view"], expected)
-                self.assertEqual(settings["elevation"], 90 if expected == "interior" else 48)
+                self.assertEqual(settings["elevation"], 70 if expected == "interior" else 48)
             sidecar.write_text(json.dumps({"metadata": {"selected_cell": {"is_interior": True}}}))
             settings = renderer.presentation(self.scene, path, "auto", None, None, 0, None)
             self.assertEqual(settings["view"], "interior")
@@ -220,7 +220,7 @@ class InteriorCutawayTests(unittest.TestCase):
                 settings = manifest["renders"][filename]
                 self.assertEqual(settings["view"], "interior")
                 self.assertEqual(settings["cut_height"], renderer.INTERIOR_CUT_MARGIN)
-                self.assertEqual(settings["elevation"], 90)
+                self.assertEqual(settings["elevation"], 70)
                 self.assertEqual(len(settings["metadata_source"]["sha256"]), 64)
                 with renderer.Image.open(folder / filename) as image:
                     self.assertGreater(np.all(np.array(image) == renderer.GENERATED, axis=2).sum(), 100)

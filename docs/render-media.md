@@ -51,9 +51,10 @@ verify NPC behavior in game.
 ## Interior cutaways
 
 The default automatic view reads `<scene.glb>.metadata.json`. A single selected
-interior or a combined selection containing only interiors uses a top-down
-cutaway. Missing metadata, exterior selections, and mixed interior/exterior
-selections use the exterior presentation. Keep the metadata beside the GLB when
+interior or a combined selection containing only interiors uses a slightly
+inclined cutaway so floor heights and stairs remain visible. Missing metadata,
+exterior selections, and mixed interior/exterior selections use the exterior
+presentation. Keep the metadata beside the GLB when
 moving an application export. Use `--view interior` for an interior scene without
 metadata, or `--view exterior` to display its complete supporting geometry.
 
@@ -70,8 +71,8 @@ layer is empty. An interior selection without navigation requires `--cut-height`
 to identify the plane. Use a height override to inspect a lower floor in a
 building with overlapping levels; the automatic cut does not remove ceilings or
 upper floors below its plane. Explicit `--elevation` also applies to interiors
-when an oblique cutaway is useful. Cut heights, bounds and camera angles must be
-finite, and `--cut-height` cannot be combined with `--view exterior`.
+to adjust the incline or select a top-down view. Cut heights, bounds and camera
+angles must be finite, and `--cut-height` cannot be combined with `--view exterior`.
 
 Render an interior using the same export and rendering commands as other cells:
 

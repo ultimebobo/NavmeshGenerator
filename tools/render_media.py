@@ -229,7 +229,7 @@ def presentation(scene, path, view, cut_height, bounds, azimuth, elevation,
             raise ValueError("Interior cutaway needs navigation in the selected bounds or --cut-height")
         cut_height = float(navigation[:, :, 2].max()) + INTERIOR_CUT_MARGIN
     return {"view": view, "cut_height": cut_height, "azimuth": azimuth,
-            "elevation": elevation if elevation is not None else (90 if view == "interior" else exterior_elevation),
+            "elevation": elevation if elevation is not None else (70 if view == "interior" else exterior_elevation),
             "metadata_source": metadata_source}
 
 
@@ -329,7 +329,7 @@ def main():
     parser.add_argument("--note", default="Experimental output; review and test NPC navigation before use.")
     parser.add_argument("--bounds", nargs=4, type=float, metavar=("XMIN", "YMIN", "XMAX", "YMAX"))
     parser.add_argument("--azimuth", type=float, default=-24)
-    parser.add_argument("--elevation", type=float, help="Camera elevation in degrees; interiors default to top-down")
+    parser.add_argument("--elevation", type=float, help="Camera elevation in degrees; interiors default to a slight incline")
     parser.add_argument("--view", choices=("auto", "interior", "exterior"), default="auto",
                         help="Auto detects interiors from the adjacent GLB metadata sidecar")
     parser.add_argument("--cut-height", type=float, metavar="Z",
