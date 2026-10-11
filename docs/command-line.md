@@ -191,11 +191,11 @@ The intended normal workflow is to select an existing Mod Organizer 2 instance a
 
 The importer writes `input-report.json` before listing or extraction. It records the profile snapshot hash, enabled-mod priority, active plugin winners, and loose-file winners selected from game `Data`, enabled mods, and `Overwrite`. The `--data` plus `--load-order` route remains an internal developer/test interface only.
 
-If an existing MO2 profile's configured mod storage was moved, use the read-only `--mods-dir` recovery override. It changes only where enabled mod folders are looked up; it never edits MO2 configuration or profile files:
-
-```powershell
-./build/windows/x64/releasedbg/NavmeshGenerator.exe --mo2 "C:/Users/baudo/AppData/Local/ModOrganizer/Mod Authoring" --profile "My Actual Profile" --mods-dir "D:/Dev/Skyrim Mods/Mods" --list-cells --output "D:/NavmeshWork/cells"
-```
+Mod storage is resolved automatically from `ModOrganizer.ini`: `mod_directory`
+takes precedence, with `mods_directory` and the instance layout as fallbacks.
+The desktop uses this configured path. The read-only `--mods-dir` option is a
+developer/test escape hatch that overrides physical mod lookup without editing
+MO2 configuration or profile files.
 
 Split MO2 layouts are supported: when `ModOrganizer.ini` has a relative `base_directory`, profile/mod/overwrite paths resolve from that directory (for example, a sibling `MODS` tree), while `gamePath` resolves to the configured stock game directory.
 

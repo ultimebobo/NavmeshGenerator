@@ -418,9 +418,10 @@ namespace navmesh::skyrim
         const auto profiles = ConfigPath(ini, "profiles_directory", requestedRoot, base,
                                          std::filesystem::is_directory(base / "profiles") ? base / "profiles"
                                                                                           : requestedRoot / "profiles");
-        const auto configuredMods =
+        const auto fallbackMods =
             ConfigPath(ini, "mods_directory", requestedRoot, base,
                        std::filesystem::is_directory(base / "mods") ? base / "mods" : requestedRoot / "mods");
+        const auto configuredMods = ConfigPath(ini, "mod_directory", requestedRoot, base, fallbackMods);
         const auto mods = modsDirectoryOverride ? *modsDirectoryOverride : configuredMods;
         const auto overwrite = ConfigPath(
             ini, "overwrite_directory", requestedRoot, base,

@@ -116,6 +116,43 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(completed.returncode, code, completed.stdout + completed.stderr)
         return self.root / output
 
+    def test_mo2_configured_mod_storage(self):
+        instance = self.root / "Instance"
+        storage = self.root / "Storage"
+        profile = storage / "profiles" / "Default"
+        mods = storage / "Configured mods"
+        instance.mkdir()
+        profile.mkdir(parents=True)
+        (mods / "Patch").mkdir(parents=True)
+        (storage / "mods").mkdir()
+        (mods / "Patch" / "Patch.esp").write_bytes((self.root / "Patch.esp").read_bytes())
+        (self.root / "Patch.esp").unlink()
+        (profile / "modlist.txt").write_text("+Patch\n")
+        (profile / "plugins.txt").write_text("*Baseline.esm\n*Patch.esp\n")
+        (profile / "loadorder.txt").write_text("Baseline.esm\nPatch.esp\n")
+        ini = instance / "ModOrganizer.ini"
+        for key, value, fallback in [
+            ("mod_directory", "Configured mods", "mods_directory=mods\n"),
+            ("mod_directory", f"@ByteArray({mods.as_posix()})", ""),
+            ("mods_directory", "Configured mods", ""),
+            ("mod_directory", "", "mods_directory=Configured mods\n"),
+        ]:
+            with self.subTest(key=key, value=value):
+                ini.write_text(f"[General]\ngamePath={self.root.as_posix()}\n"
+                               "base_directory=../Storage\nprofiles_directory=profiles\n"
+                               f"{key}={value}\n{fallback}")
+                original_ini = ini.read_bytes()
+                output = self.root / "mo2-output"
+                completed = subprocess.run(
+                    [str(EXE), "--mo2", str(instance), "--profile", "Default",
+                     "--list-cells", "--output", str(output)],
+                    capture_output=True, text=True, timeout=90)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                report = json.loads((output / "input-report.json").read_text())
+                self.assertEqual(Path(report["mods_directory"]), mods)
+                self.assertEqual(ini.read_bytes(), original_ini)
+                self.assertTrue((output / "cells.json").exists())
+
     def test_plugin_scope_and_single_patch(self):
         output = self.run_cli("--rebuild-plugin", "pAtCh.EsP", "--generate-plugin")
         report = json.loads((output / "batch-report.json").read_text())

@@ -22,6 +22,7 @@ void TestDesktopOptionsAndRecastSettings()
     draft.cellX = 2;
     draft.cellY = 3;
     draft.plugin = "developer.esp";
+    draft.modsDirectory = "developer-mod-storage";
     draft.terrainOnly = true;
     draft.diagnostics = true;
     draft.copyPlugin = true;
@@ -38,6 +39,7 @@ void TestDesktopOptionsAndRecastSettings()
     assert(!plugin.makeScene);
     assert(!plugin.cellFormId && plugin.editorId.empty() && !plugin.cellX && !plugin.cellY);
     assert(plugin.plugin.empty() && !plugin.terrainOnly && !plugin.diagnostics);
+    assert(plugin.modsDirectory.empty());
     assert(plugin.navigationProfile.agentRadius == 7 && plugin.recastSettings.cellSize == 8);
 
     draft.rebuildScope = app::RebuildScope::Cell;
@@ -47,6 +49,7 @@ void TestDesktopOptionsAndRecastSettings()
     assert(selected.cellSelection == draft.cellSelection && selected.copySourcePlugin == "Fixture.esp" &&
            selected.affectedPlugin.empty());
     assert(selected.copyPlugin && selected.generatePlugin && selected.generateCandidate);
+    assert(selected.modsDirectory.empty());
     assert(!selected.cellFormId && selected.editorId.empty() && !selected.estimateOnly && selected.makeScene);
     assert((app::ParseCellSelection(selected.cellSelection) ==
             std::vector<std::string>{"FixtureCell", "00000100", "OtherCell", "0x101"}));
@@ -84,6 +87,7 @@ void TestDesktopOptionsAndRecastSettings()
     const auto selectedListing = ui::PrepareDesktopOptions(draft, true);
     assert(selectedListing.cellSelection.empty() && !selectedListing.copyPlugin);
     assert(!selectedListing.makeScene);
+    assert(selectedListing.modsDirectory.empty());
 
     draft.rebuildScope = app::RebuildScope::LoadOrder;
     const auto loadOrder = ui::PrepareDesktopOptions(draft, false);
@@ -91,6 +95,7 @@ void TestDesktopOptionsAndRecastSettings()
     assert(loadOrder.generateCandidate && loadOrder.estimateOnly);
     assert(loadOrder.cellSelection.empty());
     assert(!loadOrder.makeScene);
+    assert(loadOrder.modsDirectory.empty());
 
     draft.rebuildScope = app::RebuildScope::Cell;
     draft.cellSelection.clear();

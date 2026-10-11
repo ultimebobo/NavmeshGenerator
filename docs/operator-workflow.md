@@ -37,6 +37,10 @@ to file** exports `cells.json`; it is an action rather than a saved run mode and
 does not require a selected cell or valid generation settings. Cell rows are
 written only to the catalog, including for CLI `--list-cells` runs.
 
+Mod storage is read from `ModOrganizer.ini` using `mod_directory`, with
+`mods_directory` as a fallback. Desktop actions use the configured location
+automatically; the application settings do not supply a mod-directory override.
+
 **Rebuild scope** controls which settings appear:
 
 - **Cell** shows a multiline **Cells** field. Paste Form IDs or editor IDs from
@@ -68,7 +72,7 @@ native coordinates, so unrelated interiors or worldspaces may overlap.
 
 **Advanced settings** starts folded each time the workspace opens. It contains
 numerical analysis thresholds, neighboring-cell radius, disk/working budgets,
-batch workers, optional moved-mod recovery and cache folders. Recast settings
+batch workers and optional cache folders. Recast settings
 appear only for generation; analysis thresholds appear only for Cell scope.
 The desktop persists choices in the existing local `NavmeshGenerator/config.ini`
 and validates relevant values before running. Developer input routes, custom OBJ

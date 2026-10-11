@@ -208,7 +208,6 @@ namespace
         workspace.config = ConfigPath();
         workspace.text = {{"mo2", PathText(options.mo2)},
                           {"profile", options.profile},
-                          {"mods", PathText(options.modsDirectory)},
                           {"output", PathText(options.output)},
                           {"asset_cache", PathText(options.assetCache)},
                           {"form", options.cellFormId ? std::format("{:08X}", *options.cellFormId) : ""},
@@ -370,7 +369,6 @@ namespace
         };
         options.mo2 = Wide(value("mo2"));
         options.profile = value("profile");
-        options.modsDirectory = Wide(value("mods"));
         options.output = Wide(value("output"));
         options.assetCache = Wide(value("asset_cache"));
         options.affectedPlugin = value("affected_plugin");
@@ -612,8 +610,6 @@ namespace
             SaveSettings(workspace);
         }
         Help("Restore all advanced numerical values to the application defaults, including hidden controls.");
-        TextField(workspace, window, "mods", "Moved mods folder (optional)",
-                  "Recovery location for moved MO2 mod folders", true);
         TextField(workspace, window, "asset_cache", "Shared cache folder (optional)",
                   "Leave empty to use temporary storage", true);
         ImGui::TextUnformatted("Neighboring cell radius");
@@ -648,7 +644,7 @@ namespace
         if (generation)
         {
             ImGui::SeparatorText("Recast generation");
-            ImGui::Checkbox("Tag water and preferred path triangles", &options.tagTriangles);
+            ImGui::Checkbox("Tag water and preferred path triangles (experimental)", &options.tagTriangles);
             Help("Classify submerged floors using exterior water levels and preserve nearby authored preferred "
                  "routes on the same floor. Without a supported water plane, authored water tags provide evidence.");
             int algorithm = static_cast<int>(options.partitioningAlgorithm);

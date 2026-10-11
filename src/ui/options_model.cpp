@@ -40,6 +40,7 @@ namespace navmesh::ui
         result.plugin.clear();
         result.data.clear();
         result.loadOrder.clear();
+        result.modsDirectory.clear();
         result.exportGeometry.clear();
         result.exportAnalysis.clear();
         result.exportScene.clear();

@@ -43,8 +43,15 @@ namespace navmesh::skyrim
         std::filesystem::path looseAssetCachePath;
     };
 
-    // A mods-directory override is a read-only recovery option for an MO2 profile
-    // whose configured storage was moved. It never changes MO2 configuration.
+    /** Resolve an existing MO2 profile and its winning physical inputs without modifying configuration.
+     * @param instanceOrPortableRoot Directory containing ModOrganizer.ini.
+     * @param profile Existing profile name beneath the configured profiles directory.
+     * @param modsDirectoryOverride Optional developer override for physical mod storage.
+     * Otherwise mod_directory is used, with mods_directory and the instance layout as fallbacks.
+     * Relative configured paths resolve against the instance root or configured base directory.
+     * @param cacheDirectory Optional directory for the shared loose-asset catalog; empty disables caching.
+     * @return Resolved paths, input winners and snapshot identity, with diagnostics for missing or invalid inputs.
+     */
     [[nodiscard]] Mo2ProfileInput ImportMo2Profile(
         const std::filesystem::path &instanceOrPortableRoot, const std::string &profile,
         const std::optional<std::filesystem::path> &modsDirectoryOverride = std::nullopt,
