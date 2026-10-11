@@ -1,7 +1,7 @@
 """Render still images from NavmeshGenerator GLB exports, without AI.
 
 Requires NumPy and Pillow. Geometry is read directly from the exported buffers;
-only cameras, presentation colors, lighting, and captions are added. This reader
+presentation adds cameras, colors, lighting, captions and interior cutaways. This reader
 accepts the tool's untransformed triangle meshes, not arbitrary glTF files.
 """
 
@@ -21,6 +21,8 @@ TEXT = (232, 240, 244)
 MUTED = (157, 174, 185)
 AUTHORED = (238, 185, 91)
 GENERATED = (70, 216, 181)
+# Skyrim world units retained above the highest selected navigation vertex.
+INTERIOR_CUT_MARGIN = 64.0
 
 
 def read_scene(path):
@@ -155,16 +157,90 @@ def crop_triangles(triangles, bounds):
                      & (centers[:, 1] >= ymin) & (centers[:, 1] <= ymax)]
 
 
-def render(scene, navigation, bounds, width, height, azimuth, elevation):
+def clip_support(triangles, cut_height):
+    """Clip supporting surfaces to world Z <= cut_height, preserving their winding.
+
+    Intersections stay on the exported surfaces. Navigation is never clipped;
+    this is a presentation cutaway, not a change to the source scene.
+    """
+    if cut_height is None or not len(triangles):
+        return triangles
+    below = triangles[:, :, 2] <= cut_height
+    retained = triangles[below.all(axis=1)]
+    crossing = triangles[below.any(axis=1) & ~below.all(axis=1)]
+    fragments = []
+    # A horizontal half-space clips each crossing triangle to a triangle or quad.
+    # Traverse its ordered edges so triangulation keeps the original normal.
+    for triangle in crossing:
+        polygon = []
+        previous = triangle[-1]
+        for current in triangle:
+            previous_below = previous[2] <= cut_height
+            current_below = current[2] <= cut_height
+            if previous_below != current_below:
+                fraction = (cut_height - previous[2]) / (current[2] - previous[2])
+                intersection = previous + fraction * (current - previous)
+                intersection[2] = cut_height
+                polygon.append(intersection)
+            if current_below:
+                polygon.append(current)
+            previous = current
+        for index in range(1, len(polygon) - 1):
+            fragment = np.array([polygon[0], polygon[index], polygon[index + 1]])
+            if np.linalg.norm(np.cross(fragment[1] - fragment[0], fragment[2] - fragment[0])) > 0:
+                fragments.append(fragment)
+    if fragments:
+        return np.concatenate((retained, np.array(fragments)))
+    return retained
+
+
+def navigation_triangles(scene, bounds):
+    """Use both navigation layers for a shared comparison cut and camera."""
+    return np.concatenate([
+        crop_triangles(layer_triangles(scene, layer), bounds)
+        for layer in ("Original NAVM (current cell)", "Candidate NAVM")
+    ])
+
+
+def presentation(scene, path, view, cut_height, bounds, azimuth, elevation,
+                 exterior_elevation=48):
+    """Resolve interior cutaways from the adjacent export metadata or CLI override.
+
+    Auto detection requires all selected cells to be interiors. Missing metadata
+    keeps exterior presentation. Both navigation layers define the automatic cut;
+    empty selections require an explicit height rather than an invented floor.
+    """
+    metadata_source = None
+    if view == "auto" and cut_height is None:
+        metadata_path = Path(str(path) + ".metadata.json")
+        interior = False
+        if metadata_path.exists():
+            data = metadata_path.read_bytes()
+            metadata = json.loads(data)["metadata"]
+            cells = metadata.get("selected_cells") or [metadata.get("selected_cell")]
+            interior = bool(cells) and all(cell and cell.get("is_interior") is True for cell in cells)
+            metadata_source = {"path": str(metadata_path), "sha256": hashlib.sha256(data).hexdigest()}
+        view = "interior" if interior else "exterior"
+    elif view == "auto":
+        view = "interior"
+    if view == "interior" and cut_height is None:
+        navigation = navigation_triangles(scene, bounds)
+        if not len(navigation):
+            raise ValueError("Interior cutaway needs navigation in the selected bounds or --cut-height")
+        cut_height = float(navigation[:, :, 2].max()) + INTERIOR_CUT_MARGIN
+    return {"view": view, "cut_height": cut_height, "azimuth": azimuth,
+            "elevation": elevation if elevation is not None else (90 if view == "interior" else exterior_elevation),
+            "metadata_source": metadata_source}
+
+
+def render(scene, navigation, bounds, width, height, azimuth, elevation, cut_height=None):
     basis = camera_basis(azimuth, elevation)
     selected = crop_triangles(layer_triangles(scene, navigation), bounds)
-    terrain = crop_triangles(layer_triangles(scene, "Terrain"), bounds)
-    collision = crop_triangles(layer_triangles(scene, "Collision"), bounds)
+    terrain = clip_support(crop_triangles(layer_triangles(scene, "Terrain"), bounds), cut_height)
+    collision = clip_support(crop_triangles(layer_triangles(scene, "Collision"), bounds), cut_height)
     # Both comparison panels share the union of navigation extents, including
     # authored and generated triangles, so their camera framing is identical.
-    authored = crop_triangles(layer_triangles(scene, "Original NAVM (current cell)"), bounds)
-    generated = crop_triangles(layer_triangles(scene, "Candidate NAVM"), bounds)
-    framing_navigation = np.concatenate((authored, generated))
+    framing_navigation = navigation_triangles(scene, bounds)
     framing = frame(np.concatenate((framing_navigation, terrain, collision)), basis, width, height)
     pixels = np.full((height, width, 3), BACKGROUND, dtype=np.uint8)
     depth = np.full((height, width), -np.inf, dtype=np.float64)
@@ -190,7 +266,7 @@ def text(draw, xy, value, size=24, color=TEXT, bold=False):
 
 def comparison(scene, output, title="Authored vs generated", attribution="",
                filename="navmesh-comparison.png", bounds=None, azimuth=0, elevation=78,
-               note="Experimental output; review and test NPC navigation before use."):
+               note="Experimental output; review and test NPC navigation before use.", cut_height=None):
     """Compare selected CELL navigation with identical cameras and exact face counts.
 
     Attribution describes the actual winning input, including third-party edits.
@@ -212,30 +288,32 @@ def comparison(scene, output, title="Authored vs generated", attribution="",
         count = len(crop_triangles(layer_triangles(scene, layer), bounds))
         counts["authored" if layer.startswith("Original") else "generated"] = count
         text(draw, (x + 20, 247), f"{count:,} triangles", 27, color)
-        panel = render(scene, layer, bounds, 1220, 1030, azimuth, elevation)
+        panel = render(scene, layer, bounds, 1220, 1030, azimuth, elevation, cut_height)
         image.paste(panel, (x, 300))
     draw.line((1280, 204, 1280, 1340), fill=(51, 66, 75), width=2)
-    text(draw, (60, 1360), "Same scene and camera • Depth-tested triangles • Counts include occluded faces", 27, MUTED)
+    support_view = "Interior cutaway" if cut_height is not None else "Same scene and camera"
+    text(draw, (60, 1360), support_view + " • Depth-tested triangles • Counts include occluded faces", 27, MUTED)
     text(draw, (60, 1410), "Direct GLB render • Terrain and collision in gray • " + note, 25, MUTED)
     image.save(output / filename)
     return counts
 
 
 def scene_image(scene, output, filename, title, subtitle, bounds=None, azimuth=-24, elevation=48,
-                navigation="Candidate NAVM"):
+                navigation="Candidate NAVM", cut_height=None):
     image = Image.new("RGB", (2400, 1500), BACKGROUND)
     draw = ImageDraw.Draw(image)
     text(draw, (60, 30), "NAVMESHGENERATOR  /  EXPORTED SCENE", 22, MUTED)
     text(draw, (60, 72), title, 48, bold=True)
     text(draw, (60, 139), subtitle, 26, MUTED)
-    panel = render(scene, navigation, bounds, 2280, 1120, azimuth, elevation)
+    panel = render(scene, navigation, bounds, 2280, 1120, azimuth, elevation, cut_height)
     image.paste(panel, (60, 210))
     authored = navigation.startswith("Original")
     draw.rounded_rectangle((64, 1373, 88, 1397), radius=3, fill=AUTHORED if authored else GENERATED)
     text(draw, (104, 1364), "Authored navigation" if authored else "Generated navigation", 26)
     draw.rounded_rectangle((485, 1373, 509, 1397), radius=3, fill=(118, 130, 138))
     text(draw, (525, 1364), "Collision geometry", 26)
-    text(draw, (60, 1430), "Unmodified exported triangles • Shared depth testing", 24, MUTED)
+    geometry_note = "Interior cutaway • Unmodified navigation" if cut_height is not None else "Unmodified exported triangles"
+    text(draw, (60, 1430), geometry_note + " • Shared depth testing", 24, MUTED)
     image.save(output / filename)
 
 
@@ -251,7 +329,11 @@ def main():
     parser.add_argument("--note", default="Experimental output; review and test NPC navigation before use.")
     parser.add_argument("--bounds", nargs=4, type=float, metavar=("XMIN", "YMIN", "XMAX", "YMAX"))
     parser.add_argument("--azimuth", type=float, default=-24)
-    parser.add_argument("--elevation", type=float, default=48)
+    parser.add_argument("--elevation", type=float, help="Camera elevation in degrees; interiors default to top-down")
+    parser.add_argument("--view", choices=("auto", "interior", "exterior"), default="auto",
+                        help="Auto detects interiors from the adjacent GLB metadata sidecar")
+    parser.add_argument("--cut-height", type=float, metavar="Z",
+                        help="Interior support cut in Skyrim world Z units; implies interior in auto mode")
     parser.add_argument("--navigation", choices=("Candidate NAVM", "Original NAVM (current cell)"),
                         default="Candidate NAVM")
     args = parser.parse_args()
@@ -263,26 +345,53 @@ def main():
         parser.error("--filename must be a PNG filename without a directory")
     if args.bounds and (args.bounds[0] >= args.bounds[2] or args.bounds[1] >= args.bounds[3]):
         parser.error("Bounds must have XMIN < XMAX and YMIN < YMAX")
+    numeric_settings = [args.azimuth]
+    numeric_settings.extend(value for value in (args.elevation, args.cut_height) if value is not None)
+    numeric_settings.extend(args.bounds or [])
+    if not all(math.isfinite(value) for value in numeric_settings):
+        parser.error("Camera angles, bounds and cut height must be finite")
+    if args.cut_height is not None and args.view == "exterior":
+        parser.error("--cut-height requires --view auto or interior")
     args.output.mkdir(parents=True, exist_ok=True)
     sources = []
     comparisons = {}
+    renders = {}
+
+    def load_presentation(path, filename, bounds, exterior_elevation=48, azimuth=None):
+        scene = read_scene(path)
+        try:
+            settings = presentation(scene, path, args.view, args.cut_height, bounds,
+                                    args.azimuth if azimuth is None else azimuth,
+                                    args.elevation, exterior_elevation)
+        except (ValueError, KeyError) as error:
+            parser.error(str(error))
+        renders[filename] = settings
+        return scene, settings
+
     if args.riverwood:
+        bounds = (16384, -49152, 28672, -40960)
+        scene, settings = load_presentation(args.riverwood, "riverwood-navmesh-comparison.png", bounds, 78, 0)
         comparisons["riverwood-navmesh-comparison.png"] = comparison(
-            read_scene(args.riverwood), args.output, "Riverwood: authored vs generated",
+            scene, args.output, "Riverwood: authored vs generated",
             args.attribution or "Official game plugins • Same scene, camera and display settings",
-            "riverwood-navmesh-comparison.png", (16384, -49152, 28672, -40960))
+            "riverwood-navmesh-comparison.png", bounds, settings["azimuth"], settings["elevation"],
+            cut_height=settings["cut_height"])
         sources.append(("riverwood", args.riverwood))
         print("Rendered Riverwood comparison", flush=True)
     if args.comparison:
+        scene, settings = load_presentation(args.comparison, args.filename, args.bounds)
         comparisons[args.filename] = comparison(
-            read_scene(args.comparison), args.output, args.title, args.attribution,
-            args.filename, args.bounds, args.azimuth, args.elevation, args.note)
+            scene, args.output, args.title, args.attribution,
+            args.filename, args.bounds, settings["azimuth"], settings["elevation"], args.note,
+            settings["cut_height"])
         sources.append(("comparison", args.comparison))
         print("Rendered comparison", flush=True)
     if args.scene:
-        scene_image(read_scene(args.scene), args.output, "scene.png", args.title,
+        scene, settings = load_presentation(args.scene, "scene.png", args.bounds)
+        scene_image(scene, args.output, "scene.png", args.title,
                     "Navigation and supporting geometry from the same export.",
-                    args.bounds, args.azimuth, args.elevation, args.navigation)
+                    args.bounds, settings["azimuth"], settings["elevation"], args.navigation,
+                    settings["cut_height"])
         sources.append(("scene", args.scene))
         print("Rendered scene", flush=True)
     manifest = {
@@ -291,9 +400,11 @@ def main():
                     for name, path in sources},
         "images": sorted(path.name for path in args.output.glob("*.png")),
         "comparisons": comparisons,
+        "renders": renders,
         "settings": {"title": args.title, "attribution": args.attribution, "note": args.note,
-                     "bounds": args.bounds, "azimuth": args.azimuth, "elevation": args.elevation},
-        "presentation": "Orthographic software rendering; shared terrain/collision/navigation depth testing; unmodified exported triangles.",
+                     "bounds": args.bounds, "azimuth": args.azimuth, "elevation": args.elevation,
+                     "view": args.view, "cut_height": args.cut_height},
+        "presentation": "Orthographic software rendering; shared terrain/collision/navigation depth testing; interior support cutaways; unmodified navigation.",
     }
     (args.output / "render-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 

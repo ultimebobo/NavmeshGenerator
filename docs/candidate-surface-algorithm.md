@@ -30,7 +30,9 @@ adapter repairs narrow unsupported raster seams between collision pieces. Both
 endpoints must be supported standing floors within the profile's climb limit.
 The unsupported width is bounded by the agent radius at the effective voxel
 resolution. Inserted columns use the higher endpoint's floor and require clear
-standing volume; nonwalkable solids reaching the crossing height block repair.
+standing volume. Slope-rejected risers at or below the crossing height permit
+bounded steps between supported treads. Explicitly excluded obstacle collision
+cannot anchor or fill a crossing; solids intruding into standing volume block it.
 Proposals inspect the unchanged heightfield, so repairs cannot chain across a
 wider void. Ordinary walkability filters still apply to the completed field.
 Candidate warnings report repaired columns. This automatic stage uses the same

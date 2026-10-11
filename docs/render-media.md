@@ -3,7 +3,8 @@
 `tools/render_media.py` renders NavmeshGenerator GLB exports with shared depth
 testing for navigation and supporting geometry. The same command accepts
 application exports and synthetic test scenes. Cameras, lighting, colors and
-captions affect presentation; exported triangle positions stay unchanged.
+captions affect presentation. Interior cutaways clip supporting surfaces for
+display; navigation vertices and the source exports stay unchanged.
 
 ## Requirements
 
@@ -36,12 +37,54 @@ Optional presentation controls apply to every scene:
 - `--navigation "Original NAVM (current cell)"` selects authored navigation.
 - `--bounds <xmin> <ymin> <xmax> <ymax>` selects a world-coordinate crop.
 - `--azimuth` and `--elevation` set camera angles in degrees.
+- `--view auto|interior|exterior` selects automatic cell detection or an explicit
+  presentation mode.
+- `--cut-height <Z>` sets the interior supporting-geometry cut in Skyrim world Z
+  units. It implies interior presentation in automatic mode.
 
 Fixture names, dimensions, probe expectations and measured outcomes belong in
 builders and generated reports, rather than renderer presets or separate guides.
 The reader accepts the application's untransformed world-coordinate triangle
 exports; it is not a general glTF importer. Images support inspection and do not
 verify NPC behavior in game.
+
+## Interior cutaways
+
+The default automatic view reads `<scene.glb>.metadata.json`. A single selected
+interior or a combined selection containing only interiors uses a top-down
+cutaway. Missing metadata, exterior selections, and mixed interior/exterior
+selections use the exterior presentation. Keep the metadata beside the GLB when
+moving an application export. Use `--view interior` for an interior scene without
+metadata, or `--view exterior` to display its complete supporting geometry.
+
+The automatic cut sits above the highest authored or generated navigation vertex
+in the selected world-XY bounds, with a presentation margin defined by the
+renderer. Terrain and collision above that plane are omitted. Crossing triangles
+are clipped at the plane, retaining their lower portions and surface normals.
+Camera framing uses the retained support and both navigation layers. Navigation
+is never clipped, and retained geometry still shares its depth buffer with
+navigation. Furniture, stair treads and floors below the cut can occlude routes.
+
+Both comparison panels use the same cut and camera, even when one navigation
+layer is empty. An interior selection without navigation requires `--cut-height`
+to identify the plane. Use a height override to inspect a lower floor in a
+building with overlapping levels; the automatic cut does not remove ceilings or
+upper floors below its plane. Explicit `--elevation` also applies to interiors
+when an oblique cutaway is useful. Cut heights, bounds and camera angles must be
+finite, and `--cut-height` cannot be combined with `--view exterior`.
+
+Render an interior using the same export and rendering commands as other cells:
+
+```powershell
+python tools/render_media.py --scene <interior-scene.glb> --output ./output/images
+python tools/render_media.py --comparison <interior-scene.glb> --output ./output/comparison `
+  --attribution "<winning game plugins and mod edits>" --view interior
+```
+
+Images label the cutaway presentation. `render-manifest.json` records each image's
+effective view, cut height and camera, plus the path and hash of metadata used for
+automatic detection. Comparison counts still describe the selected exported
+navigation, including any faces hidden by retained geometry.
 
 ## Authored/generated comparison
 
@@ -55,8 +98,8 @@ python tools/render_media.py --comparison <scene.glb> --output ./output/images `
   --filename <region>-navmesh-comparison.png --azimuth <degrees> --elevation <degrees>
 ```
 
-Both panels use identical framing, lighting and supporting geometry. Captions
-count the triangle primitives in `Original NAVM (current cell)` and `Candidate
+Both panels use identical framing, lighting and retained supporting geometry.
+Captions count the triangle primitives in `Original NAVM (current cell)` and `Candidate
 NAVM`, across all material groups. Neighboring navigation and connection bars
 are excluded; occluded navigation is included. With `--bounds`, counts and
 display use the same world-XY centroid selection. Counts describe the exported
@@ -122,7 +165,7 @@ and unsupported model coverage as separate findings.
 
 ## Verify rendering
 
-Run the synthetic occlusion regressions:
+Run the synthetic occlusion and interior cutaway regressions:
 
 ```powershell
 python tests/test_media_renderer.py

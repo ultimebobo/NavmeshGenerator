@@ -23,6 +23,8 @@ namespace
 {
     using namespace navmesh::core;
     constexpr auto NoNeighbor = std::numeric_limits<std::uint32_t>::max();
+    /// Highest area wins coincident raster spans and preserves explicitly excluded collision through seam repair.
+    constexpr unsigned char ObstacleArea = RC_WALKABLE_AREA;
 
     template <class T, void (*Free)(T *)> using RecastOwner = std::unique_ptr<T, decltype(Free)>;
 
@@ -575,7 +577,8 @@ namespace
     [[nodiscard]] bool HasStandingFloor(const rcSpan &span, int height)
     {
         const int ceiling = span.next ? span.next->smin : RC_SPAN_MAX_HEIGHT;
-        return span.area != RC_NULL_AREA && ceiling - static_cast<int>(span.smax) >= height;
+        return span.area != RC_NULL_AREA && span.area != ObstacleArea &&
+               ceiling - static_cast<int>(span.smax) >= height;
     }
 
     /// Find a climb-compatible floor in one column without substituting a stacked level.
@@ -598,7 +601,9 @@ namespace
     /** Bridge only short unsupported raster seams between two standing floors.
      * The unsupported width cannot exceed the agent's footprint radius. Both
      * endpoints must fit the climb limit, and every inserted column must have
-     * unobstructed standing volume. The higher endpoint supplies the seam height,
+     * unobstructed standing volume. Slope-rejected risers below the crossing can
+     * supply solid support, but explicitly excluded obstacles block repair.
+     * The higher endpoint supplies the seam height,
      * so the crossing is a bounded step rather than a fabricated deep floor.
      * Proposals read the original field: repairs cannot chain across a wider void.
      * Ledge, clearance and radius filtering still run on the completed field.
@@ -652,7 +657,7 @@ namespace
                                 {
                                     if ((static_cast<int>(solid->smax) > floor &&
                                          static_cast<int>(solid->smin) < floor + config.walkableHeight) ||
-                                        (solid->area == RC_NULL_AREA && static_cast<int>(solid->smax) >= lowerFloor &&
+                                        (solid->area == ObstacleArea && static_cast<int>(solid->smax) >= lowerFloor &&
                                          static_cast<int>(solid->smin) <= floor))
                                     {
                                         clear = false;
@@ -709,12 +714,11 @@ namespace
         // coincident spans using the highest area, so a rock cannot become a floor
         // through overlap with terrain or low-hanging-obstacle promotion.
         constexpr unsigned char floorArea = 1;
-        constexpr unsigned char obstacleArea = RC_WALKABLE_AREA;
         for (std::size_t triangle{}; triangle < areas.size(); ++triangle)
         {
             if (input.obstacles[triangle])
             {
-                areas[triangle] = obstacleArea;
+                areas[triangle] = ObstacleArea;
                 ++statistics.rejectedObstruction;
             }
             else if (areas[triangle] == RC_NULL_AREA)
@@ -733,18 +737,6 @@ namespace
         }
         // Remove spans that violate climb or vertical clearance before radius erosion.
         rcFilterLowHangingWalkableObstacles(&context, config.walkableClimb, *heightfield);
-        // Clear tagged solids after promotion, retaining their raw spans so
-        // ledge and clearance filtering still see the obstacle volume.
-        for (int column{}; column < heightfield->width * heightfield->height; ++column)
-        {
-            for (auto *span = heightfield->spans[column]; span; span = span->next)
-            {
-                if (span->area == obstacleArea)
-                {
-                    span->area = RC_NULL_AREA;
-                }
-            }
-        }
         // Tiny seams between collision pieces must have supported crossings
         // before ledge rejection and erosion expand them into disconnected rooms.
         const auto bridged = BridgeRasterFloorSeams(context, *heightfield, config, agentRadius);
@@ -753,6 +745,18 @@ namespace
             warnings.push_back(std::format("Recast bridged {} narrow raster seam columns between climb-compatible "
                                            "floors with unobstructed standing clearance.",
                                            bridged));
+        }
+        // Tagged solids cannot anchor or fill seams. Clear their area only after
+        // repair, retaining the solid volume for ledge and clearance filtering.
+        for (int column{}; column < heightfield->width * heightfield->height; ++column)
+        {
+            for (auto *span = heightfield->spans[column]; span; span = span->next)
+            {
+                if (span->area == ObstacleArea)
+                {
+                    span->area = RC_NULL_AREA;
+                }
+            }
         }
         rcFilterLedgeSpans(&context, config.walkableHeight, config.walkableClimb, *heightfield);
         rcFilterWalkableLowHeightSpans(&context, config.walkableHeight, *heightfield);

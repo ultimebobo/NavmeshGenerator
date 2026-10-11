@@ -385,6 +385,71 @@ namespace
         const auto allObstacles = generator.Generate(fixture.scene, {}, std::nullopt, fixture.entrances, partitioning);
         assert(allObstacles.mesh.polygons.empty() && !allObstacles.exits[0].polygon);
     }
+
+    void CheckSlopedRisers(RegionPartitioningAlgorithm partitioning)
+    {
+        // Sloped risers have horizontal extent but exceed the walkable slope.
+        // Their solid raster spans must permit bounded steps without allowing
+        // wider steep ramps, excessive climbs, excluded solids or low ceilings.
+        for (const auto [riserRun, rise, obstruction, connected] :
+             {std::tuple{6.0F, 14.0F, 0, true}, std::tuple{24.0F, 32.0F, 0, false}, std::tuple{6.0F, 48.0F, 0, false},
+              std::tuple{6.0F, 14.0F, 1, false}, std::tuple{6.0F, 14.0F, 2, false}})
+        {
+            for (const auto placement : {Placement{}, Placement{{1200, -900, 112}, 0.37F}})
+            {
+                ObstacleFixture fixture;
+                const auto floor = AddSource(fixture, "stairs with sloped risers");
+                const auto riser = AddSource(fixture, "sloped riser collision");
+                fixture.scene.geometrySources[riser].navigationObstacle = obstruction == 1;
+                constexpr int count = 16;
+                constexpr float tread = 48;
+                constexpr float width = 192;
+                AddBox(fixture, floor, placement, {-256, 0, -32}, {0, width, 0});
+                for (int step{}; step < count; ++step)
+                {
+                    const float start = step * tread;
+                    const float lower = step * rise;
+                    const float upper = lower + rise;
+                    AddQuad(fixture, riser, placement,
+                            {{{start, 0, lower},
+                              {start + riserRun, 0, upper},
+                              {start + riserRun, width, upper},
+                              {start, width, lower}}});
+                    AddBox(fixture, floor, placement, {start + riserRun, 0, -32}, {start + tread, width, upper});
+                }
+                AddBox(fixture, floor, placement, {count * tread, 0, -32}, {count * tread + 256, width, count * rise});
+                if (obstruction == 2)
+                {
+                    AddBox(fixture, floor, placement, {0, 0, 64}, {tread, width, 80});
+                }
+                const auto lower = placement.World({-128, width / 2, 0});
+                const auto upper = placement.World({count * tread + 128, width / 2, count * rise});
+                AddEntrance(fixture, lower);
+                const auto candidate =
+                    RecastCandidateGenerator{}.Generate(fixture.scene, {}, std::nullopt, fixture.entrances,
+                                                        partitioning, {}, CandidateRetention::AllWalkable);
+                assert(candidate.topology.valid);
+                const auto lowerRegion = SurfaceRegion(candidate, lower);
+                const auto upperRegion = SurfaceRegion(candidate, upper);
+                assert(lowerRegion && upperRegion);
+                assert((lowerRegion == upperRegion) == connected);
+                // Anchored generation must retain the upper floor through the
+                // actual stair route, with no synthetic entrance on that level.
+                const auto anchored = RecastCandidateGenerator{}.Generate(fixture.scene, {}, std::nullopt,
+                                                                          fixture.entrances, partitioning);
+                assert(anchored.topology.valid);
+                assert(SurfaceRegion(anchored, upper).has_value() == connected);
+                if (connected)
+                {
+                    for (int step{}; step < count; ++step)
+                    {
+                        const auto probe = placement.World({step * tread + 32, width / 2, (step + 1) * rise});
+                        assert(SurfaceRegion(anchored, probe) == anchored.exits.front().region);
+                    }
+                }
+            }
+        }
+    }
 } // namespace
 
 void TestNavigationObstacleFixture()
@@ -397,6 +462,7 @@ void TestNavigationObstacleFixture()
         CheckCompactStraightFlight(partitioning);
         CheckFloorSeams(partitioning);
         CheckObstacleOnlyCollision(partitioning);
+        CheckSlopedRisers(partitioning);
         const auto candidate = generator.Generate(fixture.scene, {}, std::nullopt, fixture.entrances, partitioning);
         CheckObstacleFixture(fixture, candidate);
     }

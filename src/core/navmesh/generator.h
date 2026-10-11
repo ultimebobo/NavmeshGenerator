@@ -82,6 +82,8 @@ namespace navmesh::core
          * trigger shared contour refinement and watershed layer recovery. Obstacle-only sources cannot supply
          * walkable floors. Unsupported raster seams within the agent radius can join
          * climb-compatible standing floors when intervening solids permit clearance.
+         * Narrow slope-rejected risers below the crossing height permit step repair;
+         * explicitly excluded obstacle collision cannot anchor or fill a crossing.
          * Repairs precede walkability filters and cannot chain across wider voids.
          * Retain only components with a shared-edge path to a matched door or exterior
          * boundary edge as provisional anchors under Anchored retention. AllWalkable
