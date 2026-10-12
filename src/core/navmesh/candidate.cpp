@@ -1790,9 +1790,11 @@ namespace
      * Moving every coincident use preserves the interior rim's shared vertices.
      * Existing portals pin their endpoints. Inverted or nonwalkable incident
      * triangles reject the prepared copy before it can replace the candidate.
+     * Exact-use alignment moves only identical world-space positions, preserving
+     * distinct endpoints of thin edges when retracting an unpaired seam vertex.
      */
     bool AlignBorderEndpoints(CandidateNavMesh &candidate, std::uint32_t polygon, std::uint8_t edge,
-                              std::optional<Vec3> first, std::optional<Vec3> last)
+                              std::optional<Vec3> first, std::optional<Vec3> last, bool exactUses = false)
     {
         const auto face = candidate.mesh.polygons[polygon];
         const std::array original{candidate.mesh.vertices[face.vertices[edge]],
@@ -1812,8 +1814,11 @@ namespace
             const auto point = candidate.mesh.vertices[vertex];
             for (std::size_t end{}; end < replacements.size(); ++end)
             {
-                if (!replacements[end] || Quantize(point, candidate.profile.weldTolerance) !=
-                                              Quantize(original[end], candidate.profile.weldTolerance))
+                const bool samePosition =
+                    exactUses ? point.x == original[end].x && point.y == original[end].y && point.z == original[end].z
+                              : Quantize(point, candidate.profile.weldTolerance) ==
+                                    Quantize(original[end], candidate.profile.weldTolerance);
+                if (!replacements[end] || !samePosition)
                 {
                     continue;
                 }
@@ -3134,19 +3139,35 @@ namespace
         return best;
     }
 
-    /// Place the trimming fan inside the original floor plane, near its unmatched seam or corner.
-    Vec3 BorderFanCenter(const NavMesh &mesh, const NavPolygon &face, const std::array<bool, 3> &unmatched,
-                         const NavigationProfile &profile)
+    /// Average world-space floor positions with double intermediates before rounding the result to stored floats.
+    Vec3 BorderFloorCenter(Vec3 first, Vec3 second, Vec3 third)
     {
-        const auto center =
-            (mesh.vertices[face.vertices[0]] + mesh.vertices[face.vertices[1]] + mesh.vertices[face.vertices[2]]) /
-            3.0F;
+        return {static_cast<float>((static_cast<double>(first.x) + second.x + third.x) / 3.0),
+                static_cast<float>((static_cast<double>(first.y) + second.y + third.y) / 3.0),
+                static_cast<float>((static_cast<double>(first.z) + second.z + third.z) / 3.0)};
+    }
+
+    /** Place a trimming fan inside its original world-space floor triangle.
+     * Double intermediates limit translation-dependent rounding. Every edge must
+     * retain strictly positive winding after conversion to stored float coordinates.
+     * Try the floor centroid if the seam inset rounds onto an edge; return no point
+     * when neither proposal can represent a strictly interior fan.
+     */
+    std::optional<Vec3> BorderFanCenter(const NavMesh &mesh, const NavPolygon &face,
+                                        const std::array<bool, 3> &unmatched, const NavigationProfile &profile)
+    {
+        const auto center = BorderFloorCenter(mesh.vertices[face.vertices[0]], mesh.vertices[face.vertices[1]],
+                                              mesh.vertices[face.vertices[2]]);
         auto seam = center;
         if (std::count(unmatched.begin(), unmatched.end(), true) == 1)
         {
             const auto edge =
                 static_cast<std::size_t>(std::find(unmatched.begin(), unmatched.end(), true) - unmatched.begin());
-            seam = (mesh.vertices[face.vertices[edge]] + mesh.vertices[face.vertices[(edge + 1) % 3]]) / 2.0F;
+            const auto first = mesh.vertices[face.vertices[edge]];
+            const auto last = mesh.vertices[face.vertices[(edge + 1) % 3]];
+            seam = {static_cast<float>((static_cast<double>(first.x) + last.x) / 2.0),
+                    static_cast<float>((static_cast<double>(first.y) + last.y) / 2.0),
+                    static_cast<float>((static_cast<double>(first.z) + last.z) / 2.0)};
         }
         else
         {
@@ -3159,15 +3180,36 @@ namespace
                 }
             }
         }
-        const auto distance = std::hypot(center.x - seam.x, center.y - seam.y);
+        const auto distance =
+            std::hypot(static_cast<double>(center.x) - seam.x, static_cast<double>(center.y) - seam.y);
         const auto inset = std::max(profile.agentRadius, profile.weldTolerance * 4.0F);
-        return distance > inset ? Interpolate(seam, center, inset / distance) : center;
+        const auto fraction = distance > inset ? inset / distance : 1.0;
+        const auto interpolate = [&](float first, float last)
+        { return static_cast<float>(first + (static_cast<double>(last) - first) * fraction); };
+        const Vec3 insetPoint{interpolate(seam.x, center.x), interpolate(seam.y, center.y),
+                              interpolate(seam.z, center.z)};
+        for (const auto point : {insetPoint, center})
+        {
+            bool interior = std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+            for (std::size_t edge{}; edge < 3; ++edge)
+            {
+                interior = interior && Cross2(mesh.vertices[face.vertices[edge]],
+                                              mesh.vertices[face.vertices[(edge + 1) % 3]], point) > 0;
+            }
+            if (interior)
+            {
+                return point;
+            }
+        }
+        return std::nullopt;
     }
 
     /** Retract unmatched CELL seams while preserving every shared interior edge.
      * An interior fan keeps the original floor plane and exact matched portal
      * endpoints. Only the wedges facing an unlinked seam are omitted; adjacent
      * triangles keep their shared edges, so no T-junctions are introduced.
+     * A triangle without a representable interior fan remains intact for the
+     * subsequent validated retraction of its unpaired vertices.
      */
     template <class Border> void RetractUnlinkedBorders(CandidateNavMesh &candidate, const Border &border)
     {
@@ -3196,16 +3238,19 @@ namespace
                                   !linkedEdges.contains({index, edge});
             }
             edgeChildren[index].fill(NoNeighbor);
-            const bool split = std::any_of(unmatched.begin(), unmatched.end(), [](bool value) { return value; });
+            const bool hasUnmatched = std::any_of(unmatched.begin(), unmatched.end(), [](bool value) { return value; });
+            const auto fanCenter =
+                hasUnmatched ? BorderFanCenter(candidate.mesh, face, unmatched, candidate.profile) : std::nullopt;
+            const bool split = fanCenter.has_value();
             auto center = NoNeighbor;
             if (split)
             {
                 center = static_cast<std::uint32_t>(candidate.mesh.vertices.size());
-                candidate.mesh.vertices.push_back(BorderFanCenter(candidate.mesh, face, unmatched, candidate.profile));
+                candidate.mesh.vertices.push_back(*fanCenter);
             }
             for (std::uint8_t edge{}; edge < (split ? 3 : 1); ++edge)
             {
-                if (unmatched[edge])
+                if (split && unmatched[edge])
                 {
                     ++retracted;
                     continue;
@@ -3441,6 +3486,7 @@ namespace
     void RetractUnlinkedBorderVertices(CandidateNavMesh &candidate, const Border &border, bool retract = true)
     {
         std::map<Key, Vec3> pinned;
+        std::set<std::tuple<float, float, float>> pinnedCoordinates;
         for (const auto &link : candidate.borderLinks)
         {
             const auto &face = candidate.mesh.polygons[link.polygon];
@@ -3448,6 +3494,7 @@ namespace
             {
                 const auto point = candidate.mesh.vertices[index];
                 pinned.emplace(Quantize(point, candidate.profile.weldTolerance), point);
+                pinnedCoordinates.emplace(point.x, point.y, point.z);
             }
         }
         for (std::uint32_t vertex{}; vertex < candidate.mesh.vertices.size(); ++vertex)
@@ -3471,8 +3518,7 @@ namespace
                 }
             }
             if (border(point, point, candidate.profile.weldTolerance) < 0 ||
-                (portalPoint != pinned.end() && point.x == portalPoint->second.x && point.y == portalPoint->second.y &&
-                 point.z == portalPoint->second.z))
+                pinnedCoordinates.contains({point.x, point.y, point.z}))
             {
                 continue;
             }
@@ -3488,14 +3534,16 @@ namespace
                 {
                     incident = {polygon, static_cast<std::uint8_t>(found - face.vertices.begin())};
                 }
-                if (std::any_of(
-                        face.vertices.begin(), face.vertices.end(), [&](auto index)
-                        { return Quantize(candidate.mesh.vertices[index], candidate.profile.weldTolerance) == key; }))
+                if (std::any_of(face.vertices.begin(), face.vertices.end(),
+                                [&](auto index)
+                                {
+                                    const auto other = candidate.mesh.vertices[index];
+                                    return other.x == point.x && other.y == point.y && other.z == point.z;
+                                }))
                 {
-                    const auto faceCenter =
-                        (candidate.mesh.vertices[face.vertices[0]] + candidate.mesh.vertices[face.vertices[1]] +
-                         candidate.mesh.vertices[face.vertices[2]]) /
-                        3.0F;
+                    const auto faceCenter = BorderFloorCenter(candidate.mesh.vertices[face.vertices[0]],
+                                                              candidate.mesh.vertices[face.vertices[1]],
+                                                              candidate.mesh.vertices[face.vertices[2]]);
                     center = center + faceCenter;
                     fanCenters.push_back(faceCenter);
                     ++count;
@@ -3513,8 +3561,10 @@ namespace
                 if (AlignBorderEndpoints(revised, incident->first, incident->second, portalPoint->second, std::nullopt))
                 {
                     candidate = std::move(revised);
+                    continue;
                 }
-                continue;
+                // A nearby portal cannot absorb a distinct thin-edge endpoint
+                // when welding collapses its floor. Try inward retraction instead.
             }
             if (!retract)
             {
@@ -3538,7 +3588,7 @@ namespace
                         break;
                     }
                     auto revised = candidate;
-                    if (AlignBorderEndpoints(revised, incident->first, incident->second, position, std::nullopt))
+                    if (AlignBorderEndpoints(revised, incident->first, incident->second, position, std::nullopt, true))
                     {
                         candidate = std::move(revised);
                         moved = true;

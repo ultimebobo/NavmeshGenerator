@@ -167,10 +167,19 @@ complete incident fans when movement and topology permit, preserving shared
 interior vertices. Short corner edges select their nearest CELL side, and one
 triangle can consume portals on multiple sides. Unmatched CELL seam wedges
 retract through interior fans, preserving their floor plane and shared interior
-edges. Unpaired border vertices move inward with the agent footprint and weld
-tolerance bounding the displacement. Matched endpoints remain pinned. Each
-nonplanar fan can try individual floor-centroid directions when its average would
-increase the slope envelope. Fan slope comparisons allow floating-point roundoff.
+edges. Fan centers use double intermediates and every child must retain positive
+horizontal winding in the stored float coordinates. If neither the seam inset nor
+the floor centroid is strictly interior after rounding, the triangle stays intact
+and the subsequent validated endpoint movement retracts its seam. This preserves
+thin floor triangles without requiring an unrepresentable interior sample.
+Unpaired border vertices move inward with the agent footprint and weld
+tolerance bounding the displacement. Matched endpoints remain pinned. Inward
+movement follows exact coincident vertex uses, keeping distinct thin-edge
+endpoints separate even when they fall within one weld-tolerance bucket. Moves
+must preserve positive area, the affected floor slope envelope and existing portals;
+an unmovable seam remains a coverage failure. Each nonplanar fan can try individual
+floor-centroid directions when its average would increase the slope envelope.
+Fan slope comparisons allow floating-point roundoff.
 Every remaining border vertex must equal a neighboring portal endpoint.
 The shared reachability filter retains the largest connected floor plus components
 with a real neighboring portal or matched door. Region, source, door, vertex and portal indices are compacted;

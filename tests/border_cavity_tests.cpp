@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <limits>
 #include <numeric>
 
@@ -154,6 +155,91 @@ namespace
             CheckPortal(candidate, south);
         }
     }
+
+    void CheckThinSeamRetraction(bool withPortal)
+    {
+        // A seam sliver can have no representable float point strictly inside it.
+        // Its door, source evidence and floor must survive retraction on every CELL side.
+        for (const auto offset : {0.0F, 131072.0F, -180224.0F})
+        {
+            for (int rotation{}; rotation < 4; ++rotation)
+            {
+                for (const bool deferReachability : {false, true})
+                {
+                    const auto transform = [&](Vec3 point)
+                    {
+                        for (int turn{}; turn < rotation; ++turn)
+                        {
+                            point = {-point.y, point.x, point.z};
+                        }
+                        return point + Vec3{offset, offset, 0};
+                    };
+                    const auto thinWidth = 0.015625F;
+                    std::vector<Vec3> vertices{transform({-72, 0, 0}), transform({0, 0, 0}),
+                                               transform({0, thinWidth, 0})};
+                    std::vector<std::array<std::uint32_t, 3>> faces{{0, 1, 2}};
+                    if (withPortal)
+                    {
+                        vertices.push_back(transform({0, 200, 0}));
+                        faces.push_back({0, 2, 3});
+                    }
+                    auto candidate = MakeFloor(std::move(vertices), std::move(faces));
+                    candidate.exits = {
+                        {.referenceId = 0x300, .position = transform({-62, 0, 0}), .region = 0, .polygon = 0}};
+                    std::vector<NavMesh> neighbors;
+                    if (withPortal)
+                    {
+                        // A wider adjacent floor pins one thin-edge endpoint through
+                        // its existing portal. The nearby unpaired endpoint must retract independently.
+                        neighbors.push_back(MakePortal(0x201, transform({0, 200, 0}), transform({0, thinWidth, 0}),
+                                                       transform({100, 100, 0})));
+                        candidate.borderLinks = {{1, 1, neighbors.front().id, 0, 0}};
+                    }
+                    AABB bounds;
+                    bounds.Expand(transform({-4096, -1024, -100}));
+                    bounds.Expand(transform({0, 3072, 100}));
+                    assert(StitchCandidateBorders(candidate, bounds, neighbors, {}, false, nullptr,
+                                                  deferReachability) == 0);
+                    if (!candidate.topology.valid)
+                    {
+                        std::fprintf(stderr, "Thin seam: offset=%g rotation=%d portal=%d deferred=%d\n", offset,
+                                     rotation, withPortal, deferReachability);
+                        for (const auto &finding : candidate.topology.findings)
+                        {
+                            std::fprintf(stderr, "%s\n", finding.c_str());
+                        }
+                    }
+                    assert(candidate.topology.valid);
+                    assert(!candidate.mesh.polygons.empty());
+                    assert(candidate.exits.front().polygon && candidate.exits.front().region);
+                    assert(candidate.regions.size() == 1);
+                    assert(candidate.regions.front().area > 0);
+                    assert(candidate.statistics.rejectedUnreachable == 0);
+                    assert(candidate.borderLinks.size() == (withPortal ? 1U : 0U));
+                    if (withPortal)
+                    {
+                        CheckPortal(candidate, neighbors.front());
+                    }
+                    for (std::size_t index{}; index < candidate.mesh.polygons.size(); ++index)
+                    {
+                        assert(candidate.mesh.polygons[index].flags == WaterFlag);
+                        const auto source = candidate.polygonSourceTriangles[index];
+                        assert(source <= (withPortal ? 1U : 0U));
+                        assert(candidate.polygonContributingTriangles[index] == std::vector<std::size_t>{source});
+                    }
+                    for (std::size_t source{}; source < (withPortal ? 2U : 1U); ++source)
+                    {
+                        assert(std::find(candidate.polygonSourceTriangles.begin(),
+                                         candidate.polygonSourceTriangles.end(),
+                                         source) != candidate.polygonSourceTriangles.end());
+                    }
+                    assert(StitchCandidateBorders(candidate, bounds, neighbors, {}, false, nullptr,
+                                                  deferReachability) == 0);
+                    assert(candidate.topology.valid);
+                }
+            }
+        }
+    }
 } // namespace
 
 void TestBorderCavityRegressions()
@@ -161,4 +247,6 @@ void TestBorderCavityRegressions()
     CheckTerminalCavities();
     CheckExcludedAuthoredFloor();
     CheckCornerHeightDrift();
+    CheckThinSeamRetraction(false);
+    CheckThinSeamRetraction(true);
 }

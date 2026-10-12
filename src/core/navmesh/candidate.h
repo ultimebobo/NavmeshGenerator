@@ -176,6 +176,10 @@ namespace navmesh::core
      * Inward offsets trim boundary fans; outward extensions obey distance, step, slope, and welding limits. Authored
      * border drift within AuthoredBorderTolerance is preserved at matched portal endpoints.
      * With immediate linking, unmatched CELL seam wedges and unpaired vertices retract into the cell.
+     * Fan subdivisions require a strictly interior point in stored float coordinates.
+     * Thin triangles without such a point retain their floor and retract through exact
+     * coincident endpoint uses, preserving distinct vertices within the weld tolerance.
+     * Unmovable seam vertices remain validation failures rather than creating invalid triangles.
      * The agent footprint and weld tolerance bound the inward movement.
      * Immediate linking without deferred reachability retains only shared-edge components
      * with a real border portal or matched door; a border alone is not an anchor.
