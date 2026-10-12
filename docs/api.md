@@ -14,7 +14,7 @@ this reference.
   Unresolved required crossings remain validation failures.
 
 - `navmesh::core::RemoveCandidateIslands`: complete-set floor reachability after
-  generated seam linking. Retains matched-door/authored-neighbor access and the
+  authored border matching or generated seam linking. Retains matched-door/authored-neighbor access and the
   largest network in each contiguous exterior selection or interior; removes
   isolated floor networks even across CELL seams. Compacts source, geometry,
   region, door and reciprocal portal indices, then rebuilds contours and topology.
@@ -91,7 +91,8 @@ this reference.
   links against the Recast Navigation submodule under `lib/recastnavigation`.
   It clips output after exterior-halo rasterization and retains only shared-edge
   components reaching a matched door or an exterior boundary edge under Anchored retention;
-  AllWalkable retains all surviving floor components for batch linking. Vertical
+  AllWalkable retains all surviving floor components for subsequent linking and
+  reachability filtering in both single-cell and batch generation. Vertical
   collision faces contribute obstruction evidence; height-detail triangles
   follow the compact heightfield with movement-bounded error. Convex contour
   patches merge before sampling; collapsed regions trigger contour refinement.
@@ -109,7 +110,9 @@ this reference.
   region, door, and portal joins; unresolved crossings invalidate the candidate.
   Near-coincident endpoints align through complete fans, and bounded interior
   height samples preserve the unchanged rim's slope envelope when needed.
-  It retains only components connected to real portals or matched doors and retracts
+  Immediate linking defaults to retaining only components connected to real
+  portals or matched doors. Deferred reachability keeps all components for the
+  shared island filter while immediate linking still retracts
   unmatched CELL seam wedges while preserving shared interior edges. Border
   preparation coalesces compatible generated boundary subdivisions and splits
   containing edges with consistent region, source, contour, door,

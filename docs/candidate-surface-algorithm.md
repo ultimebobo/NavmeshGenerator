@@ -94,13 +94,15 @@ down to whole vertical voxels. Candidate warnings report quantization and
 adaptive horizontal resolution instead of silently presenting requested values
 as the effective constraints.
 
-After polygon construction and CELL clipping, single-cell generation retains only
-shared-edge components reaching a matched door or a boundary edge on the selected
-exterior CELL. Door matching selects the closest compatible triangle within the
-horizontal and vertical reach derived from the movement profile and voxel sizes.
-Large roofs and stone tops are discarded when they have no such path, regardless
-of their area. A surface merely near a border, or touching it at one vertex, does
-not qualify. Interiors without a matched door produce empty candidates. Filtering
+After polygon construction and CELL clipping, single-cell generation retains all
+surviving walkable components until authored border matching finishes. It then
+uses the shared reachability filter to retain the largest connected floor by
+horizontal area, plus components reaching a matched door or authored neighbor.
+Cells without authored navigation or doors can therefore receive generated floors,
+including interiors. Door matching selects the closest compatible triangle within
+the horizontal and vertical reach derived from the movement profile and voxel sizes.
+Other isolated floors are removed; open borders and vertex-only contact do not
+provide access anchors. Filtering
 preserves source evidence and remaps polygon, neighbor, region, door and vertex
 indices; removed triangles are counted in `rejected_unreachable`. Exterior input
 includes a halo sized for radius erosion and neighboring voxels; the resulting
@@ -170,8 +172,8 @@ tolerance bounding the displacement. Matched endpoints remain pinned. Each
 nonplanar fan can try individual floor-centroid directions when its average would
 increase the slope envelope. Fan slope comparisons allow floating-point roundoff.
 Every remaining border vertex must equal a neighboring portal endpoint.
-Final shared-edge components survive only with a real neighboring portal
-or matched door. Region, source, door, vertex and portal indices are compacted;
+The shared reachability filter retains the largest connected floor plus components
+with a real neighboring portal or matched door. Region, source, door, vertex and portal indices are compacted;
 contours are rebuilt from the final boundaries. Stitch validation requires exact
 reversed endpoint equality, unique consuming edges and complete coverage of every
 remaining CELL seam. No portal is invented across unsupported gaps.
@@ -198,7 +200,7 @@ cells provisionally retain every walkable component and link to each other's gen
 including when the plugin starts without navmesh. Valid empty targets remain completed
 replacements when source geometry contains no supported walkable floor.
 
-Complete-batch reachability then joins shared-edge components through reciprocal
+Shared reachability joins batch shared-edge components through reciprocal
 generated portals. Matched doors and untouched authored neighbors anchor accessible
 networks. Each contiguous selected exterior area and each interior also retains
 its largest network by horizontal area. Remaining isolated roofs and other floors

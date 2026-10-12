@@ -3716,7 +3716,7 @@ namespace navmesh::core
 {
     std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
                                        const std::vector<NavMesh> &neighbors, const std::vector<NavMesh> &authored,
-                                       bool deferUnlinkedBorders, const Scene *sourceScene)
+                                       bool deferUnlinkedBorders, const Scene *sourceScene, bool deferReachability)
     {
         if (candidate.polygonSourceTriangles.size() != candidate.mesh.polygons.size() ||
             candidate.polygonContributingTriangles.size() != candidate.mesh.polygons.size())
@@ -3885,7 +3885,10 @@ namespace navmesh::core
         }
         BuildAdjacency(candidate.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
         RetractUnlinkedBorders(candidate, border);
-        RetainConnectedBorderRegions(candidate);
+        if (!deferReachability)
+        {
+            RetainConnectedBorderRegions(candidate);
+        }
         // Endpoint alignment and component filtering can leave unused source
         // vertices. Compact them before validating incident-fan deformations.
         CompactBorderVertices(candidate);

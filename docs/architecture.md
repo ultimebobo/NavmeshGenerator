@@ -139,12 +139,13 @@ The Cell runner passes the generation scene to neutral border stitching. Positiv
 excluded-collision support at the authored interior anchor can close a crossing
 with a warning when no compatible boundary floor survives. Missing or unsupported
 evidence cannot waive a crossing. The writer clears incoming links to closed edges.
-Single-cell generation provisionally retains components with a shared-edge path to a matched
-door or a boundary edge on the selected exterior CELL. Filtering follows CELL clipping and
-door matching, preserving source joins while compacting polygon, neighbor,
-region, door and vertex indices. Interiors without a matched door produce empty
-candidates. Final stitching retains only components connected to a real
-neighboring portal or matched door; reaching a border alone is insufficient.
+Single-cell generation provisionally retains every surviving walkable component.
+Shared reachability filtering follows CELL clipping, door matching and authored
+border stitching, retaining the largest connected floor plus components reaching
+a matched door or real neighboring portal. Uncovered cells and interiors without
+doors can retain a floor. Filtering preserves source joins while compacting
+polygon, neighbor, region, door and vertex indices; open borders alone do not
+provide access anchors.
 Authored partition repair runs before deferred batch linking as well as single-cell
 filtering. It repeats direct subdivision and connected cavity repairs, using
 neighboring floor depth when no selected-cell crossing supplies bounds. Supported
@@ -340,7 +341,11 @@ each contiguous exterior selection or interior, removing isolated roofs even whe
 they span CELL seams. It owns stable geometry/evidence compaction and reciprocal
 destination remapping, contour rebuilding and final topology validation. This stage
 runs after linking for both generated and cached candidates; cache entries continue
-to store complete pre-link floors. Invalid topology or
+to store complete pre-link floors. Single-cell orchestration also generates all walkable
+components and applies this reachability stage after authored border matching.
+Immediate border matching retracts unmatched seams while deferring component
+filtering, allowing uncovered cells and interiors without doors to keep their
+largest floor. Invalid topology or
 refinement prevents export. Authored border subdivision commits only when all
 consumed portals survive. `app/candidate_cache` stores candidates before generated
 seam refinement with bounded reads and a versioned dependency fingerprint. The

@@ -166,6 +166,8 @@ namespace navmesh::core
      * @param sourceScene Optional generation input with complete triangle provenance. A crossing
      * with no surviving boundary floor and positive obstacle-top support at its authored interior
      * anchor is closed with a warning. Missing or unsupported source evidence does not waive a crossing.
+     * @param deferReachability Preserve all components for subsequent RemoveCandidateIslands filtering.
+     * With immediate linking, unmatched seams still retract and required portals remain validated.
      * @return Number of reciprocal border portals added. candidate.topology reports
      * dangling targets, endpoint mismatches, reused portals, unmatched border vertices
      * or remaining open CELL seams.
@@ -175,7 +177,7 @@ namespace navmesh::core
      * border drift within AuthoredBorderTolerance is preserved at matched portal endpoints.
      * With immediate linking, unmatched CELL seam wedges and unpaired vertices retract into the cell.
      * The agent footprint and weld tolerance bound the inward movement.
-     * Immediate linking retains only shared-edge components
+     * Immediate linking without deferred reachability retains only shared-edge components
      * with a real border portal or matched door; a border alone is not an anchor.
      * Terminal endpoint alignment moves complete incident fans while pinning existing portals.
      * Required portal cavities preserve their interior rim and other portals. Authored floor
@@ -203,7 +205,8 @@ namespace navmesh::core
                                                      const std::vector<NavMesh> &neighbors,
                                                      const std::vector<NavMesh> &authored = {},
                                                      bool deferUnlinkedBorders = false,
-                                                     const Scene *sourceScene = nullptr);
+                                                     const Scene *sourceScene = nullptr,
+                                                     bool deferReachability = false);
     /// Check candidate polygon topology without modifying its geometry.
     [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh &candidate);
     /** Rebuild adjacency, boundary contours, region areas, output counts and topology after mesh edits.

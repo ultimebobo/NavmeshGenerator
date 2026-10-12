@@ -37,7 +37,9 @@ the navigation profile and shared border policy, rather than by this guide.
 
 Missing support, different heights, disconnected gaps, or incompatible boundary
 layouts can prevent a match. Unmatched generated seam wedges retract into the
-working cell, and components without a real portal or matched door are removed.
+working cell. Reachability retains the largest connected floor plus components
+reaching a real portal or matched door, so a cell without authored navigation
+can still receive a generated floor. Other disconnected components are removed.
 Every remaining generated CELL seam must consume an exact neighboring edge.
 Inspect `border_links` and topology findings in candidate JSON for these checks.
 

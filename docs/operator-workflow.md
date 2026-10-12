@@ -216,7 +216,7 @@ For a current analysis run, `navmesh-counts.txt` records two counts: original
 navmesh polygons in the selected CELL and generated navmesh polygons. The CLI
 prints these counts, and the desktop UI shows the same summary after completion.
 
-Select a cell and use `--generate-plugin`. Neighboring geometry remains available while generation is clipped to the selected CELL. Plugin and Load order scopes rebuild affected cells with the same input profile; see [batch rebuilding](batch-rebuilding.md). The generated ESP is placed under `--output` and every NAVM override is read back before success is reported. The desktop UI exposes **Write plugin**; the ESP is ESL-flagged when the patch fits the light format. Place it after its source ESPs. All existing NAVMs in the selected cell receive overrides: the generated geometry goes into the largest source NAVM and the rest become empty. Matched door triangles and reciprocal links to adjacent border NAVMs are serialized. Only components with a path through shared polygon edges to a matched door or a real neighboring portal survive final stitching. Interiors without a matched door produce empty candidates. Unmatched seam wedges retract into the CELL. Every remaining seam uses the exact neighboring edge; empty candidates are skipped without writing a patch. The [glossary](glossary.md) explains border matching and neighboring connection overrides. Other authored links, cover data, NAVI, and REFR XNDP references are not rebuilt. Check the resulting pathing in independent tooling and on a disposable game profile before using the plugin.
+Select a cell and use `--generate-plugin`. Neighboring geometry remains available while generation is clipped to the selected CELL. Plugin and Load order scopes rebuild affected cells with the same input profile; see [batch rebuilding](batch-rebuilding.md). The generated ESP is placed under `--output` and every NAVM override is read back before success is reported. The desktop UI exposes **Write plugin**; the ESP is ESL-flagged when the patch fits the light format. Place it after its source ESPs. All existing NAVMs in the selected cell receive overrides: the generated geometry goes into the largest source NAVM and the rest become empty. Cells without existing NAVM receive a new plugin-owned record. Matched door triangles and reciprocal links to adjacent border NAVMs are serialized. After border matching, shared reachability retains the largest connected floor by horizontal area plus components with a path through shared polygon edges to a matched door or a real neighboring portal. Cells without authored navigation and interiors without doors can receive generated floors. Unmatched seam wedges retract into the CELL. Every remaining seam uses the exact neighboring edge; empty candidates are skipped without writing a patch. The [glossary](glossary.md) explains border matching and neighboring connection overrides. Other authored links, cover data, NAVI, and REFR XNDP references are not rebuilt. Check the resulting pathing in independent tooling and on a disposable game profile before using the plugin.
 
 For generation that fills uncovered cells, enable **Skip cells with existing
 navmesh** or pass `--skip-existing-navmesh` with `--generate-candidate` or
@@ -225,8 +225,9 @@ NAVM records, even empty, unsupported, or deleted ones, protect their CELL from
 generation. A skipped single-cell run completes with `generation-report.json`;
 batch runs record `skipped_existing_navm`. Uncovered cells can receive new NAVM
 records. Matched borders may add reciprocal links to authored neighbors while
-retaining their geometry. Unmatched seams retract into the CELL, and components
-without a real neighboring portal or matched door are removed; see
+retaining their geometry. Single-cell unmatched seams retract into the CELL.
+Generation retains the largest connected floor plus components reaching real
+neighboring portals or matched doors, including cells without existing NAVM; see
 [batch rebuilding](batch-rebuilding.md).
 
 ## Immediate correction to milestone 1

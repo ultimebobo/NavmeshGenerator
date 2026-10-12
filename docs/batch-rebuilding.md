@@ -160,6 +160,10 @@ their source cells across that worldspace. Every candidate is clipped to its
 own exterior CELL; geometry suppliers do not enlarge the generated area.
 This separation also applies to single-cell generation. Increasing the geometry
 halo is compatible with plugin writing.
+Single-cell generation uses the shared reachability policy after authored border
+matching: it retains the largest connected floor and any components reaching
+matched doors or authored neighbors. Cells without existing NAVM or doors can
+receive a new NAVM without requiring a batch selection.
 For single-cell inspection scenes, terrain and authored NAVM are limited to the
 scene neighborhood. Distant suppliers contribute only model triangles whose
 world-space bounds intersect that neighborhood, including display-only render

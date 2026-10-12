@@ -4,12 +4,12 @@
 
 namespace navmesh::core
 {
-    /// Reachability policy for standalone inspection or a batch whose neighbors are generated later.
+    /// Provisional floor retention before border linking and final reachability filtering.
     enum class CandidateRetention
     {
         /// Keep components with a door or exterior boundary anchor.
         Anchored,
-        /// Keep every surviving Recast floor component for subsequent batch linking.
+        /// Keep every surviving Recast floor component for subsequent linking and reachability filtering.
         AllWalkable
     };
     /** Validate finite movement, voxel and contour controls before generation or cache lookup.
@@ -55,7 +55,7 @@ namespace navmesh::core
          * @param exits Enabled door positions in Skyrim world coordinates.
          * @param partitioningAlgorithm Recast region strategy; defaults to watershed.
          * @param settings Voxel and contour controls; horizontal resolution adapts to scene extent.
-         * @param retention Retain all walkable components when neighboring candidates are not yet available.
+         * @param retention AllWalkable preserves floors for subsequent linking and reachability filtering.
          * @return Candidate mesh and evidence. Anchored retains components reaching a door
          * or exterior boundary; AllWalkable retains every surviving floor component.
          * Empty when no floor survives the selected retention policy.
@@ -87,14 +87,14 @@ namespace navmesh::core
          * Repairs precede walkability filters and cannot chain across wider voids.
          * Retain only components with a shared-edge path to a matched door or exterior
          * boundary edge as provisional anchors under Anchored retention. AllWalkable
-         * keeps unanchored floors for whole-batch stitching.
+         * keeps unanchored floors for subsequent linking and reachability filtering.
          * @param scene Geometry with complete triangle provenance in Skyrim world coordinates.
          * @param profile Agent dimensions and movement constraints in Skyrim world units.
          * @param cellBounds Optional exterior area in Skyrim world coordinates; absent for interiors.
          * @param exits Enabled placed DOOR references in Skyrim world coordinates.
          * @param partitioningAlgorithm Recast region strategy; defaults to watershed.
          * @param settings Voxel and contour controls; invalid settings throw before voxel allocation.
-         * @param retention AllWalkable keeps unanchored floors for subsequent batch linking.
+         * @param retention AllWalkable keeps unanchored floors for subsequent linking and reachability filtering.
          * @return Candidate mesh and evidence, with warnings for adaptive horizontal
          * resolution and downward climb quantization; empty when no floor survives retention;
          * throws on invalid input, unrepresentable vertical scene extent, or a Recast build failure.

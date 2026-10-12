@@ -757,16 +757,28 @@ class BatchRebuild(unittest.TestCase):
                                 if kind == "NAVM" and form == 0x201)
                 self.assertEqual(navm_geometry(neighbor), navm_geometry(authored))
 
-    def test_isolated_candidates_are_skipped_without_a_patch(self):
+    def test_single_cell_without_authored_navigation_keeps_supported_floor(self):
         self.write_baseline({})
-        single = self.run_cli("--cell-formid", "100", "--generate-plugin", "--skip-existing-navmesh",
-                              output="isolated-cell")
-        candidate = json.loads((single / "candidate-navm.json").read_text())
-        self.assertEqual(candidate["polygons"], [])
-        self.assertEqual(candidate["vertices"], [])
-        self.assertEqual(json.loads((single / "generation-report.json").read_text())["status"],
-                         "skipped_empty_candidate")
-        self.assertFalse((single / "generated-navmesh.esp").exists())
+        for selector in (("--cell-formid", "100"), ("--cells", "Exterior0")):
+            for skip_existing in (False, True):
+                with self.subTest(selector=selector, skip_existing=skip_existing):
+                    single = self.run_cli(*selector, "--generate-plugin",
+                                          *(["--skip-existing-navmesh"] if skip_existing else []),
+                                          output=f"single-{selector[0][2:]}-{skip_existing}", terrain_only=False)
+                    candidate = json.loads((single / "candidate-navm.json").read_text())
+                    self.assertTrue(candidate["topology"]["valid"])
+                    self.assertGreater(len(candidate["polygons"]), 0)
+                    self.assertEqual(candidate["border_links"], [])
+                    meshes = [payload for kind, _, _, payload in read_records(single / "generated-navmesh.esp")
+                              if kind == "NAVM"]
+                    self.assertEqual(len(meshes), 1)
+                    self.assertEqual(len(navm_geometry(meshes[0])[1]), len(candidate["polygons"]))
+                    (self.root / "readback.txt").write_text(
+                        "Baseline.esm\nPatch.esp\n" + str(single / "generated-navmesh.esp") + "\n")
+                    readback = self.run_cli("--load-order", str(self.root / "readback.txt"),
+                                            "--cell-formid", "100", output=f"readback-{selector[0][2:]}-{skip_existing}")
+                    report = json.loads((readback / "report.json").read_text())
+                    self.assertEqual(len(report["navmeshes"][0]["polygons"]), len(candidate["polygons"]))
         batch = self.run_cli("--rebuild-load-order", "--generate-plugin", "--skip-existing-navmesh",
                              output="isolated-batch")
         self.assertTrue(all(cell["status"] == "generated" and cell["polygons"] > 0
@@ -779,7 +791,24 @@ class BatchRebuild(unittest.TestCase):
                                     "--asset-cache", str(self.root / "cache"), "--output", str(preview)],
                                    capture_output=True, text=True, timeout=90)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-        self.assertEqual(json.loads((preview / "candidate-navm.json").read_text())["polygons"], [])
+        candidate = json.loads((preview / "candidate-navm.json").read_text())
+        self.assertTrue(candidate["topology"]["valid"])
+        self.assertGreater(len(candidate["polygons"]), 0)
+
+    def test_single_cell_without_supported_floor_skips_plugin(self):
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        cell = record("CELL", 0x100, sub("EDID", b"EmptyInterior\0") + sub("DATA", b"\x01"))
+        (self.root / "Baseline.esm").write_bytes(
+            record("TES4", 0, header, 1) + group(int.from_bytes(b"CELL", "little"), 0, cell))
+        (self.root / "plugins.txt").write_text("Baseline.esm\n")
+        output = self.run_cli("--cells", "EmptyInterior", "--generate-plugin", terrain_only=False)
+        candidate = json.loads((output / "candidate-navm.json").read_text())
+        self.assertTrue(candidate["topology"]["valid"])
+        self.assertEqual(candidate["polygons"], [])
+        self.assertEqual(candidate["vertices"], [])
+        self.assertEqual(json.loads((output / "generation-report.json").read_text())["status"],
+                         "skipped_empty_candidate")
+        self.assertFalse((output / "generated-navmesh.esp").exists())
 
     def test_baseline_only_has_no_changes(self):
         (self.root / "plugins.txt").write_text("Baseline.esm\n")

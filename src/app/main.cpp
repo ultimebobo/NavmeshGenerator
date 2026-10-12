@@ -7,6 +7,7 @@
 #include "cli/inspection_report.h"
 #include "cli/json_report.h"
 #include "core/navmesh/candidate.h"
+#include "core/navmesh/candidate_reachability.h"
 #include "core/navmesh/generator.h"
 #include "core/navmesh/triangle_tagging.h"
 #include "core/scene/scene_exporter.h"
@@ -924,7 +925,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                 update(83, "Generating candidate NAVM");
                 candidate = navmesh::core::RecastCandidateGenerator{}.Generate(
                     geometry.scene, options.navigationProfile, candidateBounds, std::move(exits),
-                    options.partitioningAlgorithm, options.recastSettings);
+                    options.partitioningAlgorithm, options.recastSettings,
+                    navmesh::core::CandidateRetention::AllWalkable);
                 update(85, "Candidate NAVM generated");
                 if (wasCancelled())
                 {
@@ -956,7 +958,19 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                         }
                     }
                     (void)navmesh::core::StitchCandidateBorders(*candidate, *analysisConfig.cellBounds, adjacent,
-                                                                cell->navMeshes, false, &geometry.scene);
+                                                                cell->navMeshes, false, &geometry.scene, true);
+                }
+                // Filter after portal matching so uncovered cells retain their largest floor,
+                // while doors and authored neighbors can also preserve separate accessible components.
+                if (candidate->topology.valid)
+                {
+                    const auto *selectedRecord = resolved ? resolved->FindWinning(cell->id) : nullptr;
+                    std::array reachability{navmesh::core::CandidateReachabilityTarget{
+                        .cellId = cell->id,
+                        .worldspaceId = candidateBounds ? selectedRecord->worldspaceFormId : std::nullopt,
+                        .bounds = candidateBounds,
+                        .candidate = &*candidate}};
+                    (void)navmesh::core::RemoveCandidateIslands(reachability);
                 }
                 navmesh::core::TagCandidateTriangles(*candidate, cell->navMeshes, cell->waterHeight,
                                                      options.tagTriangles);
@@ -1062,7 +1076,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                 std::cerr << "Cannot write generation-report.json.\n";
                 return 2;
             }
-            std::cout << "No generated component reaches a matched door or neighboring NAVM; plugin writing skipped.\n";
+            std::cout << "No supported walkable floor survives generation; plugin writing skipped.\n";
         }
         else if (options.generatePlugin)
         {

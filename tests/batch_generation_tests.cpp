@@ -116,6 +116,34 @@ namespace
     void TestCandidateIslandRemoval()
     {
         using namespace navmesh::core;
+        // Immediate single-cell linking can finish seam validation before the
+        // shared filter chooses a primary floor without authored navigation.
+        auto single = Floor(128, 128, 0);
+        for (auto &vertex : single.mesh.vertices)
+        {
+            vertex.x = 128 + (vertex.x - 128) / 2;
+            vertex.y = 128 + (vertex.y - 128) / 2;
+        }
+        auto island = Floor(128, 128, 400);
+        for (auto &vertex : island.mesh.vertices)
+        {
+            vertex.x = 128 + (vertex.x - 128) / 8;
+            vertex.y = 128 + (vertex.y - 128) / 8;
+        }
+        AppendFloor(single, island);
+        const AABB singleBounds{{0, 0, -100}, {4096, 4096, 1000}};
+        assert(StitchCandidateBorders(single, singleBounds, {}, {}, false, nullptr, true) == 0);
+        assert(single.topology.valid && single.mesh.polygons.size() == 4);
+        std::array singleTarget{CandidateReachabilityTarget{1, 1, singleBounds, &single}};
+        assert(RemoveCandidateIslands(singleTarget) == 2);
+        assert(single.topology.valid && single.mesh.polygons.size() == 2);
+        assert(single.borderLinks.empty() && single.exits.empty());
+        assert(single.statistics.rejectedUnreachable == 2);
+        for (const auto &vertex : single.mesh.vertices)
+        {
+            assert(vertex.z == 0);
+        }
+
         // This roof spans a CELL seam and acquires reciprocal portals, but has no
         // route to the larger ground network. Put it first so retained identities move.
         std::array<CandidateNavMesh, 2> candidates{Floor(0, 0, 400), Floor(4096, 0, 400, true)};
