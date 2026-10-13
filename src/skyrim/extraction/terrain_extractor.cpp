@@ -4,9 +4,62 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <set>
 
 namespace
 {
+    /** Resolve actual terrain records for an exterior CELL without synthesizing a floor.
+     * Child-owned LAND takes precedence, including malformed evidence. Only an
+     * explicit parent-land inheritance flag permits coordinate-matched ancestor
+     * LAND. Persistent containers, deleted cells and parent cycles supply no terrain.
+     */
+    std::vector<const navmesh::skyrim::ResolvedRecord *> FindTerrainLandRecords(
+        const navmesh::skyrim::ResolvedLoadOrder &loadOrder, const navmesh::core::Cell &cell)
+    {
+        auto records = loadOrder.LandRecords(cell.id);
+        const auto *owner = loadOrder.FindWinning(cell.id);
+        if (!records.empty() || !owner || !owner->worldspaceFormId || !cell.exteriorCoordinates)
+        {
+            return records;
+        }
+        auto worldId = owner->worldspaceFormId;
+        std::set<std::uint32_t> visited;
+        while (worldId && visited.insert(*worldId).second)
+        {
+            const auto *world = loadOrder.FindWinning(*worldId);
+            if (!world || world->type != "WRLD" || world->winning.deleted || !world->winning.inheritsParentLand ||
+                !world->winning.parentWorldFormId)
+            {
+                break;
+            }
+            worldId = world->winning.parentWorldFormId;
+            const auto *parentWorld = loadOrder.FindWinning(*worldId);
+            if (!parentWorld || parentWorld->type != "WRLD" || parentWorld->winning.deleted)
+            {
+                break;
+            }
+            for (const auto &parentCell : loadOrder.cells)
+            {
+                if (parentCell.isInterior || parentCell.exteriorCoordinates != cell.exteriorCoordinates)
+                {
+                    continue;
+                }
+                const auto *parent = loadOrder.FindWinning(parentCell.id);
+                if (!parent || parent->worldspaceFormId != worldId || parent->winning.deleted ||
+                    (parent->raw && (parent->raw->flags & (1U << 10)) != 0))
+                {
+                    continue;
+                }
+                records = loadOrder.LandRecords(parentCell.id);
+                if (!records.empty())
+                {
+                    return records;
+                }
+            }
+        }
+        return {};
+    }
+
     [[nodiscard]] std::optional<std::vector<float>> DecodeVhgt(const navmesh::skyrim::ResolvedRecord &record,
                                                                std::string &error)
     {
@@ -66,7 +119,7 @@ namespace navmesh::skyrim
         }
         const auto [cellX, cellY] = *cell.exteriorCoordinates;
         bool sawLand = false;
-        for (const auto *sourceRecord : loadOrder.LandRecords(cell.id))
+        for (const auto *sourceRecord : FindTerrainLandRecords(loadOrder, cell))
         {
             const auto &record = *sourceRecord;
             sawLand = true;

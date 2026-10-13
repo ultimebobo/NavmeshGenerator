@@ -18,8 +18,8 @@ namespace navmesh::app::detail
      * @param neighbors Ordered authored neighboring meshes and portal evidence.
      * @param partitioning Recast region strategy name.
      * @param settings Valid requested voxel/contour controls; changes invalidate cached generation.
-     * @param authored Winning selected-cell meshes used for triangle classification in batch generation;
-     * changes invalidate tagging. Batch seam geometry depends on generated neighbors after cache reuse.
+     * @param authored Winning selected-cell meshes used for triangle classification and required
+     * authored outer crossings. Changes invalidate both. Batch seam geometry depends on generated neighbors after cache reuse.
      * @param waterHeight Effective water-surface Z in Skyrim units, or no supported plane.
      * @param tagTriangles Whether generated triangle classification is enabled.
      * @return Stable dependency hash, or empty if input serialization exceeds the cache limit.

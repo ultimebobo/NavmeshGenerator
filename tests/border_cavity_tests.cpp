@@ -111,6 +111,106 @@ namespace
         }
     }
 
+    void CheckDeferredRequiredCrossing()
+    {
+        auto candidate = MakeFloor({{50, 50, -500}, {150, 50, -500}, {100, 150, -500}}, {{0, 1, 2}});
+        auto authored = MakePortal(0x200, {50, 0, 0}, {150, 0, 0}, {100, 100, 0});
+        auto neighbor = MakePortal(0x201, authored.vertices[1], authored.vertices[0], {100, -100, 0});
+        authored.externalLinks = {{0, 0, neighbor.id, 0}};
+        neighbor.externalLinks = {{0, 0, authored.id, 0}};
+        assert(StitchCandidateBorders(candidate, {{0, 0, -1000}, {300, 300, 1000}}, {neighbor}, {authored}, true) == 0);
+        assert(!candidate.topology.valid && candidate.borderLinks.empty());
+        assert(!candidate.topology.findings.empty());
+    }
+
+    void CheckAuthoredFanEdits()
+    {
+        const auto open = Open;
+        NavMesh neighbor{.id = 0x201,
+                         .vertices = {{0, 0, 0}, {64, 0, 0}, {0, 64, 0}, {64, 64, 0}},
+                         .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}},
+                                      {.vertices = {1, 3, 2}, .neighbors = {open, open, open}}}};
+        const NavigationProfile profile;
+        std::vector<AuthoredBorderVertexEdit> edits{{neighbor.id, 0, neighbor.vertices[0], {0, 0, 50}}};
+        const std::array pinned{0U};
+        auto unrelaxed = neighbor;
+        assert(!ApplyAuthoredBorderVertexEdits(unrelaxed, edits, profile));
+        assert(unrelaxed.vertices[0].z == 0);
+        assert(CompleteAuthoredBorderFanEdits(neighbor, edits, pinned, profile));
+        assert(edits.size() > 1);
+        auto revised = neighbor;
+        assert(ApplyAuthoredBorderVertexEdits(revised, edits, profile));
+        assert(revised.vertices[0].z == 50 && revised.polygons[0].vertices == neighbor.polygons[0].vertices);
+        auto conflict = edits;
+        conflict.push_back({neighbor.id, 0, neighbor.vertices[0], {0, 0, 1}});
+        assert(!ApplyAuthoredBorderVertexEdits(revised, conflict, profile));
+        auto invalid = edits;
+        invalid[0].position.z = std::numeric_limits<float>::infinity();
+        auto unchanged = neighbor;
+        assert(!ApplyAuthoredBorderVertexEdits(unchanged, invalid, profile));
+        assert(unchanged.vertices[0].z == 0);
+        std::vector<AuthoredBorderVertexEdit> blocked{{neighbor.id, 0, neighbor.vertices[0], {0, 0, 50}}};
+        const std::array locked{0U, 1U, 2U, 3U};
+        assert(!CompleteAuthoredBorderFanEdits(neighbor, blocked, locked, profile));
+        assert(blocked.size() == 1);
+    }
+
+    void CheckSupportedAuthoredTerminalRepair()
+    {
+        auto candidate = MakeFloor({{64, 0, 0}, {384, 0, -18.6F}, {436.33F, 84.18F, -4.39F}}, {{0, 1, 2}});
+        auto authored = MakePortal(0x200, {0, 0, -57.486F}, {64, 0, 0}, {64, 64, 2.35F});
+        auto neighbor = MakePortal(0x201, authored.vertices[1], authored.vertices[0], {64, -128, -17.94F});
+        neighbor.vertices.insert(neighbor.vertices.end(),
+                                 {{384, 0, -18.6F}, {384, -128, -18.6F}, {-64, -64, -84.3F}, {-64, 0, -113.93F}});
+        neighbor.polygons.push_back({.vertices = {3, 0, 4}, .neighbors = {Open, Open, Open}});
+        neighbor.polygons.push_back({.vertices = {5, 1, 6}, .neighbors = {Open, Open, Open}});
+        authored.externalLinks = {{0, 0, neighbor.id, 0}};
+        neighbor.externalLinks = {{0, 0, authored.id, 0}};
+        candidate.borderLinks = {{0, 0, neighbor.id, 1, 0}};
+        Scene scene;
+        scene.mesh.vertices = candidate.mesh.vertices;
+        scene.mesh.triangles = {{{0, 1, 2}}};
+        scene.geometrySources = {{.sourceType = GeometrySourceType::Collision}};
+        scene.triangleProvenance = {{.geometrySource = 0}};
+        const AABB bounds{{-200, 0, -500}, {500, 500, 500}};
+        auto unsupported = candidate;
+        auto renderOnly = scene;
+        renderOnly.geometrySources.front().sourceType = GeometrySourceType::RenderFallback;
+        (void)StitchCandidateBorders(unsupported, bounds, {neighbor}, {authored}, true, &renderOnly);
+        assert(!unsupported.topology.valid && unsupported.authoredBorderVertexEdits.empty());
+        const auto originalCandidate = candidate;
+        auto wrongDirection = scene;
+        for (auto &point : wrongDirection.mesh.vertices)
+        {
+            point.z -= 45;
+        }
+        auto rejected = candidate;
+        (void)StitchCandidateBorders(rejected, bounds, {neighbor}, {authored}, true, &wrongDirection);
+        assert(!rejected.topology.valid && rejected.authoredBorderVertexEdits.empty());
+        auto offsetScene = scene;
+        for (auto &point : offsetScene.mesh.vertices)
+        {
+            point.z += 45;
+        }
+        auto corrected = originalCandidate;
+        assert(StitchCandidateBorders(corrected, bounds, {neighbor}, {authored}, true, &offsetScene) == 1);
+        assert(corrected.topology.valid && !corrected.authoredBorderVertexEdits.empty());
+        assert(StitchCandidateBorders(candidate, bounds, {neighbor}, {authored}, true, &scene) == 1);
+        assert(candidate.topology.valid && !candidate.authoredBorderVertexEdits.empty());
+        auto editedNeighbor = neighbor;
+        assert(ApplyAuthoredBorderVertexEdits(editedNeighbor, candidate.authoredBorderVertexEdits, candidate.profile));
+        const auto crossing = std::find_if(candidate.borderLinks.begin(), candidate.borderLinks.end(),
+                                           [](const auto &link) { return link.neighborPolygon == 0; });
+        assert(crossing != candidate.borderLinks.end());
+        const auto &face = candidate.mesh.polygons[crossing->polygon];
+        const auto first = candidate.mesh.vertices[face.vertices[crossing->edge]];
+        const auto last = candidate.mesh.vertices[face.vertices[(crossing->edge + 1) % 3]];
+        assert(first.x == editedNeighbor.vertices[1].x && first.z == editedNeighbor.vertices[1].z);
+        assert(last.x == editedNeighbor.vertices[0].x && last.z == editedNeighbor.vertices[0].z);
+        assert(editedNeighbor.vertices[0].x == neighbor.vertices[0].x && editedNeighbor.vertices[0].z == 0);
+        assert(neighbor.vertices[1].x == 0 && neighbor.vertices[1].z == -57.486F);
+    }
+
     void CheckCornerHeightDrift()
     {
         // Two authored borders meet at the same XY position with a small height
@@ -240,13 +340,143 @@ namespace
             }
         }
     }
+
+    void CheckAlternativeCavityCuts()
+    {
+        // An endpoint projection can leave a steep seam sliver or miss a
+        // compatible terminal cut around a turning boundary. Repair must
+        // consider nearby seam cuts while keeping the complete interior rim.
+        for (const bool turning : {false, true})
+        {
+            for (const bool mirrored : {false, true})
+            {
+                for (int rotation{}; rotation < 4; ++rotation)
+                {
+                    const auto transform = [&](Vec3 point)
+                    {
+                        if (mirrored)
+                        {
+                            point.x = -point.x;
+                        }
+                        for (int turn{}; turn < rotation; ++turn)
+                        {
+                            point = {-point.y, point.x, point.z};
+                        }
+                        return point + Vec3{131072, -180224, -9000};
+                    };
+                    std::vector<Vec3> vertices =
+                        turning ? std::vector<Vec3>{{-100, 60, -44}, {-100, 20, -32}, {-110, 0, -40},
+                                                    {120, 2, -43},   {170, 0, -34},   {350, 170, -40}}
+                                : std::vector<Vec3>{{0, 0, 0},  {5, 0, 0},    {300, 0, -30},   {550, 0, -60},
+                                                    {0, 60, 0}, {50, 80, -6}, {400, 200, -45}, {430, 180, -50}};
+                    std::vector<std::array<std::uint32_t, 3>> faces =
+                        turning ? std::vector<std::array<std::uint32_t, 3>>{{3, 4, 5}, {3, 5, 0}, {3, 0, 1}, {3, 1, 2}}
+                                : std::vector<std::array<std::uint32_t, 3>>{{4, 0, 1}, {4, 1, 5}, {1, 2, 7},
+                                                                            {2, 3, 7}, {1, 7, 6}, {1, 6, 5}};
+                    for (auto &point : vertices)
+                    {
+                        point = transform(point);
+                    }
+                    if (mirrored)
+                    {
+                        for (auto &face : faces)
+                        {
+                            std::swap(face[0], face[1]);
+                        }
+                    }
+                    auto candidate = MakeFloor(vertices, faces);
+                    auto first = transform(turning ? Vec3{0, 0, 0} : Vec3{10, 0, -8});
+                    auto last = transform(turning ? Vec3{170, 0, -34} : Vec3{300, 0, -30});
+                    if (mirrored)
+                    {
+                        std::swap(first, last);
+                    }
+                    const auto opposite = transform(turning ? Vec3{80, 200, -20} : Vec3{120, 70, -10});
+                    auto authored = MakePortal(0x200, first, last, opposite);
+                    auto neighbor = MakePortal(0x201, last, first, transform({150, -100, -20}));
+                    authored.externalLinks = {{0, 0, neighbor.id, 0}};
+                    neighbor.externalLinks = {{0, 0, authored.id, 0}};
+                    // Pin the adjacent partition before repairing the sliver.
+                    std::vector<NavMesh> neighbors{neighbor};
+                    if (!turning)
+                    {
+                        auto adjacent = MakePortal(0x203, transform({550, 0, -60}), transform({300, 0, -30}),
+                                                   transform({400, -100, -45}));
+                        if (mirrored)
+                        {
+                            std::swap(adjacent.vertices[0], adjacent.vertices[1]);
+                        }
+                        candidate.borderLinks = {{3, 0, adjacent.id, 0, 0}};
+                        neighbors.push_back(adjacent);
+                    }
+                    AABB bounds;
+                    bounds.Expand(transform({-300, 0, -100}));
+                    bounds.Expand(transform({600, 400, 100}));
+                    const auto door = transform(turning ? Vec3{100, 80, -35} : Vec3{100, 80, -12});
+                    candidate.exits = {{.referenceId = 0x300,
+                                        .position = door,
+                                        .region = 0,
+                                        .polygon = static_cast<std::uint32_t>(turning ? 1 : 5)}};
+                    if (turning)
+                    {
+                        auto unsupportedCuts = candidate;
+                        // A different floor level supplies no compatible portal support.
+                        for (auto &point : unsupportedCuts.mesh.vertices)
+                        {
+                            point.z -= 1000;
+                        }
+                        assert(StitchCandidateBorders(unsupportedCuts, bounds, neighbors, {authored}) == 0);
+                        assert(!unsupportedCuts.topology.valid);
+                        assert(unsupportedCuts.borderLinks.empty());
+                    }
+                    const auto added = StitchCandidateBorders(candidate, bounds, neighbors, {authored});
+                    if (added != 1 || !candidate.topology.valid)
+                    {
+                        std::fprintf(stderr, "Alternative cut: turning=%d mirrored=%d rotation=%d added=%zu\n", turning,
+                                     mirrored, rotation, added);
+                        for (const auto &finding : candidate.topology.findings)
+                        {
+                            std::fprintf(stderr, "%s\n", finding.c_str());
+                        }
+                    }
+                    assert(added == 1);
+                    CheckPortal(candidate, neighbor);
+                    assert(candidate.exits.front().polygon && candidate.exits.front().region);
+                    if (!turning)
+                    {
+                        CheckPortal(candidate, neighbors.back());
+                    }
+                    for (const auto &contributors : candidate.polygonContributingTriangles)
+                    {
+                        assert(!contributors.empty());
+                    }
+                    const std::vector<std::size_t> interiorRim =
+                        turning ? std::vector<std::size_t>{0, 1, 5} : std::vector<std::size_t>{4, 5, 6, 7};
+                    for (const auto index : interiorRim)
+                    {
+                        const auto expected = vertices[index];
+                        const auto kept = std::any_of(
+                            candidate.mesh.vertices.begin(), candidate.mesh.vertices.end(), [&](Vec3 point)
+                            { return point.x == expected.x && point.y == expected.y && point.z == expected.z; });
+                        assert(kept);
+                    }
+                    assert(StitchCandidateBorders(candidate, bounds, neighbors, {authored}) == 0);
+                    CheckPortal(candidate, neighbor);
+                }
+            }
+        }
+    }
 } // namespace
 
 void TestBorderCavityRegressions()
 {
     CheckTerminalCavities();
     CheckExcludedAuthoredFloor();
+    CheckDeferredRequiredCrossing();
+    CheckAuthoredFanEdits();
+    CheckSupportedAuthoredTerminalRepair();
     CheckCornerHeightDrift();
     CheckThinSeamRetraction(false);
     CheckThinSeamRetraction(true);
+    CheckAlternativeCavityCuts();
 }

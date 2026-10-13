@@ -21,7 +21,7 @@ namespace navmesh::app::detail
         // This identity versions both storage and successful generation semantics.
         // Change its pipeline revision when successful output becomes incompatible;
         // executable rebuilds alone must not discard completed generation work.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-6/recast-pipeline-22";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-6/recast-pipeline-28";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)
@@ -82,6 +82,10 @@ namespace navmesh::app::detail
         {
             a(v.polygon, v.edge, v.neighborNavmeshId, v.neighborPolygon, v.neighborEdge, v.generatedNeighborCell);
         }
+        template <class Archive> void Fields(Archive &a, core::AuthoredBorderVertexEdit &v)
+        {
+            a(v.navmeshId, v.vertex, v.original, v.position);
+        }
         template <class Archive> void Fields(Archive &a, core::CandidateContour &v)
         {
             a(v.region, v.closed, v.vertices);
@@ -100,7 +104,7 @@ namespace navmesh::app::detail
         {
             a(v.profile, v.recastSettings, v.partitioningAlgorithm, v.triangleTagging, v.mesh, v.polygonSourceTriangles,
               v.polygonContributingTriangles, v.regions, v.exits, v.borderLinks, v.contours, v.topology, v.statistics,
-              v.warnings);
+              v.warnings, v.authoredBorderVertexEdits);
         }
 
         /// One field visitor supplies deterministic hashing and private binary storage without copying whole candidates.

@@ -208,7 +208,9 @@ global seam refinement and writer failures still stop publishing.
 Generation and border linking are separate stages. Workers retain all surviving
 walkable components without requiring authored portals or door anchors. Authored
 NAVMs from other rebuilding targets never constrain their geometry. Borders into
-untouched cells are matched to authored edges while preserving those endpoints.
+untouched cells must retain their required authored crossings around the complete
+selection, including after a neighboring generation failure. Immediate and deferred
+stitching enforce the same crossing contract.
 Matching repairs every compatible complete authored partition before generated
 seams are reconciled, even without a selected-cell authored crossing. Connected
 border cavities handle partitions spanning several generated fans. Continuous
@@ -246,8 +248,13 @@ occupies its largest source NAVM and the others become empty. Uncovered targets
 receive new plugin-owned NAVMs in their winning CELL hierarchy. The writer allocates
 all primary identities together, then resolves generated CELL destinations to those
 identities, including pairs where neither cell had authored navmesh. Untouched
-neighbors preserve their vertices and triangles and receive reciprocal portal
-overrides where required. Existing incoming links to replaced triangles are cleared
+neighbors preserve vertex and triangle identities and receive reciprocal portal
+overrides where required. When original endpoints prevent a required crossing,
+bounded authored boundary fan edits may shorten or reshape that crossing near
+supported generated floor. Shared fan heights retain each face's slope envelope;
+unrelated and already matched portals stay pinned. The candidate audit records
+original and adjusted coordinates. Conflicting plans or unsupported authored
+grid tails stop export, and edited neighbor spatial grids are rebuilt. Existing incoming links to replaced triangles are cleared
 and matched borders receive fresh return links. Every emitted NAVM is read back
 before the temporary plugin is finalized. Existing output plugins are refused.
 The patch is light-flagged only when its dependencies and allocated identities fit

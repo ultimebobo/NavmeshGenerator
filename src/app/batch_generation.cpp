@@ -181,7 +181,9 @@ namespace navmesh::app::detail
                     core::RefreshCandidateTopology(result.candidate);
                     if (input.bounds && !input.adjacent.empty())
                     {
-                        (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent, {}, true);
+                        (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent,
+                                                           result.cell->navMeshes, true, &input.geometry.scene, false,
+                                                           result.cell->waterHeight);
                     }
                     core::TagCandidateTriangles(result.candidate, result.cell->navMeshes, result.cell->waterHeight,
                                                 options.tagTriangles);
@@ -332,7 +334,11 @@ namespace navmesh::app::detail
                         }
                         adjacent.push_back(*mesh);
                     }
-                    (void)core::StitchCandidateBorders(*target.candidate, target.bounds, adjacent, {}, true);
+                    const auto result = std::find_if(results.begin(), results.end(),
+                                                     [&](const auto &item) { return item.cell->id == target.cellId; });
+                    (void)core::StitchCandidateBorders(*target.candidate, target.bounds, adjacent,
+                                                       result->cell->navMeshes, true, nullptr, false,
+                                                       result->cell->waterHeight);
                     if (!target.candidate->topology.valid)
                     {
                         throw std::runtime_error(

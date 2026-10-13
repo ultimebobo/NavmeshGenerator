@@ -32,6 +32,10 @@ namespace navmesh::skyrim
      * unsupported existing records cannot be treated as uncovered.
      * Authored incoming links to replaced geometry are removed from all source NAVMs;
      * matched borders receive fresh reciprocal links. Unrelated portals are retained.
+     * Bounded authored neighbor vertex edits are checked against the input snapshot,
+     * combined across replacements, and applied without renumbering triangles or vertices.
+     * Conflicting edits, altered unrelated portals and unsupported spatial grid tails fail export.
+     * Edited neighbors receive a rebuilt grid while retaining authored cover and door indices.
      * @param writtenPath Receives the finalized plugin path on success.
      * @param error Receives a failure reason; no final plugin is published on failure.
      * @param copyPlugin Optional active filename to copy with generated NAVMs. Preserves
@@ -54,7 +58,8 @@ namespace navmesh::skyrim
      * @param cell Selected cell in Skyrim world coordinates.
      * @param candidate Valid generated mesh in Skyrim world coordinates.
      * Only matched authored portal endpoints may exceed nominal exterior CELL bounds,
-     * within core::AuthoredBorderTolerance. Neighbor geometry is preserved.
+     * within core::AuthoredBorderTolerance. Neighbor geometry retains its identities;
+     * bounded border fan edits recorded in the candidate are verified and serialized.
      * Incoming portals into replaced triangle spaces are cleared before matched
      * reciprocal portals are written; unmatched edges remain open boundaries.
      * @param writtenPath Receives the final plugin path after read-back verification.

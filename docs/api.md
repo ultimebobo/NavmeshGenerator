@@ -13,6 +13,15 @@ this reference.
   an absent compatible boundary floor can close such a crossing with a warning.
   Unresolved required crossings remain validation failures.
 
+- `navmesh::core::ApplyAuthoredBorderVertexEdits` and
+  `CompleteAuthoredBorderFanEdits`: neutral validation and bounded local height
+  relaxation for adjacent authored boundary fans. Preserve vertex and triangle
+  identities, reject stale or conflicting plans, maintain each incident face's
+  winding and slope envelope, and leave pinned portals fixed. Candidates retain
+  these edits for cache reuse, audit and guarded reciprocal export.
+- `navmesh::skyrim::ExtractTerrain`: decode owned LAND, or explicitly inherited
+  coordinate-matched parent LAND, with actual source provenance and cycle checks.
+
 - `navmesh::core::RemoveCandidateIslands`: complete-set floor reachability after
   authored border matching or generated seam linking. Retains matched-door/authored-neighbor access and the
   largest network in each contiguous exterior selection or interior; removes

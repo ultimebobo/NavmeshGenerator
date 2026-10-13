@@ -130,6 +130,12 @@ configured limit or the existing generated cavity's slope envelope, whichever is
 greater; required crossings also retain the selected authored floor's envelope.
 Terminal chains can end short of a portal or turn into the cell: endpoint projection
 and the authored floor's repair bounds select the complete cavity.
+Within a simple cavity, stitching tries the projected cuts and compatible boundary
+vertices beyond either portal endpoint. Every consumed boundary sample remains in
+the exterior repair band; the untouched interior rim keeps its vertex identities.
+These alternative cuts can absorb seam slivers and terminal turns without relaxing
+endpoint height limits, replacement slopes, or preservation of established portals.
+Candidate cache compatibility includes these provisional authored-border repairs.
 Near-coincident endpoints align through their incident fans before cavity
 construction. Removed seam height detail can become a bounded interior sample
 when rim-only triangulation cannot preserve the floor's slope envelope. Cavity
@@ -189,6 +195,35 @@ remaining CELL seam. No portal is invented across unsupported gaps.
 Entrance positions appear as orange markers, including unmatched entrances.
 See the [glossary](glossary.md) for the Creation Kit border-bar interpretation
 and the distinction between neighboring geometry and saved return links.
+
+Exterior terrain can come from coordinate-matched parent LAND only through explicit
+WRLD inheritance when the child has no LAND. Authored references and NAVMs remain
+in their owning worldspace. Engine default water elevations resolve through the
+world hierarchy rather than becoming literal water planes.
+
+Required crossings are mandatory for single cells and for the outside boundary of
+any generated selection. Both authored floor triangles bound the repair cavity;
+height variation follows the selected authored floor, with resolved submerged
+swimming crossings using the supported water column. Continuous components are
+repaired independently of height-step interfaces and flag changes. Partial floor
+support and terminal chains can seed a repair. Connected cavities preserve pinned
+portals and interior rims; floor samples and wider strips distribute height changes
+within the slope envelope before climb-compatible internal joins.
+
+When a required crossing remains missing, nearby authoritative floor may support
+bounded edits to the adjacent authored boundary fan. An offset beyond direct climb
+matching must move toward the corroborated floor within the repair height budget;
+source comparisons allow raster height rounding. Shared matched endpoints remain
+fixed, and repair revisits crossings made compatible by later partitions.
+Endpoint movement is limited
+by the movement profile's border halo, climb and slope budget. Local free fan
+heights may relax within those bounds, preserving per-face winding and slope;
+unrelated portals and matched endpoints stay fixed. A short terminal triangle may
+extend an existing generated fan within that same halo. No authored floor is copied
+into the generated interior. Candidates carry original-position checked edit plans
+in `authored_border_vertex_edits`; export verifies and merges those plans and
+rebuilds edited neighbor spatial grids without renumbering their geometry or
+connection tables. Failure to retain a required crossing remains an error.
 
 Plugin and load-order scopes retain all surviving Recast floor components, including
 isolated interiors and exterior borders awaiting generated neighbors. Only untouched

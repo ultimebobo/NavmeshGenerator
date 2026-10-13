@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/navmesh/types.h"
+#include "core/navmesh/authored_border_edits.h"
 #include "core/scene/scene.h"
 
 #include <filesystem>
@@ -136,6 +137,8 @@ namespace navmesh::core
         std::vector<CandidateExit> exits;
         /// Candidate boundary edges with reciprocal targets in adjacent NAVMs.
         std::vector<CandidateBorderLink> borderLinks;
+        /// Bounded adjacent authored geometry changes required by these reciprocal portals.
+        std::vector<AuthoredBorderVertexEdit> authoredBorderVertexEdits;
         std::vector<CandidateContour> contours;
         CandidateTopology topology;
         CandidateStatistics statistics;
@@ -157,17 +160,21 @@ namespace navmesh::core
      * @param cellBounds Selected exterior CELL in Skyrim world coordinates.
      * @param neighbors Existing NAVMs in adjacent cells of the same worldspace.
      * @param authored Winning selected-cell NAVMs. Their resolved exterior portals are required
-     * crossings, retaining the neighboring edge's exact position and destination.
+     * crossings, retaining an exact reciprocal edge and the neighboring triangle destination.
      * Required crossings that cannot be repaired invalidate the candidate, even when empty,
      * except for crossings positively identified as excluded obstacle floors by sourceScene.
      * @param deferUnlinkedBorders Preserve unpaired seams and all components for batch linking.
      * Authored partitions and required crossings are repaired before returning;
-     * only matched portals are validated, and final seam/reachability filtering is deferred.
+     * matched portals and every required crossing are validated; final seam/reachability filtering is deferred.
      * @param sourceScene Optional generation input with complete triangle provenance. A crossing
      * with no surviving boundary floor and positive obstacle-top support at its authored interior
      * anchor is closed with a warning. Missing or unsupported source evidence does not waive a crossing.
+     * Nearby authoritative floors can also support bounded authored-neighbor fan edits when a
+     * required crossing cannot retain its complete original edge. Those edits are recorded for export.
      * @param deferReachability Preserve all components for subsequent RemoveCandidateIslands filtering.
      * With immediate linking, unmatched seams still retract and required portals remain validated.
+     * @param waterHeight Resolved finite exterior water-surface Z in Skyrim world units. Required
+     * authored swimming crossings below this plane can use supported submerged floor within their slope envelope.
      * @return Number of reciprocal border portals added. candidate.topology reports
      * dangling targets, endpoint mismatches, reused portals, unmatched border vertices
      * or remaining open CELL seams.
@@ -188,6 +195,8 @@ namespace navmesh::core
      * triangles bound repair depth and height drift. Cavity triangulation and fan alignment
      * respect the configured and affected generated floor slope envelopes; required cavities
      * also accommodate the selected authored floor's slope envelope.
+     * Cavity cuts may absorb nearby exterior seam samples beyond either portal endpoint
+     * within those repair bounds; alternative cuts cannot consume the interior rim.
      * Near-coincident endpoints align through their fans. Removed seam height detail may become
      * a bounded interior sample when the unchanged rim needs it to meet that slope envelope.
      * Boundary preparation can retriangulate compatible fans even without a final match.
@@ -200,17 +209,18 @@ namespace navmesh::core
      * through climb-compatible interior edges; strip and floor triangles retain their
      * slope envelopes and the original floor heights remain on the interior side.
      * Shared corner height offsets use separate vertices and climb-compatible internal edges.
-     * Terminal strip samples move into supported floor within their inset distance.
+     * Terminal strip samples move into supported floor within the authored cavity depth.
      * Geometry, region membership, source joins, contour,
-     * door and portal indices, and topology are updated consistently; neighbors are unchanged.
+     * door and portal indices, and topology are updated consistently. Input neighbors stay unchanged;
+     * candidate.authoredBorderVertexEdits records bounded fan changes for reciprocal export.
      * @throws std::invalid_argument when polygon source evidence or supplied scene provenance is incomplete.
      */
     [[nodiscard]] std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
                                                      const std::vector<NavMesh> &neighbors,
                                                      const std::vector<NavMesh> &authored = {},
                                                      bool deferUnlinkedBorders = false,
-                                                     const Scene *sourceScene = nullptr,
-                                                     bool deferReachability = false);
+                                                     const Scene *sourceScene = nullptr, bool deferReachability = false,
+                                                     std::optional<float> waterHeight = std::nullopt);
     /// Check candidate polygon topology without modifying its geometry.
     [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh &candidate);
     /** Rebuild adjacency, boundary contours, region areas, output counts and topology after mesh edits.

@@ -208,6 +208,81 @@ namespace
      * including its implicit self slot. Unmatched incoming edges also need overrides
      * because their destination triangle indices cannot survive regeneration.
      */
+    /** Rebuild spatial lookup after authored vertex edits, retaining cover triangle identities.
+     * Version-specific opaque tails cannot be safely relocated and reject the edit.
+     * A single bucket conservatively contains every unchanged authored triangle index.
+     */
+    bool RebuildEditedNeighborGrid(Bytes &nvnm, std::size_t trailing, const navmesh::core::NavMesh &mesh)
+    {
+        auto offset = trailing;
+        for (const auto width : {10U, 10U, 2U})
+        {
+            if (offset > nvnm.size() || nvnm.size() - offset < 4)
+            {
+                return false;
+            }
+            const auto count = Get32(nvnm, offset);
+            offset += 4;
+            if (count > (nvnm.size() - offset) / width)
+            {
+                return false;
+            }
+            offset += count * width;
+        }
+        const auto grid = offset;
+        if (mesh.polygons.size() > std::numeric_limits<std::uint16_t>::max())
+        {
+            return false;
+        }
+        if (nvnm.size() - grid < 36 || mesh.vertices.empty())
+        {
+            return false;
+        }
+        const auto divisor = Get32(nvnm, grid);
+        offset += 36;
+        if (!divisor || divisor > (nvnm.size() - offset) / 4 / divisor)
+        {
+            return false;
+        }
+        for (std::uint64_t bucket{}; bucket < static_cast<std::uint64_t>(divisor) * divisor; ++bucket)
+        {
+            if (nvnm.size() - offset < 4)
+            {
+                return false;
+            }
+            const auto count = Get32(nvnm, offset);
+            offset += 4;
+            if (count > (nvnm.size() - offset) / 2)
+            {
+                return false;
+            }
+            offset += count * 2;
+        }
+        if (offset != nvnm.size())
+        {
+            return false;
+        }
+        navmesh::core::AABB bounds;
+        for (const auto &point : mesh.vertices)
+        {
+            bounds.Expand(point);
+        }
+        nvnm.resize(grid);
+        U32(nvnm, 1);
+        Float(nvnm, bounds.max.x - bounds.min.x);
+        Float(nvnm, bounds.max.y - bounds.min.y);
+        for (const auto value : {bounds.min.x, bounds.min.y, bounds.min.z, bounds.max.x, bounds.max.y, bounds.max.z})
+        {
+            Float(nvnm, value);
+        }
+        U32(nvnm, static_cast<std::uint32_t>(mesh.polygons.size()));
+        for (std::size_t i{}; i < mesh.polygons.size(); ++i)
+        {
+            U16(nvnm, static_cast<std::uint16_t>(i));
+        }
+        return true;
+    }
+
     bool CollectIncomingNeighbors(const navmesh::skyrim::ResolvedLoadOrder &resolved,
                                   const std::vector<std::filesystem::path> &inputPlugins,
                                   const std::vector<const ResolvedRecord *> &replacedRecords,
@@ -662,6 +737,14 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         {
             return fail("Generated NAVM has inconsistent geometry or invalid topology.");
         }
+        for (const auto &edit : candidate.authoredBorderVertexEdits)
+        {
+            if (std::none_of(candidate.borderLinks.begin(), candidate.borderLinks.end(), [&](const auto &link)
+                             { return !link.generatedNeighborCell && link.neighborNavmeshId == edit.navmeshId; }))
+            {
+                return fail("An authored border edit has no reciprocal authored neighbor portal.");
+            }
+        }
         if (candidate.mesh.vertices.size() > 65535 || candidate.mesh.polygons.size() > 65535)
         {
             return fail("Generated NAVM exceeds 16-bit vertex or triangle indices.");
@@ -833,7 +916,52 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                 {
                     return fail("A border portal has no resolved neighboring mesh.");
                 }
-                neighborMeshes.emplace(link.neighborNavmeshId, *mesh);
+                auto edited = *mesh;
+                std::vector<core::AuthoredBorderVertexEdit> edits;
+                for (const auto &item : replacements)
+                {
+                    for (const auto &edit : item.candidate->authoredBorderVertexEdits)
+                    {
+                        if (edit.navmeshId == link.neighborNavmeshId)
+                        {
+                            edits.push_back(edit);
+                        }
+                    }
+                }
+                std::set<std::uint32_t> replacedMeshes;
+                for (const auto &item : replacements)
+                {
+                    for (const auto &m : item.cell->navMeshes)
+                    {
+                        replacedMeshes.insert(m.id);
+                    }
+                }
+                for (const auto &incoming : mesh->externalLinks)
+                {
+                    if (replacedMeshes.contains(incoming.navmeshId))
+                    {
+                        continue;
+                    }
+                    const auto &face = mesh->polygons.at(incoming.polygon);
+                    for (const auto vertex : {face.vertices[incoming.edge], face.vertices[(incoming.edge + 1) % 3]})
+                    {
+                        if (std::any_of(edits.begin(), edits.end(),
+                                        [&](const auto &edit)
+                                        {
+                                            return edit.vertex == vertex && (edit.position.x != edit.original.x ||
+                                                                             edit.position.y != edit.original.y ||
+                                                                             edit.position.z != edit.original.z);
+                                        }))
+                        {
+                            return fail("An authored border edit would move an unrelated portal.");
+                        }
+                    }
+                }
+                if (!core::ApplyAuthoredBorderVertexEdits(edited, edits, candidate.profile))
+                {
+                    return fail("Neighbor border edits are invalid or conflict across generated cells.");
+                }
+                neighborMeshes.emplace(link.neighborNavmeshId, std::move(edited));
                 neighborRecords.emplace(link.neighborNavmeshId, record);
             }
             const auto generated = generatedMeshes.find(link.neighborNavmeshId);
@@ -1490,6 +1618,17 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             return fail("A neighboring NAVM has an invalid trailing section.");
         }
         Bytes nvnm(old.begin() + layout.header.offset, old.begin() + end);
+        // Preserve authored triangle identities and trailing tables while updating
+        // the complete vertex fans planned during border reconciliation.
+        const auto vertexOffset = static_cast<std::size_t>(layout.vertices.offset - layout.header.offset);
+        if (vertexOffset > nvnm.size() || mesh.vertices.size() > (nvnm.size() - vertexOffset) / 12)
+        {
+            return fail("An edited authored NAVM has invalid vertex storage.");
+        }
+        for (std::size_t i{}; i < mesh.vertices.size(); ++i)
+        {
+            std::memcpy(nvnm.data() + vertexOffset + i * 12, &mesh.vertices[i], 12);
+        }
         const auto trailing = static_cast<std::size_t>(layout.trailingData.offset - layout.header.offset);
         if (nvnm.size() - trailing < 8)
         {
@@ -1596,6 +1735,18 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
         Set32(nvnm, trailing, oldExternalCount + static_cast<std::uint32_t>(appended.size() / 10));
         nvnm.insert(nvnm.begin() + insertion, appended.begin(), appended.end());
+        const auto geometryChanged =
+            std::any_of(replacements.begin(), replacements.end(),
+                        [&](const auto &replacement)
+                        {
+                            return std::any_of(replacement.candidate->authoredBorderVertexEdits.begin(),
+                                               replacement.candidate->authoredBorderVertexEdits.end(),
+                                               [&](const auto &edit) { return edit.navmeshId == neighborId; });
+                        });
+        if (geometryChanged && !RebuildEditedNeighborGrid(nvnm, trailing, mesh))
+        {
+            return fail("An edited neighboring NAVM has an unsupported spatial grid tail.");
+        }
         Bytes payload;
         for (const auto &sub : navm->raw->subrecords)
         {

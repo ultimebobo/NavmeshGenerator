@@ -1,4 +1,5 @@
 #include "skyrim/parser/plugin_parser.h"
+#include "skyrim/parser/water_height.h"
 
 #include <algorithm>
 #include <cctype>
@@ -818,6 +819,7 @@ namespace navmesh::skyrim
                         }
                         if (record.type == "WRLD" && sub.type == "PNAM" && sub.data.size() >= 2)
                         {
+                            record.winning.inheritsParentLand = (U16(sub.data, 0) & 1U) != 0;
                             record.winning.inheritsParentWater = (U16(sub.data, 0) & (1U << 3)) != 0;
                         }
                         if (record.type == "CELL" && sub.type == "DATA" && !sub.data.empty())
@@ -833,7 +835,7 @@ namespace navmesh::skyrim
                             {
                                 float height{};
                                 std::memcpy(&height, sub.data.data() + offset, sizeof(height));
-                                record.winning.usesWorldWater = std::isfinite(height) && height <= -2147483648.0F;
+                                record.winning.usesWorldWater = navmesh::skyrim::detail::UsesDefaultWaterHeight(height);
                                 if (std::isfinite(height) && !record.winning.usesWorldWater)
                                 {
                                     record.winning.waterHeight = height;
@@ -924,7 +926,7 @@ namespace navmesh::skyrim
                     {
                         float value;
                         std::memcpy(&value, sub.data.data() + 4, sizeof(value));
-                        if (std::isfinite(value) && value > -2147483648.0F)
+                        if (detail::IsExplicitWaterHeight(value))
                         {
                             height = value;
                         }
@@ -980,7 +982,7 @@ namespace navmesh::skyrim
                             {
                                 float height;
                                 std::memcpy(&height, sub.data.data(), sizeof(height));
-                                defaultHeight = std::isfinite(height) && height <= -2147483648.0F;
+                                defaultHeight = navmesh::skyrim::detail::UsesDefaultWaterHeight(height);
                                 if (std::isfinite(height) && !defaultHeight)
                                 {
                                     cell.waterHeight = height;

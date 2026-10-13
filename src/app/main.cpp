@@ -958,7 +958,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                         }
                     }
                     (void)navmesh::core::StitchCandidateBorders(*candidate, *analysisConfig.cellBounds, adjacent,
-                                                                cell->navMeshes, false, &geometry.scene, true);
+                                                                cell->navMeshes, false, &geometry.scene, true,
+                                                                cell->waterHeight);
                 }
                 // Filter after portal matching so uncovered cells retain their largest floor,
                 // while doors and authored neighbors can also preserve separate accessible components.

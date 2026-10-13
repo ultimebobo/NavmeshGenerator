@@ -32,9 +32,17 @@ The current POC keeps this intentionally narrow and reports unsupported record l
 
 ## 2. Skyrim extraction
 
+Exterior terrain extraction follows explicit winning WRLD parent-LAND inheritance
+when the child CELL has no owned LAND. It uses matching coordinates and retains
+actual LAND provenance; child records take precedence, and missing, deleted or
+cyclic parents supply no floor. References and authored NAVMs retain their owning
+worldspace identities.
+
 Winning exterior CELL water flags and heights resolve into `Cell::waterHeight`.
 Default heights use winning WRLD water data and master-aware parent-world
-inheritance; invalid, cyclic or unresolved data supplies no water plane.
+inheritance; invalid, cyclic or unresolved data supplies no water plane. Both engine default-height
+sentinel forms request world water rather than becoming literal elevations.
+The range interpretation follows [CommonLibSSE-NG](https://github.com/CharmedBaryon/CommonLibSSE-NG/blob/main/src/RE/T/TESObjectCELL.cpp).
 The neutral `core/navmesh/triangle_tagging` module classifies final generated
 triangles using that plane and winning authored floor markings. App cell and
 batch paths invoke it after border reshaping; cache inputs include all tagging
@@ -116,7 +124,16 @@ adjacent NAVM edges in the resolved load order and records reciprocal targets.
 The shared authored-border tolerance allows small deviations from nominal CELL
 bounds only at matched portal endpoints. Both generation and serialization
 preserve those endpoints and keep other generated vertices inside the target.
-Single-cell generation supplies the selected cell's authored NAVMs to stitching.
+`core/navmesh/authored_border_edits` owns transactional validation and local
+height relaxation of bounded authored-neighbor fan changes. Border matching
+plans these only when a required crossing remains missing and nearby authoritative
+floor corroborates its adjusted endpoints. Bounded offsets must improve floor
+agreement when they exceed direct climb matching. Input geometry stays immutable; candidates
+carry original-position checked edits through private caches and inspection JSON.
+The writer merges plans, protects unrelated portals and rebuilds edited neighbor
+spatial grids while preserving triangle, vertex, cover and door identities.
+
+Single-cell and batch generation supply the selected cell's authored NAVMs to stitching.
 Resolved reciprocal edges identify required exterior crossings. A constrained
 boundary cavity repairs crossings that direct subdivision cannot retain, keeping
 its interior rim, other portals, source joins, and door anchors. Repair depth comes

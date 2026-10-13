@@ -253,3 +253,10 @@ budgets, and generation workers are persisted by the Windows UI and passed to
 the common runner. Automatic plugin writing omits large inspection exports; full
 or compact output can be selected explicitly. See [performance improvements](performance-improvements.md)
 for cache lifetime, admission limits, report fields, and measurement scope.
+
+Generated selections retain required crossings into the authored cells around them.
+The exporter may make bounded adjustments to adjacent authored border fans when
+needed to join supported floor. Candidate warnings identify those repairs, and
+`candidate-navm.json` records their original and adjusted vertices. Movement
+settings bound the repair; conflicting plans or invalid incident triangles stop
+export. These neighbor overrides are included in the generated plugin.

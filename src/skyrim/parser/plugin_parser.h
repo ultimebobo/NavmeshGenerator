@@ -103,8 +103,10 @@ namespace navmesh::skyrim
         std::optional<float> waterHeight;
         /// CELLs without an explicit height inherit their worldspace's water surface.
         bool usesWorldWater{true};
-        /// Resolved parent worldspace and water-inheritance flag at this WRLD version.
+        /// Resolved parent worldspace and terrain/water inheritance at this WRLD version.
         std::optional<std::uint32_t> parentWorldFormId;
+        /// Parent LAND at matching exterior coordinates can supply terrain when the child has none.
+        bool inheritsParentLand{};
         bool inheritsParentWater{};
         /// Shared decoded VHGT bytes for this LAND version, including inherited height evidence.
         core::SharedBytes terrainHeights;

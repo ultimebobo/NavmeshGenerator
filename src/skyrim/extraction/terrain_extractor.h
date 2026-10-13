@@ -21,5 +21,7 @@ namespace navmesh::skyrim
     /// Decode exterior LAND VHGT into world-space terrain triangles.
     /// A valid VHGT has a float base height and 1088 signed delta samples;
     /// missing or malformed data produces warnings rather than substitute terrain.
+    /// Without child-owned LAND, explicit worldspace inheritance can select actual
+    /// ancestor LAND at the same grid coordinates; provenance retains its source identity.
     [[nodiscard]] TerrainExtraction ExtractTerrain(const ResolvedLoadOrder &loadOrder, const core::Cell &cell);
 } // namespace navmesh::skyrim

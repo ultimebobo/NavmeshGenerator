@@ -515,7 +515,14 @@ void TestGeneratedBatchTopology()
                         .polygons = {{.vertices = {0, 1, 2}, .neighbors = {open, open, open}}}};
     (void)StitchCandidateBorders(corner, {{0, 0, -100}, {300, 300, 100}}, {west, south});
     assert(corner.topology.valid);
-    assert(corner.borderLinks.size() == 1 && corner.borderLinks[0].neighborNavmeshId == west.id);
+    const auto retained = std::find_if(corner.borderLinks.begin(), corner.borderLinks.end(),
+                                       [&](const auto &link) { return link.neighborNavmeshId == west.id; });
+    assert(retained != corner.borderLinks.end());
+    const auto &face = corner.mesh.polygons[retained->polygon];
+    const auto first = corner.mesh.vertices[face.vertices[retained->edge]];
+    const auto last = corner.mesh.vertices[face.vertices[(retained->edge + 1) % 3]];
+    assert(first.x == 0 && first.y == 300 && first.z == 0);
+    assert(last.x == 0 && last.y == 0 && last.z == 0);
 }
 
 void TestBatchGenerationFailurePolicy()

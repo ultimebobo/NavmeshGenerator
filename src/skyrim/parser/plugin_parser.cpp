@@ -1,4 +1,5 @@
 #include "skyrim/parser/plugin_parser.h"
+#include "skyrim/parser/water_height.h"
 
 #include <algorithm>
 #include <cctype>
@@ -346,7 +347,7 @@ namespace navmesh::skyrim
                         {
                             float height;
                             std::memcpy(&height, payload->data() + subDataStart, sizeof(height));
-                            if (std::isfinite(height) && height > -2147483648.0F)
+                            if (navmesh::skyrim::detail::IsExplicitWaterHeight(height))
                             {
                                 cell.waterHeight = height;
                             }

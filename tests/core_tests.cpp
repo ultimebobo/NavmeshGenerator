@@ -608,6 +608,39 @@ namespace
                                                            output, error));
             Require(error.find("outside") != std::string::npos);
         }
+        if (!linkSecondary)
+        {
+            auto edited = candidate;
+            for (const auto targetVertex : {0U, 1U})
+            {
+                const auto original = adjacent->navMeshes.front().vertices[targetVertex];
+                const auto position = original + Vec3{0, 0, 4};
+                edited.authoredBorderVertexEdits.push_back({0x201, targetVertex, original, position});
+                for (auto &vertex : edited.mesh.vertices)
+                {
+                    if (vertex.x == original.x && vertex.y == original.y && vertex.z == original.z)
+                    {
+                        vertex = position;
+                    }
+                }
+            }
+            Require(navmesh::skyrim::WriteNavmeshOverride(root / "edited-neighbor", {source}, resolved, *selected,
+                                                          edited, output, error));
+            const auto patchedEdits =
+                navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source, output}});
+            const auto owner = std::find_if(patchedEdits.cells.begin(), patchedEdits.cells.end(),
+                                            [](const auto &cell) { return cell.id == 0x101; });
+            Require(owner->navMeshes.front().vertices[0].z == 4 && owner->navMeshes.front().vertices[1].z == 4);
+            Require(owner->navMeshes.front().vertices[2].z == 0 && owner->navMeshes.front().polygons.size() == 1);
+            auto unreferenced = edited;
+            unreferenced.borderLinks.clear();
+            Require(!navmesh::skyrim::WriteNavmeshOverride(root / "unreferenced-neighbor-edit", {source}, resolved,
+                                                           *selected, unreferenced, output, error));
+            auto invalid = edited;
+            invalid.authoredBorderVertexEdits.front().position.z = 1000;
+            Require(!navmesh::skyrim::WriteNavmeshOverride(root / "invalid-neighbor-edit", {source}, resolved,
+                                                           *selected, invalid, output, error));
+        }
         CandidateNavMesh adjacentCandidate;
         adjacentCandidate.mesh = adjacent->navMeshes.front();
         adjacentCandidate.mesh.polygons.front().neighbors.fill(std::numeric_limits<std::uint32_t>::max());
@@ -1509,6 +1542,78 @@ namespace
         missing.id = 0x799;
         const auto none = navmesh::skyrim::ExtractTerrain(resolved, missing);
         Require(none.scene.mesh.triangles.empty() && none.landRecordsMissing == 1);
+    }
+    void TestInheritedTerrainAndDefaultWater()
+    {
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-inherited-floor-test";
+        std::filesystem::remove_all(root);
+        std::filesystem::create_directories(root);
+        std::vector<std::uint8_t> plugin;
+        PutRecord(plugin, "TES4", 0, {});
+        const auto world = [&](std::uint32_t id, std::uint32_t parent, std::uint16_t inheritance, std::uint32_t cellId,
+                               bool ownsLand, float water)
+        {
+            std::vector<std::uint8_t> payload, data;
+            PutFloat(data, 0);
+            PutFloat(data, -20);
+            PutText(payload, "DNAM", data);
+            if (parent)
+            {
+                data.clear();
+                PutU32(data, parent);
+                PutText(payload, "WNAM", data);
+                data.clear();
+                PutU16(data, inheritance);
+                PutText(payload, "PNAM", data);
+            }
+            PutRecord(plugin, "WRLD", id, payload);
+            auto cellPayload = CellPayload("ChildTerrainCell", true);
+            PutText(cellPayload, "DATA", {2});
+            data.clear();
+            PutFloat(data, water);
+            PutText(cellPayload, "XCLW", data);
+            std::vector<std::uint8_t> cells;
+            PutRecord(cells, "CELL", cellId, cellPayload);
+            if (ownsLand)
+            {
+                std::vector<std::uint8_t> land;
+                PutRecord(land, "LAND", cellId + 1, LandPayload(parent ? 200.0F : 100.0F, 0, 0, 0));
+                PutGroup(cells, cellId, 6, land);
+            }
+            PutGroup(plugin, id, 1, cells);
+        };
+        world(0x800, 0, 0, 0x700, true, -20);
+        world(0x801, 0x800, 9, 0x710, false, std::numeric_limits<float>::max());
+        world(0x802, 0x800, 0, 0x720, false, 7);
+        world(0x803, 0x800, 9, 0x730, true, -2147483648.0F);
+        world(0x804, 0x804, 9, 0x740, false, std::numeric_limits<float>::max());
+        world(0x805, 0x800, 9, 0x750, false, std::numeric_limits<float>::quiet_NaN());
+        const auto path = root / "Inherited.esm";
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char *>(plugin.data()), static_cast<std::streamsize>(plugin.size()));
+        file.close();
+        const auto resolved = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {path}});
+        Require(resolved.diagnostics.empty());
+        const auto cell = [&](std::uint32_t id) -> const navmesh::core::Cell &
+        {
+            return *std::find_if(resolved.cells.begin(), resolved.cells.end(),
+                                 [&](const auto &c) { return c.id == id; });
+        };
+        const auto inherited = navmesh::skyrim::ExtractTerrain(resolved, cell(0x710));
+        Require(inherited.landRecordsDecoded == 1 && inherited.scene.mesh.vertices.front().z == 800);
+        Require(inherited.scene.geometrySources.front().reference.formId == 0x701);
+        Require(inherited.scene.triangleProvenance.front().terrain->landFormId == 0x701);
+        Require(cell(0x710).waterHeight == -20 && resolved.FindWinning(0x710)->winning.usesWorldWater);
+        Require(resolved.FindWinning(0x801)->winning.inheritsParentLand);
+        Require(navmesh::skyrim::ExtractTerrain(resolved, cell(0x720)).scene.mesh.triangles.empty());
+        Require(cell(0x720).waterHeight == 7);
+        const auto own = navmesh::skyrim::ExtractTerrain(resolved, cell(0x730));
+        Require(own.landRecordsDecoded == 1 && own.scene.mesh.vertices.front().z == 1600);
+        Require(own.scene.geometrySources.front().reference.formId == 0x731 && cell(0x730).waterHeight == -20);
+        Require(navmesh::skyrim::ExtractTerrain(resolved, cell(0x740)).scene.mesh.triangles.empty());
+        Require(!cell(0x740).waterHeight && !cell(0x750).waterHeight);
+        const auto standalone = navmesh::skyrim::LoadCell(path, {}, {}, {}, {}, 0x710);
+        Require(standalone && !standalone->waterHeight);
     }
     void WriteTextFile(const std::filesystem::path& path, const std::string& text) { std::ofstream output(path, std::ios::binary); output << text; }
     void TestMo2ProfileImport()
@@ -2563,7 +2668,6 @@ void TestBorderCavityRegressions();
 
 int main(int argc, char **argv)
 {
-    TestBorderCavityRegressions();
 #ifdef _WIN32
     // CLI regressions report assertion failures to stderr without opening an interactive CRT dialog.
     _set_error_mode(_OUT_TO_STDERR);
@@ -2571,6 +2675,7 @@ int main(int argc, char **argv)
     _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 #endif
+    TestBorderCavityRegressions();
     if (const auto result = RunSceneFixtureCommand(argc, argv))
     {
         return *result;
@@ -2684,6 +2789,7 @@ int main(int argc, char **argv)
     TestAuthoredBorderHeightBends();
     TestReciprocalCellTransitions(2.5F,true);
     TestExteriorLandTerrain();
+    TestInheritedTerrainAndDefaultWater();
     TestExportMetadata();
     TestOptionalLocalGameData();
     TestBstTriShapeExtraction();
