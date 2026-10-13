@@ -138,6 +138,15 @@ void TestCollisionImpactSelection()
     } cleanup{root};
     WriteModel(root / "meshes/TallSolid.nif", true);
     WriteModel(root / "meshes/VisualOnly.nif", false);
+    {
+        nifly::NifFile fire;
+        fire.Create({nifly::V20_2_0_7, 12, 130});
+        const std::vector<nifly::Vector3> fuel = {{-64, -64, 0}, {64, -64, 0}, {64, 64, 8}};
+        const std::vector<nifly::Triangle> faces = {{0, 1, 2}};
+        Require(fire.CreateShapeFromData("Coals", &fuel, &faces, nullptr));
+        std::filesystem::create_directories(root / "meshes/effects");
+        Require(fire.Save(root / "meshes/effects/fxfirefixture.nif") == 0);
+    }
 
     const skyrim::RecordOrigin added{.plugin = "Edit.esp",
                                      .formId = 20,
@@ -145,6 +154,22 @@ void TestCollisionImpactSelection()
                                      .worldspaceFormId = 1,
                                      .baseFormId = 10,
                                      .position = core::Vec3{1024, 1024, 0}};
+    {
+        auto order = Fixture();
+        auto &base = order.records.back();
+        base.modelPath = "effects/FXFireFixture.nif";
+        base.winning.modelPath = *base.modelPath;
+        base.origins.front().modelPath = *base.modelPath;
+        PutReference(order, {added});
+        Require(Select(order, root) == std::set<std::uint32_t>{101});
+        auto before = added;
+        before.plugin = "Base.esm";
+        auto moved = added;
+        moved.position = core::Vec3{9216, 1024, 0};
+        order.records.pop_back();
+        PutReference(order, {before, moved});
+        Require(Select(order, root) == std::set<std::uint32_t>{101, 103});
+    }
     {
         auto order = Fixture();
         auto &base = order.records.back();

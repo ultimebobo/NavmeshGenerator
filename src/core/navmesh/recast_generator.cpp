@@ -263,7 +263,9 @@ namespace
                 }
                 triangles.insert(triangles.end(), {base, base + 2, base + 1});
                 sources.push_back(i);
-                input.obstacles.push_back(scene.geometrySources[provenance.geometrySource].navigationObstacle);
+                const auto &source = scene.geometrySources[provenance.geometrySource];
+                input.obstacles.push_back(source.navigationObstacle ||
+                                          source.sourceType == GeometrySourceType::NavigationExclusion);
             }
         }
         statistics.eligibleTriangles = sources.size();
@@ -278,7 +280,8 @@ namespace
         auto &largeSources = result.largeSources;
         for (const auto index : sources)
         {
-            if (scene.geometrySources[scene.triangleProvenance[index].geometrySource].navigationObstacle)
+            const auto &source = scene.geometrySources[scene.triangleProvenance[index].geometrySource];
+            if (source.navigationObstacle || source.sourceType == GeometrySourceType::NavigationExclusion)
             {
                 continue;
             }

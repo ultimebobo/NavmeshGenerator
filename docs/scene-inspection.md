@@ -52,6 +52,12 @@ inside its owning group.
 | `Collision` | gray | packed Havok support geometry |
 | `Render fallback` | purple | visual geometry, including display-only meshes retained beside authoritative collision |
 
+The collision inspection layer also contains explicit fire navigation exclusions.
+Their provenance identifies `navigation_exclusion` and the obstacle-only tag;
+they represent fuel or flame bounds rather than decoded Havok collision.
+Furniture collision retains the same tag so seats and cabinet surfaces cannot
+supply candidate floors. Visual furniture fallback remains display evidence.
+
 Here a **door** means an exit to another area, including another worldspace or
 an interior. Scene markers use placed teleport destinations (`XTEL`) or authored
 NAVM door associations; a door model alone does not identify an exit. Markers

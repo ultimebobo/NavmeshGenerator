@@ -62,6 +62,9 @@ this reference.
 
 - `navmesh::core`: neutral geometry, world and navmesh data, scene provenance,
   candidate generation, and exports.
+- `navmesh::core::GeometrySourceType::NavigationExclusion`: asset-derived
+  obstacle geometry that Recast rasterizes without admitting walkable floors;
+  extraction retains source provenance separately from Havok and visual meshes.
 - `navmesh::core::WriteCombinedGlb`: ordered scene groups, separate selected-cell
   originals, door-linked face materials, exit markers, and authored/generated
   connection bars along recorded portal edges. Selection omits bars without both displayed endpoint triangles.

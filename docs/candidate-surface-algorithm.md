@@ -17,6 +17,22 @@ prefix. The neutral generator consumes this tag without interpreting model
 names. Every tagged face contributes a solid raster span but cannot become
 a walkable floor, including through coincident terrain or low-obstacle promotion.
 The policy leaves architectural stone and terrain eligible for navigation.
+Furniture base records, containers, furniture-directory assets and recognized
+clutter furniture retain supported collision with the same obstacle-only tag.
+Seats, shelves and cabinet tops cannot become floor evidence or seam-repair anchors.
+Furniture without supported collision remains unsupported for generation; visual
+fallback meshes do not supply permanent furniture obstruction.
+
+Recognized fire effects supply a `navigation_exclusion` source even when their
+NIF has no supported solid collision. Extraction bounds visible coal, ember and
+log meshes in model coordinates, including shape and ancestor transforms, then
+applies the placed reference transform. Flame geometry supplies bounds when fuel
+is absent. Glow and distortion billboards do not define the footprint. The closed
+exclusion bounds are obstacle-only policy geometry, distinct from Havok collision
+and display meshes. Their raster spans prevent navigation across the fire bed
+while keeping surrounding hearth floors eligible. Assets with no recognized fuel
+or flame geometry report unsupported coverage. This asset policy is shared by
+inspection, single-cell generation, batch generation and collision-impact selection.
 Candidate source evidence records the obstacle tag, and obstacle triangles are
 counted in `rejected_obstruction`.
 

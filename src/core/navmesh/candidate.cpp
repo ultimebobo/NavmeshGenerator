@@ -2313,7 +2313,8 @@ namespace
             const auto &triangle = scene->mesh.triangles[index];
             const bool valid = std::all_of(triangle.vertices.begin(), triangle.vertices.end(),
                                            [&](auto vertex) { return vertex < scene->mesh.vertices.size(); });
-            if (source.sourceType == GeometrySourceType::Collision && source.navigationObstacle && valid)
+            if (source.sourceType != GeometrySourceType::RenderFallback &&
+                (source.navigationObstacle || source.sourceType == GeometrySourceType::NavigationExclusion) && valid)
             {
                 excluded.push_back(triangle);
             }
@@ -3490,7 +3491,8 @@ namespace
                 continue;
             }
             const auto &source = scene.geometrySources[sourceIndex];
-            if (source.navigationObstacle || source.sourceType == GeometrySourceType::RenderFallback)
+            if (source.navigationObstacle || source.sourceType == GeometrySourceType::NavigationExclusion ||
+                source.sourceType == GeometrySourceType::RenderFallback)
             {
                 continue;
             }
@@ -5618,9 +5620,10 @@ namespace navmesh::core
                                reproducibility::EscapeJson(source.reference.plugin), source.reference.formId,
                                reproducibility::EscapeJson(source.reference.recordType),
                                reproducibility::EscapeJson(source.modelPath),
-                               source.sourceType == GeometrySourceType::Terrain     ? "terrain"
-                               : source.sourceType == GeometrySourceType::Collision ? "collision"
-                                                                                    : "render_fallback",
+                               source.sourceType == GeometrySourceType::Terrain               ? "terrain"
+                               : source.sourceType == GeometrySourceType::Collision           ? "collision"
+                               : source.sourceType == GeometrySourceType::NavigationExclusion ? "navigation_exclusion"
+                                                                                              : "render_fallback",
                                source.confidence, source.navigationObstacle ? "true" : "false");
         }
         out << "],\n  \"source_triangles\": [";

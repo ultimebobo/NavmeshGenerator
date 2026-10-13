@@ -31,6 +31,9 @@ namespace navmesh::app::detail
                     case navmesh::core::GeometrySourceType::RenderFallback:
                         polygon.support.sourceType = "render_fallback";
                         break;
+                    case navmesh::core::GeometrySourceType::NavigationExclusion:
+                        polygon.support.sourceType = "navigation_exclusion";
+                        break;
                     }
                     polygon.support.collisionType = source.collisionType;
                     polygon.support.sourceConfidence = source.confidence;
@@ -68,7 +71,8 @@ namespace navmesh::app::detail
             const auto &source = geometry.scene.geometrySources[provenance.geometrySource];
             using Type = navmesh::core::GeometrySourceType;
             result[index] = {
-                .type = source.sourceType == Type::Collision ? navmesh::analysis::SupportSourceType::Collision
+                .type = source.sourceType == Type::Collision || source.sourceType == Type::NavigationExclusion
+                            ? navmesh::analysis::SupportSourceType::Collision
                         : source.sourceType == Type::Terrain ? navmesh::analysis::SupportSourceType::Terrain
                                                              : navmesh::analysis::SupportSourceType::RenderFallback,
                 .confidence = source.confidence,

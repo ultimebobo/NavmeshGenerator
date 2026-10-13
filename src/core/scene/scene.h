@@ -44,7 +44,9 @@ namespace navmesh::core
     {
         Terrain,
         Collision,
-        RenderFallback
+        RenderFallback,
+        /// Asset-derived navigation exclusion; blocks movement and never supplies a walkable floor.
+        NavigationExclusion
     };
     enum class GeometryCoverage
     {
@@ -70,7 +72,7 @@ namespace navmesh::core
         float confidence{0.5F};
         RecordProvenance reference;
         RecordProvenance baseObject;
-        /// Collision that blocks navigation but cannot supply a walkable floor, such as a landscape rock.
+        /// Geometry that blocks navigation but cannot supply a walkable floor, such as furniture or a fire bed.
         /// Rasterization retains its volume and headroom effects even on upward-facing triangles.
         bool navigationObstacle{};
     };

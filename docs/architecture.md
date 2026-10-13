@@ -32,6 +32,16 @@ The current POC keeps this intentionally narrow and reports unsupported record l
 
 ## 2. Skyrim extraction
 
+Model extraction owns the furniture and fire navigation policies. Supported
+furniture collision is obstacle-only. Recognized fire effects derive closed
+exclusion bounds from transformed fuel or flame meshes; decorative billboard
+extents are ignored. The neutral scene identifies this geometry as
+`NavigationExclusion`, retains its asset/reference provenance and obstacle tag,
+and exports it in the collision inspection layer. Recast consumes the geometry
+without interpreting Skyrim record classes or asset names. Collision-impact
+selection compares exclusion geometry as well as supported Havok triangles,
+and the candidate pipeline revision invalidates results built with other policies.
+
 Exterior terrain extraction follows explicit winning WRLD parent-LAND inheritance
 when the child CELL has no owned LAND. It uses matching coordinates and retains
 actual LAND provenance; child records take precedence, and missing, deleted or

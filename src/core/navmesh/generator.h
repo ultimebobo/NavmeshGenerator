@@ -72,8 +72,8 @@ namespace navmesh::core
     class RecastCandidateGenerator final : public CandidateGenerator
     {
       public:
-        /** Rasterize authoritative Skyrim-world terrain and collision, including vertical
-         * and obstacle-only solids, and sample floor heights into detail triangles.
+        /** Rasterize authoritative Skyrim-world terrain, collision and explicit navigation exclusions,
+         * including vertical and obstacle-only solids, and sample floor heights into detail triangles.
          * Convex patches share height detail with approximation error bounded by the larger
          * of climb and vertical voxel size. Contour error is refined if a retained voxel
          * region would collapse. Unrepresentable watershed contours trigger layer recovery

@@ -330,7 +330,8 @@ namespace navmesh::skyrim
                 {
                     const auto &geometrySource = geometry.scene.geometrySources.at(
                         geometry.scene.triangleProvenance.at(triangle).geometrySource);
-                    if (geometrySource.sourceType == core::GeometrySourceType::Collision)
+                    if (geometrySource.sourceType == core::GeometrySourceType::Collision ||
+                        geometrySource.sourceType == core::GeometrySourceType::NavigationExclusion)
                     {
                         result.obstacle = geometrySource.navigationObstacle;
                         result.triangles.push_back(

@@ -117,6 +117,10 @@ namespace navmesh::skyrim
     /// @return Geometry and per-reference failures, with archiveSearchComplete distinguishing absence from lookup failure.
     /// navigationOnly excludes render-only support.
     /// Landscape rock assets are tagged as navigation obstacles while retaining their collision geometry.
+    /// Furniture and containers retain supported collision as obstacles without supplying walkable floors.
+    /// Recognized fire effects contribute obstacle-only navigation exclusions from transformed fuel geometry,
+    /// or flame geometry when fuel is absent. Exclusions are distinct from Havok collision and render fallback.
+    /// Fire exclusion decoding also runs in navigationOnly mode; decorative billboards do not define the footprint.
     /// Operable DOOR models are excluded from permanent support and obstruction;
     /// static frames and thresholds remain eligible, and exit metadata is handled by callers.
     [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path &dataDirectory, const core::Cell &cell,
