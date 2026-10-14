@@ -277,6 +277,16 @@ This keeps the codebase testable, portable, and independent from a live Skyrim p
 
 ## Source responsibilities and readability
 
+`tools/render_media.py` presents exported scene geometry with shared depth
+testing, captions and interior cutaways. It reads CELL selection metadata for
+image counts independently of camera mode. `tools/remake_showcase.py` owns local
+showcase orchestration: tracked recipes select cells and presentation, the normal
+application CLI produces candidate scenes, and saved manifests permit image
+rerendering with run evidence retained. Generation reuses the saved live
+mod-manager source with its active overrides; scene attribution joins exported
+identities to winning records and referenced loose-asset providers. Neither tool changes generation policy;
+their workflow and count contracts are in [scene image rendering](render-media.md).
+
 `ui/windows_ui` hosts a dark Dear ImGui workspace on Win32 and DirectX, using the
 bundled framework core and matching upstream backends. Drawing, folder browsing,
 INI persistence and graphics stay on the UI thread. A joined background worker

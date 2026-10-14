@@ -202,24 +202,52 @@ def navigation_triangles(scene, bounds):
     ])
 
 
+def selection_metadata(path):
+    """Read selected CELL evidence independently of the requested camera mode."""
+    metadata_path = Path(str(path) + ".metadata.json")
+    if not metadata_path.exists():
+        return [], None
+    data = metadata_path.read_bytes()
+    metadata = json.loads(data)["metadata"]
+    cells = metadata.get("selected_cells")
+    if cells is None:
+        cells = [metadata["selected_cell"]] if metadata.get("selected_cell") else []
+    if not isinstance(cells, list) or any(not isinstance(cell, dict) for cell in cells):
+        raise ValueError("Scene metadata must contain selected CELL objects")
+    # Aliases and repeated entries describe one CELL, not additional scene cells.
+    unique = {}
+    for index, cell in enumerate(cells):
+        identity = str(cell.get("form_id", index)).upper()
+        unique[identity] = cell
+    source = {"path": str(metadata_path), "sha256": hashlib.sha256(data).hexdigest()}
+    return list(unique.values()), source
+
+
+def cell_caption(cell_count, cropped=False):
+    """Keep selection counts distinct from a crop whose CELL ownership is unknown."""
+    if cell_count is None:
+        return "Cell count unavailable"
+    label = "cell" if cell_count == 1 else "cells"
+    return f"{cell_count:,} selected {label}" + (" (before crop)" if cropped else "")
+
+
 def presentation(scene, path, view, cut_height, bounds, azimuth, elevation,
-                 exterior_elevation=48):
+                 exterior_elevation=48, cell_count=None):
     """Resolve interior cutaways from the adjacent export metadata or CLI override.
 
     Auto detection requires all selected cells to be interiors. Missing metadata
     keeps exterior presentation. Both navigation layers define the automatic cut;
     empty selections require an explicit height rather than an invented floor.
     """
-    metadata_source = None
+    cells, metadata_source = selection_metadata(path)
+    count_source = "unavailable"
+    if cell_count is not None:
+        count_source = "override"
+    elif cells:
+        cell_count = len(cells)
+        count_source = "metadata"
     if view == "auto" and cut_height is None:
-        metadata_path = Path(str(path) + ".metadata.json")
-        interior = False
-        if metadata_path.exists():
-            data = metadata_path.read_bytes()
-            metadata = json.loads(data)["metadata"]
-            cells = metadata.get("selected_cells") or [metadata.get("selected_cell")]
-            interior = bool(cells) and all(cell and cell.get("is_interior") is True for cell in cells)
-            metadata_source = {"path": str(metadata_path), "sha256": hashlib.sha256(data).hexdigest()}
+        interior = bool(cells) and all(cell.get("is_interior") is True for cell in cells)
         view = "interior" if interior else "exterior"
     elif view == "auto":
         view = "interior"
@@ -230,7 +258,9 @@ def presentation(scene, path, view, cut_height, bounds, azimuth, elevation,
         cut_height = float(navigation[:, :, 2].max()) + INTERIOR_CUT_MARGIN
     return {"view": view, "cut_height": cut_height, "azimuth": azimuth,
             "elevation": elevation if elevation is not None else (70 if view == "interior" else exterior_elevation),
-            "metadata_source": metadata_source}
+            "metadata_source": metadata_source, "cell_count": cell_count,
+            "cell_count_source": count_source,
+            "cell_count_before_crop": cell_count is not None and bounds is not None and count_source != "override"}
 
 
 def render(scene, navigation, bounds, width, height, azimuth, elevation, cut_height=None):
@@ -260,13 +290,14 @@ def font(size, bold=False):
     return ImageFont.truetype(str(path), size) if path.exists() else ImageFont.load_default(size=size)
 
 
-def text(draw, xy, value, size=24, color=TEXT, bold=False):
-    draw.text(xy, value, font=font(size, bold), fill=color)
+def text(draw, xy, value, size=24, color=TEXT, bold=False, anchor=None):
+    draw.text(xy, value, font=font(size, bold), fill=color, anchor=anchor)
 
 
 def comparison(scene, output, title="Authored vs generated", attribution="",
                filename="navmesh-comparison.png", bounds=None, azimuth=0, elevation=78,
-               note="Experimental output; review and test NPC navigation before use.", cut_height=None):
+               note="Experimental output; review and test NPC navigation before use.", cut_height=None,
+               cell_count=None, cell_count_before_crop=False):
     """Compare selected CELL navigation with identical cameras and exact face counts.
 
     Attribution describes the actual winning input, including third-party edits.
@@ -279,6 +310,8 @@ def comparison(scene, output, title="Authored vs generated", attribution="",
     text(draw, (60, 30), "NAVMESHGENERATOR  /  EXPORTED SCENE", 22, MUTED)
     text(draw, (60, 67), title, 50, bold=True)
     text(draw, (60, 136), attribution, 27, MUTED)
+    text(draw, (width - 60, 38), cell_caption(cell_count, cell_count_before_crop), 22, MUTED,
+         anchor="ra")
     counts = {}
     for x, layer, label, color in (
         (40, "Original NAVM (current cell)", "AUTHORED  /  Winning input NAVM", AUTHORED),
@@ -299,12 +332,13 @@ def comparison(scene, output, title="Authored vs generated", attribution="",
 
 
 def scene_image(scene, output, filename, title, subtitle, bounds=None, azimuth=-24, elevation=48,
-                navigation="Candidate NAVM", cut_height=None):
+                navigation="Candidate NAVM", cut_height=None, cell_count=None, cell_count_before_crop=False):
     image = Image.new("RGB", (2400, 1500), BACKGROUND)
     draw = ImageDraw.Draw(image)
     text(draw, (60, 30), "NAVMESHGENERATOR  /  EXPORTED SCENE", 22, MUTED)
     text(draw, (60, 72), title, 48, bold=True)
     text(draw, (60, 139), subtitle, 26, MUTED)
+    text(draw, (2340, 38), cell_caption(cell_count, cell_count_before_crop), 22, MUTED, anchor="ra")
     panel = render(scene, navigation, bounds, 2280, 1120, azimuth, elevation, cut_height)
     image.paste(panel, (60, 210))
     authored = navigation.startswith("Original")
@@ -336,6 +370,8 @@ def main():
                         help="Interior support cut in Skyrim world Z units; implies interior in auto mode")
     parser.add_argument("--navigation", choices=("Candidate NAVM", "Original NAVM (current cell)"),
                         default="Candidate NAVM")
+    parser.add_argument("--cell-count", type=int,
+                        help="Verified displayed CELL count; otherwise read the selected cells from metadata")
     args = parser.parse_args()
     if not args.scene and not args.riverwood and not args.comparison:
         parser.error("Provide --scene, --comparison or --riverwood")
@@ -352,6 +388,8 @@ def main():
         parser.error("Camera angles, bounds and cut height must be finite")
     if args.cut_height is not None and args.view == "exterior":
         parser.error("--cut-height requires --view auto or interior")
+    if args.cell_count is not None and args.cell_count < 1:
+        parser.error("--cell-count must be positive")
     args.output.mkdir(parents=True, exist_ok=True)
     sources = []
     comparisons = {}
@@ -362,7 +400,7 @@ def main():
         try:
             settings = presentation(scene, path, args.view, args.cut_height, bounds,
                                     args.azimuth if azimuth is None else azimuth,
-                                    args.elevation, exterior_elevation)
+                                    args.elevation, exterior_elevation, args.cell_count)
         except (ValueError, KeyError) as error:
             parser.error(str(error))
         renders[filename] = settings
@@ -375,25 +413,29 @@ def main():
             scene, args.output, "Riverwood: authored vs generated",
             args.attribution or "Official game plugins • Same scene, camera and display settings",
             "riverwood-navmesh-comparison.png", bounds, settings["azimuth"], settings["elevation"],
-            cut_height=settings["cut_height"])
+            cut_height=settings["cut_height"], cell_count=settings["cell_count"],
+            cell_count_before_crop=settings["cell_count_before_crop"])
         sources.append(("riverwood", args.riverwood))
-        print("Rendered Riverwood comparison", flush=True)
+        print("Rendered Riverwood comparison: " + cell_caption(settings["cell_count"],
+                                                               settings["cell_count_before_crop"]), flush=True)
     if args.comparison:
         scene, settings = load_presentation(args.comparison, args.filename, args.bounds)
         comparisons[args.filename] = comparison(
             scene, args.output, args.title, args.attribution,
             args.filename, args.bounds, settings["azimuth"], settings["elevation"], args.note,
-            settings["cut_height"])
+            settings["cut_height"], settings["cell_count"], settings["cell_count_before_crop"])
         sources.append(("comparison", args.comparison))
-        print("Rendered comparison", flush=True)
+        print("Rendered comparison: " + cell_caption(settings["cell_count"],
+                                                      settings["cell_count_before_crop"]), flush=True)
     if args.scene:
         scene, settings = load_presentation(args.scene, "scene.png", args.bounds)
         scene_image(scene, args.output, "scene.png", args.title,
                     "Navigation and supporting geometry from the same export.",
                     args.bounds, settings["azimuth"], settings["elevation"], args.navigation,
-                    settings["cut_height"])
+                    settings["cut_height"], settings["cell_count"], settings["cell_count_before_crop"])
         sources.append(("scene", args.scene))
-        print("Rendered scene", flush=True)
+        print("Rendered scene: " + cell_caption(settings["cell_count"],
+                                                settings["cell_count_before_crop"]), flush=True)
     manifest = {
         "renderer": "tools/render_media.py",
         "sources": {name: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
@@ -403,7 +445,7 @@ def main():
         "renders": renders,
         "settings": {"title": args.title, "attribution": args.attribution, "note": args.note,
                      "bounds": args.bounds, "azimuth": args.azimuth, "elevation": args.elevation,
-                     "view": args.view, "cut_height": args.cut_height},
+                     "view": args.view, "cut_height": args.cut_height, "cell_count": args.cell_count},
         "presentation": "Orthographic software rendering; shared terrain/collision/navigation depth testing; interior support cutaways; unmodified navigation.",
     }
     (args.output / "render-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

@@ -26,8 +26,9 @@ or the shared [fixture workflow](../fixtures/README.md). Render any exported GLB
 python tools/render_media.py --scene <scene.glb> --output ./output/images
 ```
 
-The output contains `scene.png` and `render-manifest.json`. The manifest records
-source paths, hashes and image filenames. Candidate navigation is teal and
+The output contains `scene.png` and `render-manifest.json`. Images show the number
+of selected cells from the adjacent metadata, deduplicated by CELL Form ID.
+The manifest records source paths, hashes, cell counts and image filenames. Candidate navigation is teal and
 supporting collision is gray. Geometry can occlude navigation behind it;
 coplanar navigation remains visible without shifting its vertices.
 
@@ -41,6 +42,14 @@ Optional presentation controls apply to every scene:
   presentation mode.
 - `--cut-height <Z>` sets the interior supporting-geometry cut in Skyrim world Z
   units. It implies interior presentation in automatic mode.
+- `--cell-count <count>` supplies a verified displayed-cell count for exports
+  without metadata or for a crop. The value must be positive.
+
+Cell counts describe the selected CELLs, excluding neighboring geometry suppliers.
+Without metadata or an override, captions state that the cell count is unavailable.
+Metadata counts on cropped images are labeled as the selection before cropping;
+the sidecar cannot determine which CELLs remain in an arbitrary crop. Explicit
+camera modes still read metadata for counts and record its hash in the manifest.
 
 Fixture names, dimensions, probe expectations and measured outcomes belong in
 builders and generated reports, rather than renderer presets or separate guides.
@@ -131,11 +140,87 @@ testing for both panels. After reviewing it, copy the image to
 `docs/images/riverwood-navmesh-comparison.png`. Game-derived scenes and assets
 stay in the ignored output directory.
 
+## Remake the program showcase
+
+`tools/remake_showcase.py` generates scene previews and authored/generated images
+for Riverwood, Whiterun, Whiterun Dragonsreach, Riften, Winterhold, Dawnstar,
+Dragon Bridge, Falkreath, Morthal and Rorikstead. Its tracked recipes in
+`tools/showcase-scenes.json` define the CELL selections, crops and cameras.
+Dragonsreach uses an interior cutaway. List the current selections with:
+
+```powershell
+python tools/remake_showcase.py --list
+```
+
+Build the desktop executable, install the renderer requirements, and remake the
+images from an existing MO2 profile:
+
+```powershell
+python tools/remake_showcase.py --mo2 "<MO2 instance>" --profile "<existing profile>"
+```
+
+For a deployed Vortex setup, replace `--mo2` and `--profile` with
+`--vortex "<Skyrim installation>"`. Use `--vortex-plugins` when the active
+plugin list lives in a custom directory. `--exe` chooses a different desktop
+build and `--asset-cache` chooses the generator's shared cache.
+
+The selected source supplies its complete active plugin order and winning model
+assets, including mod overrides. The helper records that live source in
+`showcase-manifest.json`. Regenerate scenes and images from its current inputs
+on subsequent runs with:
+
+```powershell
+python tools/remake_showcase.py
+python tools/remake_showcase.py --only winterhold
+```
+
+Change `--mo2` and `--profile`, or `--vortex`, to select another source. Generation
+rereads the selected profile or deployment; the stored source is a location to
+read, rather than a filtered copy of its plugin list. Captions automatically name
+winning scene record plugins and referenced loose model replacements. The helper
+audits selected CELLs, authored NAVMs and supporting record identities through
+the export provenance, resolved load order and input report. An unrelated active
+plugin alone is not attribution evidence. Each saved scene retains those winners,
+the input snapshot identity and report hashes. `--attribution` supplies an optional
+caption override without replacing the audit evidence.
+
+The default output is `output/showcase/`. Open `gallery.html` to review the images.
+`--output` selects another output root. Each generation uses a fresh folder under
+`runs/`, retains exact CLI commands and logs, and disables experimental triangle
+tagging. It generates candidate previews through the normal Cell workflow and
+does not need plugin writing. Skipped generation, invalid candidate topology and
+enabled tagging stop image creation for that scene. Review source coverage and
+visible routes before using a successful render as showcase material.
+
+Repeat rendering from the saved GLBs without regenerating navigation:
+
+```powershell
+python tools/remake_showcase.py --render-only
+python tools/remake_showcase.py --render-only --only riverwood whiterundragonsreach
+```
+
+`--only` also limits generation runs. `--render-only` uses the scene paths and
+attribution in `showcase-manifest.json`; use the same `--output` as the generation
+run. Presentation changes in the recipes apply when rerendering, while changed
+CELL selections require fresh generation. `--presets` accepts a separate recipe
+file for another showcase. The helper checks the scene's metadata selection
+against the recipe before supplying its displayed cell count. Exterior recipes
+frame the complete selected region; their counts exclude neighboring suppliers.
+An optional `note` in a recipe or saved scene entry supplies case-specific
+qualifications for the image caption, such as a visible generation artifact.
+`--render-only` keeps the exported input snapshot, including its mod overrides;
+it does not read changed profile/deployment inputs. Mod-manager input switches
+cannot be combined with it. Use generation to incorporate updated mods.
+
+Every image directory retains a render manifest with source hashes, cell and
+triangle counts, crop and camera settings. Reviewed PNGs can be copied to
+`docs/images/`; keep the GLBs, game assets and local run evidence under `output/`.
+
 ## Inspect generation and export failures
 
-The showcase runs retain their commands, profile snapshot, logs, candidate JSON,
+Earlier local showcase audits retained their commands, profile snapshot, logs, candidate JSON,
 emitted plugins, scene provenance and render manifests beneath
-`output/nexus-media/`. `validation.json` joins image counts to candidate and
+`output/nexus-media/`. Their `validation.json` joins image counts to candidate and
 plugin counts and records reciprocal generated-portal checks. The generated
 `validation-report.md` contains the measured results and reproduction evidence.
 Reviewed region comparisons are available in `docs/images/`.
@@ -170,4 +255,5 @@ Run the synthetic occlusion and interior cutaway regressions:
 
 ```powershell
 python tests/test_media_renderer.py
+python tests/test_showcase.py
 ```

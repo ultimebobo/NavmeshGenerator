@@ -1,0 +1,206 @@
+[
+  {
+    "id": "riverwood",
+    "title": "Riverwood",
+    "cells": [
+      "Riverwood01",
+      "Riverwood02",
+      "Riverwood03",
+      "Riverwood",
+      "Riverwood04",
+      "Riverwood05"
+    ],
+    "view": "exterior",
+    "azimuth": 0,
+    "elevation": 78,
+    "bounds": [
+      16384,
+      -49152,
+      28672,
+      -40960
+    ]
+  },
+  {
+    "id": "whiterun",
+    "title": "Whiterun",
+    "cells": [
+      "WhiterunOrigin",
+      "WhiterunPlainsDistrict01",
+      "WhiterunPlainsDistrict02",
+      "WhiterunPLainsDistrict03",
+      "WhiterunPlainsDistrict04",
+      "WhiterunWindDistrict01",
+      "WhiterunWindDistrict02",
+      "WhiterunWindDistrict03",
+      "WhiterunSkyforge",
+      "WhiterunDragonsReach01",
+      "WhiterunDragonsReach02",
+      "WhiterunDragonsreach03"
+    ],
+    "view": "exterior",
+    "azimuth": 0,
+    "elevation": 78,
+    "bounds": [
+      16384,
+      -12288,
+      32768,
+      8192
+    ]
+  },
+  {
+    "id": "whiterundragonsreach",
+    "title": "Whiterun Dragonsreach",
+    "cells": [
+      "WhiterunDragonsreach"
+    ],
+    "view": "interior",
+    "azimuth": -24,
+    "elevation": 70
+  },
+  {
+    "id": "riften",
+    "title": "Riften",
+    "note": "Triangle tagging disabled; generated navigation extends onto terrain outside the city walls. Review and test NPC navigation before use.",
+    "cells": [
+      "RiftenCityNorthwest",
+      "RiftenCityNorth",
+      "RiftenCityNortheast",
+      "RiftenCityWest",
+      "RiftenOrigin",
+      "RiftenCityEast",
+      "RiftenCitySouthwest",
+      "RiftenCitySouth",
+      "RiftenCitySoutheast"
+    ],
+    "view": "exterior",
+    "azimuth": 0,
+    "elevation": 78,
+    "bounds": [
+      167936,
+      -102400,
+      180224,
+      -90112
+    ]
+  },
+  {
+    "id": "winterhold",
+    "title": "Winterhold",
+    "cells": [
+      "WinterholdExterior06",
+      "WinterholdExterior01",
+      "WinterholdExterior05",
+      "WinterholdExterior02"
+    ],
+    "view": "exterior",
+    "azimuth": 0,
+    "elevation": 90,
+    "bounds": [
+      106496,
+      98304,
+      114688,
+      106496
+    ]
+  },
+  {
+    "id": "dawnstar",
+    "title": "Dawnstar",
+    "cells": [
+      "DawnstarDBSanctuaryExterior",
+      "DawnstarExterior04",
+      "DawnstarExterior07",
+      "Dawnstar03Exterior",
+      "DawnstarExterior08",
+      "DawnstarExterior09",
+      "DawnstarWesternMineExterior",
+      "DawnstarExterior05",
+      "DawnstarExterior06",
+      "DawnstarExterior01",
+      "Dawnstar02Exterior"
+    ],
+    "view": "exterior",
+    "azimuth": 0,
+    "elevation": 78,
+    "bounds": [
+      24576,
+      98304,
+      36864,
+      114688
+    ]
+  },
+  {
+    "id": "dragon-bridge",
+    "title": "Dragon Bridge",
+    "cells": [
+      "DragonBridgeExterior01",
+      "DragonBridgeExterior02",
+      "DragonBridgeExterior03",
+      "DragonBridgeExterior04"
+    ],
+    "view": "exterior",
+    "azimuth": 0,
+    "elevation": 78,
+    "bounds": [
+      -106496,
+      77824,
+      -98304,
+      86016
+    ]
+  },
+  {
+    "id": "falkreath",
+    "title": "Falkreath",
+    "cells": [
+      "FalkreathExterior03",
+      "FalkreathExterior04",
+      "FalkreathExterior02",
+      "FalkreathExterior01"
+    ],
+    "view": "exterior",
+    "azimuth": 0,
+    "elevation": 78,
+    "bounds": [
+      -32768,
+      -90112,
+      -24576,
+      -81920
+    ]
+  },
+  {
+    "id": "morthal",
+    "title": "Morthal",
+    "cells": [
+      "MorthalExterior02",
+      "MorthalExterior01",
+      "MorthalExterior03",
+      "MorthalExterior04"
+    ],
+    "view": "exterior",
+    "azimuth": 0,
+    "elevation": 78,
+    "bounds": [
+      -40960,
+      61440,
+      -32768,
+      69632
+    ]
+  },
+  {
+    "id": "rorikstead",
+    "title": "Rorikstead",
+    "cells": [
+      "RoriksteadExterior01",
+      "RoriksteadEdge",
+      "RoriksteadExterior04",
+      "RoriksteadExterior03"
+    ],
+    "view": "exterior",
+    "azimuth": 0,
+    "elevation": 78,
+    "bounds": [
+      -90112,
+      4096,
+      -77824,
+      12288
+    ]
+  }
+]

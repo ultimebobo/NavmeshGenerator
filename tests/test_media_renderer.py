@@ -91,6 +91,43 @@ class NavigationOcclusionTests(unittest.TestCase):
 
 
 class ComparisonCountsTests(unittest.TestCase):
+    def test_cell_metadata_deduplicates_identities_and_survives_view_override(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "scene.glb"
+            Path(str(path) + ".metadata.json").write_text(json.dumps({"metadata": {
+                "selected_cell": {"form_id": "00000003", "is_interior": True},
+                "selected_cells": [{"form_id": "0000000a", "is_interior": False},
+                                   {"form_id": "0000000A", "is_interior": False},
+                                   {"form_id": "0000000B", "is_interior": False}],
+            }}))
+            settings = renderer.presentation([], path, "exterior", None, None, 0, None)
+            self.assertEqual(settings["cell_count"], 2)
+            self.assertEqual(settings["cell_count_source"], "metadata")
+            self.assertIsNotNone(settings["metadata_source"])
+            cropped = renderer.presentation([], path, "exterior", None, (-1, -1, 1, 1), 0, None)
+            self.assertTrue(cropped["cell_count_before_crop"])
+            overridden = renderer.presentation([], path, "exterior", None, (-1, -1, 1, 1),
+                                               0, None, cell_count=1)
+            self.assertEqual(overridden["cell_count"], 1)
+            self.assertEqual(overridden["cell_count_source"], "override")
+            self.assertFalse(overridden["cell_count_before_crop"])
+
+    def test_missing_metadata_does_not_invent_cell_count(self):
+        settings = renderer.presentation([], Path("absent.glb"), "auto", None, None, 0, None)
+        self.assertIsNone(settings["cell_count"])
+        self.assertEqual(renderer.cell_caption(None), "Cell count unavailable")
+
+    def test_cell_counts_are_drawn_on_scenes_and_comparisons(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            with patch.object(renderer, "render", return_value=renderer.Image.new("RGB", (1, 1))):
+                with patch.object(renderer, "text") as draw_text:
+                    renderer.comparison([], folder, cell_count=3)
+                    self.assertIn("3 selected cells", [call.args[2] for call in draw_text.call_args_list])
+                with patch.object(renderer, "text") as draw_text:
+                    renderer.scene_image([], folder, "scene.png", "Scene", "Synthetic", cell_count=1)
+                    self.assertIn("1 selected cell", [call.args[2] for call in draw_text.call_args_list])
+
     def test_counts_include_hidden_faces_and_all_navigation_materials(self):
         scene = [
             ("Collision", "covering deck", square(100, 4)),
@@ -221,6 +258,7 @@ class InteriorCutawayTests(unittest.TestCase):
                 self.assertEqual(settings["view"], "interior")
                 self.assertEqual(settings["cut_height"], renderer.INTERIOR_CUT_MARGIN)
                 self.assertEqual(settings["elevation"], 70)
+                self.assertEqual(settings["cell_count"], 1)
                 self.assertEqual(len(settings["metadata_source"]["sha256"]), 64)
                 with renderer.Image.open(folder / filename) as image:
                     self.assertGreater(np.all(np.array(image) == renderer.GENERATED, axis=2).sum(), 100)
@@ -229,6 +267,10 @@ class InteriorCutawayTests(unittest.TestCase):
                     renderer.main()
                 self.assertEqual(error.exception.code, 2)
             with patch.object(sys, "argv", argv + ["--cut-height", "nan"]):
+                with self.assertRaises(SystemExit) as error:
+                    renderer.main()
+                self.assertEqual(error.exception.code, 2)
+            with patch.object(sys, "argv", argv + ["--cell-count", "0"]):
                 with self.assertRaises(SystemExit) as error:
                     renderer.main()
                 self.assertEqual(error.exception.code, 2)

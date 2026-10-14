@@ -1,8 +1,9 @@
 # Navmesh Generator API
 
 This is the source reference for the project's C++ code. The public entry points
-are in `src`; the `lib` and `tools` trees contain third-party code and are outside
-this reference.
+are in `src`; vendored code under `lib` and Python utilities under `tools` are outside
+this reference. The showcase utilities and renderer are described in the
+[scene image rendering guide](render-media.md).
 
 ## Code map
 
