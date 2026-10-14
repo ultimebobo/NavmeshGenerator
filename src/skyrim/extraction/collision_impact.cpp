@@ -73,6 +73,28 @@ namespace navmesh::skyrim
                         selected_.insert(rank);
                     }
                 }
+                // Historical ownership keeps moved/deleted hearths available at their
+                // own plugin cutoff without scanning the complete load order per fire.
+                for (const auto &record : resolved.records)
+                {
+                    CheckCancellation();
+                    if (record.type != "REFR")
+                    {
+                        continue;
+                    }
+                    std::set<std::uint32_t> owners;
+                    for (const auto &origin : record.origins)
+                    {
+                        if (origin.cellFormId)
+                        {
+                            owners.insert(*origin.cellFormId);
+                        }
+                    }
+                    for (const auto owner : owners)
+                    {
+                        contextByCell_[owner].push_back(&record);
+                    }
+                }
                 if (!input.plugin.empty() && selected_.empty())
                 {
                     throw std::invalid_argument("Rebuild plugin is not active in the resolved load order: " +
@@ -285,17 +307,55 @@ namespace navmesh::skyrim
                 return reference;
             }
 
+            /// Resolve hearth/fire dependencies at the same historical cutoff as the compared placement.
+            core::Cell CollisionSourceContext(const core::Reference &reference, const RecordOrigin &origin,
+                                              std::size_t cutoff) const
+            {
+                core::Cell source{.references = {reference}};
+                const bool hearth = IsHearthModelPath(reference.modelPath);
+                if ((!hearth && !IsPersistentFireReference(reference)) || !origin.cellFormId)
+                {
+                    return source;
+                }
+                const auto owner = contextByCell_.find(*origin.cellFormId);
+                if (owner == contextByCell_.end())
+                {
+                    return source;
+                }
+                for (const auto *contextRecord : owner->second)
+                {
+                    if (contextRecord->formId == reference.id)
+                    {
+                        continue;
+                    }
+                    const auto *contextOrigin = OriginAt(*contextRecord, cutoff);
+                    if (!contextOrigin || contextOrigin->cellFormId != origin.cellFormId ||
+                        contextOrigin->worldspaceFormId != origin.worldspaceFormId)
+                    {
+                        continue;
+                    }
+                    const auto context = ReferenceAt(*contextRecord, cutoff);
+                    if (context && (context->baseRecordType == "STAT" || context->baseRecordType == "MSTT") &&
+                        (IsHearthModelPath(context->modelPath) || (hearth && IsPersistentFireReference(*context))))
+                    {
+                        source.references.push_back(*context);
+                    }
+                }
+                return source;
+            }
+
             PlacedCollision Extract(const ResolvedRecord &record, const RecordOrigin *origin, std::size_t cutoff,
                                     bool previousAssets)
             {
                 PlacedCollision result{.origin = origin};
                 const auto reference = ReferenceAt(record, cutoff);
-                if (!origin || !reference || reference->modelPath.empty() || reference->deleted ||
-                    reference->initiallyDisabled)
+                const bool hearth = reference && IsHearthModelPath(reference->modelPath);
+                if (!origin || !reference || reference->modelPath.empty() ||
+                    ((reference->deleted || reference->initiallyDisabled) && !hearth))
                 {
                     return result;
                 }
-                const core::Cell source{.references = {*reference}};
+                const auto source = CollisionSourceContext(*reference, *origin, cutoff);
                 auto geometry = ExtractGeometry(input_.dataDirectory, source,
                                                 previousAssets ? input_.previousCacheDirectory : input_.cacheDirectory,
                                                 {}, input_.cancelled,
@@ -303,13 +363,19 @@ namespace navmesh::skyrim
                 CheckCancellation();
                 if (geometry.modelsUnreadable || !geometry.archiveSearchComplete)
                 {
-                    throw std::runtime_error(std::format("Cannot determine collision impact for REFR {:08X}: {} ({})",
-                                                         record.formId, reference->modelPath,
-                                                         geometry.archiveSearchComplete
-                                                             ? geometry.references.front().failure
-                                                             : "archive model search incomplete"));
+                    const auto unreadable = std::find_if(
+                        geometry.scene.coverage.begin(), geometry.scene.coverage.end(),
+                        [](const auto &coverage) { return coverage.status == core::GeometryCoverage::Unreadable; });
+                    throw std::runtime_error(
+                        std::format("Cannot determine collision impact for REFR {:08X}: {} ({})",
+                                    unreadable != geometry.scene.coverage.end() ? unreadable->source.reference.formId
+                                                                                : record.formId,
+                                    unreadable != geometry.scene.coverage.end() ? unreadable->source.modelPath
+                                                                                : reference->modelPath,
+                                    unreadable != geometry.scene.coverage.end() ? unreadable->detail
+                                                                                : "archive model search incomplete"));
                 }
-                if (geometry.modelsMissing)
+                if (geometry.scene.coverage.front().status == core::GeometryCoverage::Missing)
                 {
                     // A completed provider search establishes absence; missing models supply no collision.
                     if (!previousAssets)
@@ -324,12 +390,20 @@ namespace navmesh::skyrim
                         }
                         statistics_.missingModels.insert(std::move(path));
                     }
-                    return result;
+                    if (!hearth)
+                    {
+                        return result;
+                    }
                 }
                 for (std::size_t triangle{}; triangle < geometry.scene.mesh.triangles.size(); ++triangle)
                 {
                     const auto &geometrySource = geometry.scene.geometrySources.at(
                         geometry.scene.triangleProvenance.at(triangle).geometrySource);
+                    if (geometrySource.reference.formId != reference->id &&
+                        !(hearth && geometrySource.sourceType == core::GeometrySourceType::NavigationExclusion))
+                    {
+                        continue;
+                    }
                     if (geometrySource.sourceType == core::GeometrySourceType::Collision ||
                         geometrySource.sourceType == core::GeometrySourceType::NavigationExclusion)
                     {
@@ -591,6 +665,7 @@ namespace navmesh::skyrim
             ModelGeometryCache &cache_;
             ImpactSelectionStatistics &statistics_;
             std::map<std::string, std::size_t> ranks_;
+            std::map<std::uint32_t, std::vector<const ResolvedRecord *>> contextByCell_;
             std::set<std::size_t> selected_;
             std::set<std::pair<std::uint32_t, std::size_t>> compared_;
             std::set<std::uint32_t> targets_;

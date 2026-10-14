@@ -3,15 +3,19 @@
 - Read the relevant design notes in `docs/` before changing behavior and keep
   those notes aligned with the changes. The README is a welcome page for users,
   not a technical change log. Update it only when the introduction, getting-started
-  steps, or user workflow meaningfully changes; document implementation details,
-  bug fixes, and algorithm contracts in the relevant `docs/` pages instead.
+  steps, or user workflow meaningfully changes. Update the relevant existing
+  contract when behavior changes; keep implementation reasoning near the code.
+- Keep documentation proportional to the change. Small fixes usually need only
+  a sentence or short paragraph in one canonical page. Edit existing text instead
+  of appending a change narrative; do not duplicate contracts across guides or
+  expand API/architecture catalogs unless module responsibilities change.
 - Add Doxygen comments when adding or changing project-owned C++ public APIs in
   `src/`: types, functions, methods, and non-obvious fields. Put comments by the
   declaration in the header. Describe the purpose, units and coordinate space,
   input constraints, return or failure behavior, and side effects where relevant.
 - Use `///` for short descriptions and `/** ... */` with `@param`, `@return`, or
   `@warning` when the contract needs them. Explain behavior and invariants rather
-  than repeating the C++ signature. Keep documentation accurate when code changes.
+  than repeating the C++ signature. Keep comments concise and update only affected contracts.
 - Add Doxygen comments to internal algorithms when their assumptions or steps
   are not clear from the code. Do not blanket-document trivial implementation
   details or edit vendored code under `lib/`.

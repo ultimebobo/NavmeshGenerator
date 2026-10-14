@@ -23,7 +23,7 @@ Seats, shelves and cabinet tops cannot become floor evidence or seam-repair anch
 Furniture without supported collision remains unsupported for generation; visual
 fallback meshes do not supply permanent furniture obstruction.
 
-Recognized fire effects supply a `navigation_exclusion` source even when their
+Persistent static fire effects supply a `navigation_exclusion` source even when their
 NIF has no supported solid collision. Extraction bounds visible coal, ember and
 log meshes in model coordinates, including shape and ancestor transforms, then
 applies the placed reference transform. Flame geometry supplies bounds when fuel
@@ -35,6 +35,11 @@ or flame geometry report unsupported coverage. This asset policy is shared by
 inspection, single-cell generation, batch generation and collision-impact selection.
 Candidate source evidence records the obstacle tag, and obstacle triangles are
 counted in `rejected_obstruction`.
+
+Fire bounds are rectangular. A containing static hearth's decoded recessed bed
+supplies their XY extent and orientation. Transient fire effects, hazards and
+scripted activators supply no permanent exclusion; trap mechanisms retain collision.
+Collision-impact selection includes historical hearth/fire dependencies.
 
 Operable DOOR references do not supply permanent collision or render geometry:
 their closed model pose would obstruct an intended portal. Extraction records

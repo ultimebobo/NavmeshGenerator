@@ -18,6 +18,7 @@
 #include <mutex>
 #include <memory>
 #include <cstring>
+#include <limits>
 
 namespace
 {
@@ -47,13 +48,33 @@ namespace
         return path;
     }
 
-    /// Fire effects need explicit hazard geometry even when they have no solid Havok body.
-    [[nodiscard]] bool IsFireEffect(const std::string &path)
+    /// Only persistent static fire placements may supply a permanent navigation exclusion.
+    [[nodiscard]] bool IsFireEffect(const navmesh::core::Reference &reference)
     {
-        const auto normalized = NormalizedModelPath(path);
+        if (reference.baseRecordType != "STAT" && reference.baseRecordType != "MSTT")
+        {
+            return false;
+        }
+        const auto normalized = NormalizedModelPath(reference.modelPath);
         const auto name = std::filesystem::path(normalized).filename().string();
+        constexpr std::array transientKinds{"trap", "hazard", "toggle", "projectile", "breath", "stream", "jet"};
+        if (std::any_of(transientKinds.begin(), transientKinds.end(),
+                        [&](const char *kind) { return normalized.find(kind) != std::string::npos; }))
+        {
+            return false;
+        }
         return (normalized.starts_with("effects/") || normalized.starts_with("fx/")) &&
                (name.starts_with("fxfire") || name.starts_with("fire"));
+    }
+
+    /// Hearth model names identify possible hosts; only an actual recessed bed permits fitting a fire.
+    [[nodiscard]] bool IsHearthAsset(const std::string &path)
+    {
+        const auto normalized = NormalizedModelPath(path);
+        const auto name = std::filesystem::path(normalized).stem().string();
+        return normalized.find("trap") == std::string::npos &&
+               (name.find("firepit") != std::string::npos || name.find("fireplace") != std::string::npos ||
+                name.find("hearth") != std::string::npos);
     }
 
     /// Placed furniture and containers obstruct movement without supplying climbable navigation support.
@@ -158,6 +179,7 @@ namespace
         TriangleGeometry render;
         TriangleGeometry collision;
         TriangleGeometry fireExclusion;
+        navmesh::core::AABB hearthBedBounds;
         std::vector<std::string> collisionShapeTypes;
         bool nonSolidCollision{};
         std::string version;
@@ -447,51 +469,66 @@ namespace
         }
     }
 
-    /** Bound the visible fire bed in model coordinates, including shape and ancestor transforms.
-     * Fuel meshes define the footprint; flame meshes are used only when no fuel exists.
-     * Billboard glow and distortion meshes are excluded because their extent is a visual effect,
-     * not the dangerous surface. The closed bounds are policy geometry, not Havok collision.
-     */
-    [[nodiscard]] TriangleGeometry BuildFireExclusion(const nifly::NifFile &nif)
+    /// Valid triangle samples in model coordinates; unused or malformed vertices cannot enlarge the footprint.
+    struct FireFootprint
     {
-        navmesh::core::AABB fuelBounds;
-        navmesh::core::AABB flameBounds;
-        for (auto *shape : nif.GetShapes())
+        std::vector<navmesh::core::Vec3> points;
+        std::size_t invalidIndices{};
+        std::size_t degenerateTriangles{};
+    };
+
+    /// Collect finite, nondegenerate fuel/flame triangles after applying shape and ancestor transforms.
+    void CollectFireFootprint(const nifly::NifFile &nif, nifly::NiShape *shape, FireFootprint &footprint)
+    {
+        std::vector<nifly::Vector3> vertices;
+        std::vector<nifly::Triangle> triangles;
+        if (!nif.GetVertsForShape(shape, vertices) || !shape->GetTriangles(triangles))
         {
-            auto name = shape->name.get();
-            std::transform(name.begin(), name.end(), name.begin(),
-                           [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
-            const bool fuel = name.find("coal") != std::string::npos || name.find("ember") != std::string::npos ||
-                              name.find("log") != std::string::npos;
-            const bool flame = name.find("flame") != std::string::npos;
-            if (!fuel && !flame)
-            {
-                continue;
-            }
-            std::vector<nifly::Vector3> vertices;
-            std::vector<nifly::Triangle> triangles;
-            if (!nif.GetVertsForShape(shape, vertices) || !shape->GetTriangles(triangles) || triangles.empty())
-            {
-                continue;
-            }
-            nifly::MatTransform parentTransform;
-            parentTransform.Clear();
-            if (const auto *parent = nif.GetParentNode(shape))
-            {
-                nif.GetNodeTransformToGlobal(parent->name.get(), parentTransform);
-            }
-            auto &bounds = fuel ? fuelBounds : flameBounds;
-            for (const auto &vertex : vertices)
-            {
-                const auto point = parentTransform.ApplyTransform(shape->transform.ApplyTransform(vertex));
-                const navmesh::core::Vec3 position{point.x, point.y, point.z};
-                if (IsFiniteVec3(position))
-                {
-                    bounds.Expand(position);
-                }
-            }
+            return;
         }
-        const auto &bounds = fuelBounds.IsValid() ? fuelBounds : flameBounds;
+        nifly::MatTransform parentTransform;
+        parentTransform.Clear();
+        if (const auto *parent = nif.GetParentNode(shape))
+        {
+            nif.GetNodeTransformToGlobal(parent->name.get(), parentTransform);
+        }
+        for (auto &vertex : vertices)
+        {
+            vertex = parentTransform.ApplyTransform(shape->transform.ApplyTransform(vertex));
+        }
+        for (const auto &triangle : triangles)
+        {
+            if (triangle.p1 >= vertices.size() || triangle.p2 >= vertices.size() || triangle.p3 >= vertices.size())
+            {
+                ++footprint.invalidIndices;
+                continue;
+            }
+            const auto convert = [](const nifly::Vector3 &point)
+            { return navmesh::core::Vec3{point.x, point.y, point.z}; };
+            const auto a = convert(vertices[triangle.p1]);
+            const auto b = convert(vertices[triangle.p2]);
+            const auto c = convert(vertices[triangle.p3]);
+            if (!IsFiniteVec3(a) || !IsFiniteVec3(b) || !IsFiniteVec3(c))
+            {
+                continue;
+            }
+            const auto ab = b - a;
+            const auto ac = c - a;
+            const double normalX = static_cast<double>(ab.y) * ac.z - static_cast<double>(ab.z) * ac.y;
+            const double normalY = static_cast<double>(ab.z) * ac.x - static_cast<double>(ab.x) * ac.z;
+            const double normalZ = static_cast<double>(ab.x) * ac.y - static_cast<double>(ab.y) * ac.x;
+            if (normalX == 0 && normalY == 0 && normalZ == 0)
+            {
+                ++footprint.degenerateTriangles;
+                continue;
+            }
+            footprint.points.insert(footprint.points.end(), {a, b, c});
+        }
+    }
+
+    /// Build a closed rectangular exclusion in model coordinates; planar bounds remain a flat exclusion.
+    [[nodiscard]] TriangleGeometry BuildBoundsExclusion(const navmesh::core::AABB &bounds, const std::string &shape)
+    {
         TriangleGeometry result;
         if (!bounds.IsValid() || bounds.min.x >= bounds.max.x || bounds.min.y >= bounds.max.y)
         {
@@ -504,11 +541,99 @@ namespace
                            {high.x, high.y, high.z}, {low.x, high.y, high.z}};
         result.triangles = {{{0, 2, 1}}, {{0, 3, 2}}, {{4, 5, 6}}, {{4, 6, 7}}, {{0, 1, 5}}, {{0, 5, 4}},
                             {{1, 2, 6}}, {{1, 6, 5}}, {{2, 3, 7}}, {{2, 7, 6}}, {{3, 0, 4}}, {{3, 4, 7}}};
-        result.shapes.push_back(fuelBounds.IsValid() ? "fire fuel bounds" : "fire flame bounds");
+        result.shapes.push_back(shape);
         return result;
     }
 
-    [[nodiscard]] NifGeometry LoadNif(const std::filesystem::path &path, bool includeRender = true)
+    /** Bound valid transformed fuel triangles, using flames only when fuel is absent.
+     * Glow and distortion billboards never define the footprint. Bounds use model-local Skyrim units;
+     * the rectangular box is policy geometry, not Havok collision.
+     */
+    [[nodiscard]] TriangleGeometry BuildFireExclusion(const nifly::NifFile &nif)
+    {
+        FireFootprint fuelFootprint;
+        FireFootprint flameFootprint;
+        for (auto *shape : nif.GetShapes())
+        {
+            auto name = shape->name.get();
+            std::transform(name.begin(), name.end(), name.begin(),
+                           [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+            const bool fuel = name.find("coal") != std::string::npos || name.find("ember") != std::string::npos ||
+                              name.find("log") != std::string::npos;
+            const bool flame = name.find("flame") != std::string::npos;
+            if (!fuel && !flame)
+            {
+                continue;
+            }
+            CollectFireFootprint(nif, shape, fuel ? fuelFootprint : flameFootprint);
+        }
+        const bool hasFuel = !fuelFootprint.points.empty();
+        auto &footprint = hasFuel ? fuelFootprint : flameFootprint;
+        navmesh::core::AABB bounds;
+        for (const auto &point : footprint.points)
+        {
+            bounds.Expand(point);
+        }
+        auto result = BuildBoundsExclusion(bounds, hasFuel ? "fire fuel bounds" : "fire flame bounds");
+        result.invalidIndices = footprint.invalidIndices;
+        result.degenerateTriangles = footprint.degenerateTriangles;
+        return result;
+    }
+
+    /** Identify a hearth's recessed bed from model geometry, excluding its rim and surrounding floor.
+     * The horizontal plane with the greatest projected area defines the surrounding floor.
+     * Triangles descending below that plane define the bed's rectangular bounds. Missing floor/recess
+     * evidence leaves invalid bounds, so a model name alone cannot enlarge a fire exclusion.
+     */
+    [[nodiscard]] navmesh::core::AABB FindHearthBedBounds(const nifly::NifFile &nif)
+    {
+        FireFootprint geometry;
+        for (auto *shape : nif.GetShapes())
+        {
+            CollectFireFootprint(nif, shape, geometry);
+        }
+        constexpr float planeTolerance = 0.001F;
+        std::map<float, double> floorAreas;
+        for (std::size_t index = 0; index + 2 < geometry.points.size(); index += 3)
+        {
+            const auto &a = geometry.points[index];
+            const auto &b = geometry.points[index + 1];
+            const auto &c = geometry.points[index + 2];
+            if (std::max({a.z, b.z, c.z}) - std::min({a.z, b.z, c.z}) <= planeTolerance)
+            {
+                const auto height = std::round((a.z + b.z + c.z) / (3 * planeTolerance)) * planeTolerance;
+                floorAreas[height] += std::abs((static_cast<double>(b.x) - a.x) * (c.y - a.y) -
+                                               (static_cast<double>(b.y) - a.y) * (c.x - a.x));
+            }
+        }
+        navmesh::core::AABB bounds;
+        if (floorAreas.empty())
+        {
+            return bounds;
+        }
+        const auto floor = std::max_element(floorAreas.begin(), floorAreas.end(),
+                                            [](const auto &a, const auto &b) { return a.second < b.second; })
+                               ->first;
+        for (std::size_t index = 0; index + 2 < geometry.points.size(); index += 3)
+        {
+            const auto &a = geometry.points[index];
+            const auto &b = geometry.points[index + 1];
+            const auto &c = geometry.points[index + 2];
+            if (std::min({a.z, b.z, c.z}) < floor - planeTolerance)
+            {
+                bounds.Expand(a);
+                bounds.Expand(b);
+                bounds.Expand(c);
+            }
+        }
+        if (bounds.IsValid())
+        {
+            bounds.max.z = std::max(bounds.max.z, floor);
+        }
+        return bounds;
+    }
+
+    [[nodiscard]] NifGeometry LoadNif(const std::filesystem::path &path, bool includeRender, bool includeHearth)
     {
         NifGeometry result;
         nifly::NifFile nif;
@@ -518,6 +643,10 @@ namespace
         }
         result.version = nif.GetHeader().GetVersion().String();
         LoadPackedCollision(nif, result.collision, result.collisionShapeTypes, result.nonSolidCollision);
+        if (includeHearth)
+        {
+            result.hearthBedBounds = FindHearthBedBounds(nif);
+        }
         if (!includeRender)
         {
             return result;
@@ -583,13 +712,120 @@ namespace
         return relativePath;
     }
 
+    /// A resolved, enabled static hearth bed and its model-to-world frame, independent of fire placement order.
+    struct HearthPlacement
+    {
+        std::uint32_t referenceId{};
+        navmesh::core::AABB bounds;
+        navmesh::core::Transform transform;
+        float scale{};
+    };
+
+    /// Invert the uniform scale and orthogonal rotation of a placed Skyrim reference.
+    [[nodiscard]] navmesh::core::Vec3 HearthLocalPoint(const HearthPlacement &hearth, navmesh::core::Vec3 worldPoint)
+    {
+        const auto &matrix = hearth.transform.matrix;
+        const auto relative = worldPoint - navmesh::core::Vec3{matrix[12], matrix[13], matrix[14]};
+        const auto scaleSquared = static_cast<double>(hearth.scale) * hearth.scale;
+        return {static_cast<float>((matrix[0] * relative.x + matrix[1] * relative.y + matrix[2] * relative.z) /
+                                   scaleSquared),
+                static_cast<float>((matrix[4] * relative.x + matrix[5] * relative.y + matrix[6] * relative.z) /
+                                   scaleSquared),
+                static_cast<float>((matrix[8] * relative.x + matrix[9] * relative.y + matrix[10] * relative.z) /
+                                   scaleSquared)};
+    }
+
+    /** Fit fire boxes to containing hearth beds after every source has been decoded.
+     * Matching occurs in each hearth's model frame and requires the fire center to lie within the bed in XY
+     * together with overlapping vertical extents. The closest bed wins, with reference identity breaking ties.
+     * Only copied scene vertices change; shared model/placement cache entries and triangle identities stay valid.
+     */
+    void FitFireExclusionsToHearths(navmesh::skyrim::GeometryExtraction &geometry,
+                                    const std::vector<HearthPlacement> &hearths)
+    {
+        for (auto &report : geometry.references)
+        {
+            if (report.sourceType != "navigation_exclusion")
+            {
+                continue;
+            }
+            const HearthPlacement *matched = nullptr;
+            navmesh::core::AABB matchedFireBounds;
+            float closestDistance = std::numeric_limits<float>::max();
+            for (const auto &hearth : hearths)
+            {
+                navmesh::core::AABB fireBounds;
+                for (std::size_t index = report.meshVertexOffset; index < report.meshVertexOffset + report.vertices;
+                     ++index)
+                {
+                    fireBounds.Expand(HearthLocalPoint(hearth, geometry.scene.mesh.vertices[index]));
+                }
+                const auto center = fireBounds.Center();
+                if (center.x < hearth.bounds.min.x || center.x > hearth.bounds.max.x ||
+                    center.y < hearth.bounds.min.y || center.y > hearth.bounds.max.y ||
+                    fireBounds.min.z > hearth.bounds.max.z || fireBounds.max.z < hearth.bounds.min.z)
+                {
+                    continue;
+                }
+                const auto offset = center - hearth.bounds.Center();
+                const auto distance =
+                    (offset.x * offset.x + offset.y * offset.y + offset.z * offset.z) * hearth.scale * hearth.scale;
+                if (distance < closestDistance ||
+                    (distance == closestDistance && matched && hearth.referenceId < matched->referenceId))
+                {
+                    matched = &hearth;
+                    matchedFireBounds = fireBounds;
+                    closestDistance = distance;
+                }
+            }
+            if (!matched)
+            {
+                continue;
+            }
+            auto bounds = matched->bounds;
+            bounds.min.z = std::min(bounds.min.z, matchedFireBounds.min.z);
+            bounds.max.z = std::max(bounds.max.z, matchedFireBounds.max.z);
+            const auto fitted = BuildBoundsExclusion(bounds, "fire hearth bounds");
+            for (std::size_t index = 0; index < fitted.vertices.size(); ++index)
+            {
+                geometry.scene.mesh.vertices[report.meshVertexOffset + index] =
+                    matched->transform.ApplyPoint(fitted.vertices[index]);
+            }
+            report.collisionType = fitted.shapes.front();
+            report.shapes = fitted.shapes;
+            const auto sourceIndex = geometry.scene.triangleProvenance[report.meshTriangleOffset].geometrySource;
+            auto &source = geometry.scene.geometrySources[sourceIndex];
+            source.collisionType = report.collisionType;
+            for (auto &displaySource : geometry.scene.geometrySources)
+            {
+                if (displaySource.reference.formId == report.formId &&
+                    displaySource.sourceType == navmesh::core::GeometrySourceType::RenderFallback)
+                {
+                    displaySource.collisionType = "render mesh (supplemental; collision: fire hearth bounds)";
+                }
+            }
+            for (auto &coverage : geometry.scene.coverage)
+            {
+                if (coverage.source.reference.formId == report.formId &&
+                    coverage.source.sourceType == navmesh::core::GeometrySourceType::NavigationExclusion)
+                {
+                    coverage.source = source;
+                    coverage.detail = std::format("fire navigation exclusion fitted to recessed hearth REFR {:08X}",
+                                                  matched->referenceId);
+                }
+            }
+        }
+    }
+
     [[nodiscard]] bool IsFilteredReference(const navmesh::core::Reference &reference)
     {
-        // Actors and decorative effects do not provide stable scene support.
+        // Actors and transient or decorative effects do not provide stable scene support.
         // Operable doors are traversable portals. Their closed model pose cannot
         // supply permanent obstruction or floor evidence; surrounding static
         // frames and thresholds remain separate collision placements.
-        if (reference.recordType == "ACHR" || reference.baseRecordType == "DOOR")
+        if (reference.recordType == "ACHR" || reference.baseRecordType == "DOOR" ||
+            reference.baseRecordType == "HAZD" || reference.baseRecordType == "PROJ" ||
+            reference.baseRecordType == "EXPL")
         {
             return true;
         }
@@ -602,9 +838,9 @@ namespace
                        [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
         std::replace(path.begin(), path.end(), '/', '\\');
         path.insert(path.begin(), '\\');
-        return (!IsFireEffect(reference.modelPath) && path.find("\\effects\\") != std::string::npos) ||
+        return (!IsFireEffect(reference) && path.find("\\effects\\") != std::string::npos) ||
                path.find("\\animated\\") != std::string::npos ||
-               (!IsFireEffect(reference.modelPath) && path.find("\\fx\\") != std::string::npos);
+               (!IsFireEffect(reference) && path.find("\\fx\\") != std::string::npos);
     }
 
     [[nodiscard]] std::string AssetKey(const std::filesystem::path &path)
@@ -666,6 +902,16 @@ namespace
 
 namespace navmesh::skyrim
 {
+    bool IsHearthModelPath(const std::string &modelPath)
+    {
+        return IsHearthAsset(modelPath);
+    }
+
+    bool IsPersistentFireReference(const core::Reference &reference)
+    {
+        return IsFireEffect(reference);
+    }
+
     namespace
     {
         /// Cache identities distinguish asset revisions and render/collision extraction policies.
@@ -756,7 +1002,7 @@ namespace navmesh::skyrim
             return found != models.end() && !found->second.value->version.empty();
         }
         std::shared_ptr<const NifGeometry> Model(const std::filesystem::path &path, bool includeRender,
-                                                 const std::string &key)
+                                                 bool includeHearth, const std::string &key)
         {
             std::lock_guard lock(mutex);
             if (auto found = models.find(key); found != models.end())
@@ -765,7 +1011,7 @@ namespace navmesh::skyrim
                 ++statistics.modelHits;
                 return found->second.value;
             }
-            auto value = std::make_shared<const NifGeometry>(LoadNif(path, includeRender));
+            auto value = std::make_shared<const NifGeometry>(LoadNif(path, includeRender, includeHearth));
             ++statistics.modelsDecoded;
             std::size_t shapeBytes = value->collisionShapeTypes.capacity() * sizeof(std::string);
             for (const auto &shape : value->collisionShapeTypes)
@@ -844,7 +1090,8 @@ namespace navmesh::skyrim
         const auto cachedKey = [&](const std::filesystem::path &relative)
         {
             return (cacheDirectory / relative).lexically_normal().generic_string() +
-                   (navigationOnly ? ":navigation-snapshot" : ":display-snapshot");
+                   (navigationOnly ? ":navigation-snapshot" : ":display-snapshot") +
+                   (IsHearthAsset(relative.generic_string()) ? ":hearth" : "");
         };
         output.archiveSearchComplete = ExtractBsaModels(
             dataDirectory, cacheDirectory, cell, assets, [&](const auto &relative)
@@ -852,6 +1099,7 @@ namespace navmesh::skyrim
             [&](const auto &requested)
             { return cache.impl_->ExtractArchives(requested, dataDirectory, cacheDirectory, assets); });
         const auto totalReferences = cell.references.size();
+        std::vector<HearthPlacement> hearths;
         for (std::size_t referenceIndex{}; referenceIndex < totalReferences; ++referenceIndex)
         {
             if (cancelled && cancelled())
@@ -863,7 +1111,8 @@ namespace navmesh::skyrim
                 progress(referenceIndex, totalReferences);
             }
             const auto &reference = cell.references[referenceIndex];
-            const bool fireEffect = IsFireEffect(reference.modelPath);
+            const bool fireEffect = IsFireEffect(reference);
+            const bool hearthAsset = IsHearthAsset(reference.modelPath);
             const bool includeRender = !navigationOnly || fireEffect;
             GeometryReferenceReport report{.formId = reference.id,
                                            .baseFormId = reference.baseObjectId,
@@ -895,7 +1144,8 @@ namespace navmesh::skyrim
             }
             if (IsFilteredReference(reference))
             {
-                report.failure = "excluded by navigation policy (non-fire effect, door, animated, or actor reference)";
+                report.failure =
+                    "excluded by navigation policy (transient/decorative effect, door, animated, or actor reference)";
                 output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
                 ++output.modelsExcluded;
                 output.references.push_back(std::move(report));
@@ -910,10 +1160,22 @@ namespace navmesh::skyrim
             const auto modelPath = assets && looseWinner != assets->looseModels.end() ? looseWinner->second
                                    : std::filesystem::exists(loosePath)               ? loosePath
                                                                                       : cachedPath;
-            const auto modelIdentity =
-                snapshotOwned && modelPath == cachedPath ? cachedKey(relativePath) : ModelKey(modelPath, includeRender);
-            const auto model = cache.impl_->Model(modelPath, includeRender, modelIdentity);
+            const auto modelIdentity = snapshotOwned && modelPath == cachedPath
+                                           ? cachedKey(relativePath)
+                                           : ModelKey(modelPath, includeRender) + (hearthAsset ? ":hearth" : "");
+            const auto model = cache.impl_->Model(modelPath, includeRender, hearthAsset, modelIdentity);
             const auto &nifGeometry = *model;
+            if (hearthAsset && (reference.baseRecordType == "STAT" || reference.baseRecordType == "MSTT") &&
+                nifGeometry.hearthBedBounds.IsValid() &&
+                nifGeometry.hearthBedBounds.min.x < nifGeometry.hearthBedBounds.max.x &&
+                nifGeometry.hearthBedBounds.min.y < nifGeometry.hearthBedBounds.max.y && reference.scale > 0 &&
+                std::isfinite(reference.scale) && IsFiniteVec3(reference.position) && IsFiniteVec3(reference.rotation))
+            {
+                hearths.push_back(
+                    {reference.id, nifGeometry.hearthBedBounds,
+                     core::Transform::FromSkyrimReference(reference.position, reference.rotation, reference.scale),
+                     reference.scale});
+            }
             const auto &mesh = fireEffect                                 ? nifGeometry.fireExclusion
                                : !nifGeometry.collision.triangles.empty() ? nifGeometry.collision
                                                                           : nifGeometry.render;
@@ -1070,6 +1332,7 @@ namespace navmesh::skyrim
                  : hasCollision ? "Havok collision loaded; render mesh retained as display-only fallback"
                                 : "render NIF loaded as low-confidence fallback; no supported collision"});
         }
+        FitFireExclusionsToHearths(output, hearths);
         if (progress)
         {
             progress(totalReferences, totalReferences);

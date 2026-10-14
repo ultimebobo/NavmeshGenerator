@@ -54,7 +54,7 @@ inside its owning group.
 
 The collision inspection layer also contains explicit fire navigation exclusions.
 Their provenance identifies `navigation_exclusion` and the obstacle-only tag;
-they represent fuel or flame bounds rather than decoded Havok collision.
+they represent fuel, flame or fitted hearth bounds rather than decoded Havok collision.
 Furniture collision retains the same tag so seats and cabinet surfaces cannot
 supply candidate floors. Visual furniture fallback remains display evidence.
 

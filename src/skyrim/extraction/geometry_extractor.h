@@ -105,6 +105,14 @@ namespace navmesh::skyrim
                                                   ModelGeometryCache *, bool);
     };
 
+    /// Recognize logical hearth/fireplace/fire-pit paths outside trap assets; performs no I/O.
+    /// Case, separators and an optional meshes prefix are ignored. Fitting still requires a decoded recessed bed.
+    [[nodiscard]] bool IsHearthModelPath(const std::string &modelPath);
+
+    /// Identify eligible static fires from the resolved base class and normalized logical model path.
+    /// Unknown classes and transient effects are ineligible; performs no I/O or geometry/transform validation.
+    [[nodiscard]] bool IsPersistentFireReference(const core::Reference &reference);
+
     /// Extract placed model geometry using resolved mod-manager assets when provided.
     /// @param dataDirectory Game Data directory for direct input and vanilla BSAs.
     /// @param cell Cell whose references are decoded in world coordinates.
@@ -118,8 +126,10 @@ namespace navmesh::skyrim
     /// navigationOnly excludes render-only support.
     /// Landscape rock assets are tagged as navigation obstacles while retaining their collision geometry.
     /// Furniture and containers retain supported collision as obstacles without supplying walkable floors.
-    /// Recognized fire effects contribute obstacle-only navigation exclusions from transformed fuel geometry,
-    /// or flame geometry when fuel is absent. Exclusions are distinct from Havok collision and render fallback.
+    /// Persistent static fires supply obstacle-only rectangular fuel bounds, or flame bounds when fuel is absent.
+    /// A containing decoded hearth bed determines XY dimensions/orientation; otherwise the fire keeps its own bounds.
+    /// Transient effects, hazards and scripted activators supply no fire exclusion. Fitting preserves shared caches.
+    /// Exclusions are distinct from Havok collision and render fallback.
     /// Fire exclusion decoding also runs in navigationOnly mode; decorative billboards do not define the footprint.
     /// Operable DOOR models are excluded from permanent support and obstruction;
     /// static frames and thresholds remain eligible, and exit metadata is handled by callers.

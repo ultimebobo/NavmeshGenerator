@@ -87,6 +87,21 @@ namespace
         return order;
     }
 
+    void WriteHearthModel(const std::filesystem::path &path, float halfLength)
+    {
+        nifly::NifFile nif;
+        nif.Create({nifly::V20_2_0_7, 12, 130});
+        const std::vector<nifly::Triangle> faces = {{0, 1, 2}, {0, 2, 3}};
+        const std::vector<nifly::Vector3> floor = {
+            {-6000, -1024, 0}, {6000, -1024, 0}, {6000, 1024, 0}, {-6000, 1024, 0}};
+        const std::vector<nifly::Vector3> bed = {
+            {-halfLength, -128, -16}, {halfLength, -128, -16}, {halfLength, 128, -16}, {-halfLength, 128, -16}};
+        Require(nif.CreateShapeFromData("Floor", &floor, &faces, nullptr));
+        Require(nif.CreateShapeFromData("RecessedBed", &bed, &faces, nullptr));
+        std::filesystem::create_directories(path.parent_path());
+        Require(nif.Save(path) == 0);
+    }
+
     void PutReference(skyrim::ResolvedLoadOrder &order, std::vector<skyrim::RecordOrigin> origins)
     {
         skyrim::ResolvedRecord reference{.type = "REFR", .formId = 20};
@@ -169,6 +184,60 @@ void TestCollisionImpactSelection()
         order.records.pop_back();
         PutReference(order, {before, moved});
         Require(Select(order, root) == std::set<std::uint32_t>{101, 103});
+    }
+    // Transient records sharing a hearth NIF do not select cells for permanent
+    // collision rebuilding when their flames are added or moved.
+    for (const auto *type : {"ACTI", "HAZD", "PROJ", "EXPL"})
+    {
+        auto order = Fixture();
+        auto &base = order.records.back();
+        base.type = type;
+        base.modelPath = "effects/FXFireFixture.nif";
+        base.winning.modelPath = *base.modelPath;
+        base.origins.front().modelPath = *base.modelPath;
+        PutReference(order, {added});
+        Require(Select(order, root).empty());
+        auto before = added;
+        before.plugin = "Base.esm";
+        auto moved = added;
+        moved.position = core::Vec3{9216, 1024, 0};
+        order.records.pop_back();
+        PutReference(order, {before, moved});
+        Require(Select(order, root).empty());
+    }
+    WriteHearthModel(root / "meshes/architecture/firepitwide.nif", 4200);
+    WriteHearthModel(root / "meshes/architecture/firepitnarrow.nif", 128);
+    for (const bool hearthEdited : {false, true})
+    {
+        auto order = Fixture();
+        auto &fireBase = order.records.back();
+        fireBase.modelPath = "effects/FXFireFixture.nif";
+        fireBase.winning.modelPath = *fireBase.modelPath;
+        fireBase.origins.front().modelPath = *fireBase.modelPath;
+        skyrim::ResolvedRecord hearth{.type = "STAT", .formId = 30, .modelPath = "architecture/FirePitWide.nif"};
+        hearth.winning = {.plugin = "Base.esm", .formId = 30, .hasModel = true, .modelPath = *hearth.modelPath};
+        hearth.origins = {hearth.winning};
+        if (hearthEdited)
+        {
+            hearth.origins.front().modelPath = "architecture/FirePitNarrow.nif";
+            hearth.winning.plugin = "Edit.esp";
+            hearth.origins.push_back(hearth.winning);
+        }
+        order.records.push_back(hearth);
+        auto fire = added;
+        fire.plugin = hearthEdited ? "Base.esm" : "Edit.esp";
+        PutReference(order, {fire});
+        auto host = added;
+        host.plugin = "Base.esm";
+        host.formId = 40;
+        host.baseFormId = 30;
+        skyrim::ResolvedRecord placement{.type = "REFR", .formId = host.formId};
+        placement.winning = host;
+        placement.origins = {host};
+        order.records.push_back(placement);
+        // Fire addition and a visual-only bed edit both select the fitted rectangle,
+        // even where it extends beyond the fuel asset into neighboring CELLs.
+        Require(Select(order, root) == std::set<std::uint32_t>{100, 101, 102});
     }
     {
         auto order = Fixture();

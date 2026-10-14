@@ -217,6 +217,215 @@ namespace
         assert(unsupported.modelsUnsupported == 1 && unsupported.modelsLoaded == 1);
         assert(unsupported.scene.coverage.back().status == core::GeometryCoverage::Unsupported);
     }
+
+    // Rectangular fuel bounds ignore decorative flames and unused vertices.
+    void CheckFireFootprints(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        nifly::NifFile nif;
+        nif.Create({nifly::V20_2_0_7, 12, 130});
+        nif.GetRootNode()->transform.translation = {32, 16, 0};
+        const std::vector<nifly::Vector3> fuel = {{256, 0, 0},  {181, 181, 0},     {0, 256, 8},  {-181, 181, 8},
+                                                  {-256, 0, 8}, {-181, -181, 8},   {0, -256, 0}, {181, -181, 0},
+                                                  {0, 0, 4},    {2048, 2048, 2048}};
+        const std::vector<nifly::Triangle> faces = {{8, 0, 1}, {8, 1, 2}, {8, 2, 3}, {8, 3, 4}, {8, 4, 5},
+                                                    {8, 5, 6}, {8, 6, 7}, {8, 7, 0}, {9, 9, 9}};
+        auto *bed = nif.CreateShapeFromData("EmberBed", &fuel, &faces, nullptr);
+        assert(bed);
+        bed->transform.translation = {8, 4, 0};
+        nifly::MatTransform parentTransform;
+        parentTransform.Clear();
+        parentTransform.translation = {16, 8, 0};
+        auto *parent = nif.AddNode("FuelParent", parentTransform, nif.GetRootNode());
+        assert(parent);
+        nif.SetParentNode(bed, parent);
+        const std::vector<nifly::Vector3> flames = {{-512, -512, 0}, {512, -512, 0}, {0, 512, 512}};
+        const std::vector<nifly::Triangle> flameFaces = {{0, 1, 2}};
+        assert(nif.CreateShapeFromData("Flames", &flames, &flameFaces, nullptr));
+        assert(nif.Save(root / "meshes/effects/fxfirebed.nif") == 0);
+
+        core::Cell cell;
+        cell.references = {{.id = 1, .recordType = "REFR", .modelPath = "floor.nif", .baseRecordType = "STAT"},
+                           {.id = 2,
+                            .recordType = "REFR",
+                            .modelPath = "Effects/FXFireBed.nif",
+                            .position = {-56, -28, -2},
+                            .baseRecordType = "MSTT"}};
+        skyrim::ModelGeometryCache cache;
+        for (const bool navigationOnly : {false, true})
+        {
+            const auto geometry = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, navigationOnly);
+            assert(geometry.modelsLoaded == 2 && geometry.scene.HasCompleteTriangleProvenance());
+            const auto &report = geometry.references[1];
+            assert(report.sourceType == "navigation_exclusion" && report.collisionType == "fire fuel bounds");
+            assert(report.vertices == 8 && report.triangles == 12 && report.degenerateTriangles == 1);
+            core::AABB bounds;
+            for (std::size_t index = report.meshVertexOffset; index < report.meshVertexOffset + report.vertices;
+                 ++index)
+            {
+                const auto &vertex = geometry.scene.mesh.vertices[index];
+                bounds.Expand(vertex);
+            }
+            assert(bounds.min.x == -256 && bounds.max.x == 256 && bounds.min.y == -256 && bounds.max.y == 256);
+            assert(bounds.min.z == -2 && bounds.max.z == 6);
+            for (const auto partitioning :
+                 {core::RegionPartitioningAlgorithm::Watershed, core::RegionPartitioningAlgorithm::Monotone,
+                  core::RegionPartitioningAlgorithm::Layers})
+            {
+                const auto candidate = core::RecastCandidateGenerator{}.Generate(
+                    geometry.scene, {}, std::nullopt, {}, partitioning, {}, core::CandidateRetention::AllWalkable);
+                assert(candidate.topology.valid);
+                assert(!HasNavigationAt(candidate, {0, 0, 0}) && !HasNavigationAt(candidate, {0, 0, 6}));
+                for (const float x : {-230.0F, 230.0F})
+                {
+                    for (const float y : {-230.0F, 230.0F})
+                    {
+                        assert(!HasNavigationAt(candidate, {x, y, 0}));
+                    }
+                }
+                assert(HasNavigationAt(candidate, {320, 320, 0}));
+            }
+
+            // Scripted activators and emitted hazards may reuse a persistent fire's
+            // exact NIF. Record semantics still forbid a permanent fire exclusion.
+            for (const auto *type : {"", "ACTI", "HAZD", "PROJ", "EXPL"})
+            {
+                auto transient = cell;
+                transient.references[1].baseRecordType = type;
+                const auto extracted =
+                    skyrim::ExtractGeometry(root, transient, root, {}, {}, nullptr, &cache, navigationOnly);
+                assert(extracted.modelsExcluded == 1 && extracted.modelsLoaded == 1);
+                assert(extracted.scene.coverage.back().status == core::GeometryCoverage::Excluded);
+                assert(extracted.scene.renderFallbackMesh.triangles.empty());
+            }
+            for (const auto *path : {"MESHES/Effects/FXFireTrap.nif", "FX/FireJet.nif", "Effects/FXFireOilHazard.nif",
+                                     "Effects/FXFireWithEmbersToggle.nif"})
+            {
+                auto transient = cell;
+                transient.references[1].modelPath = path;
+                const auto extracted =
+                    skyrim::ExtractGeometry(root, transient, root, {}, {}, nullptr, &cache, navigationOnly);
+                assert(extracted.modelsExcluded == 1 && extracted.modelsLoaded == 1 && extracted.modelsMissing == 0);
+            }
+        }
+
+        // A fire trap's solid mechanism retains ordinary collision, independently
+        // of the transient flame effect and without receiving a fire obstacle tag.
+        std::filesystem::create_directories(root / "meshes/traps");
+        WriteCollisionModel(root / "meshes/traps/firefixture.nif", 32, 0);
+        cell.references[1].modelPath = "Traps/FireFixture.nif";
+        cell.references[1].baseRecordType = "ACTI";
+        const auto trap = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
+        assert(trap.modelsLoaded == 2 && trap.modelsExcluded == 0);
+        assert(trap.scene.geometrySources[1].sourceType == core::GeometrySourceType::Collision);
+        assert(!trap.scene.geometrySources[1].navigationObstacle);
+    }
+
+    // The hearth bed, rim and surrounding floor are separate visual components.
+    // Only the recessed bed determines the rectangle, including under rotation/scale.
+    void CheckHearthFireBounds(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        std::filesystem::create_directories(root / "meshes/architecture");
+        nifly::NifFile hearth;
+        assert(hearth.Load(root / "meshes/floor.nif") == 0);
+        const std::vector<nifly::Triangle> faces = {{0, 1, 2}, {0, 2, 3}};
+        const std::vector<nifly::Vector3> floor = {{-512, -512, 0}, {512, -512, 0}, {512, 512, 0}, {-512, 512, 0}};
+        const std::vector<nifly::Vector3> rim = {{-80, -160, 16}, {80, -160, 16}, {80, 160, 16}, {-80, 160, 16}};
+        const std::vector<nifly::Vector3> bed = {{-48, -128, -16}, {48, -128, -16}, {48, 128, -16}, {-48, 128, -16}};
+        assert(hearth.CreateShapeFromData("Floor", &floor, &faces, nullptr));
+        assert(hearth.CreateShapeFromData("Rim", &rim, &faces, nullptr));
+        assert(hearth.CreateShapeFromData("RecessedBed", &bed, &faces, nullptr));
+        assert(hearth.Save(root / "meshes/architecture/firepitfixture.nif") == 0);
+        assert(hearth.Save(root / "meshes/architecture/unmarkedfixture.nif") == 0);
+
+        core::Cell cell;
+        cell.references = {{.id = 1, .recordType = "REFR", .modelPath = "floor.nif", .baseRecordType = "STAT"},
+                           {.id = 2,
+                            .recordType = "REFR",
+                            .modelPath = "Effects/FXFireBed.nif",
+                            .position = {72, 100, -2},
+                            .baseRecordType = "MSTT"},
+                           {.id = 3,
+                            .recordType = "REFR",
+                            .modelPath = "MESHES/Architecture/FirePitFixture.nif",
+                            .position = {128, 128, 0},
+                            .rotation = {0, 0, 1.57079632679F},
+                            .scale = 2,
+                            .baseRecordType = "STAT"}};
+        const auto pose = core::Transform::FromSkyrimReference(cell.references[2].position, cell.references[2].rotation,
+                                                               cell.references[2].scale);
+        skyrim::ModelGeometryCache cache;
+        for (const bool navigationOnly : {false, true})
+        {
+            for (const bool hearthFirst : {false, true})
+            {
+                auto input = cell;
+                if (hearthFirst)
+                {
+                    std::swap(input.references[1], input.references[2]);
+                }
+                const auto geometry =
+                    skyrim::ExtractGeometry(root, input, root, {}, {}, nullptr, &cache, navigationOnly);
+                assert(geometry.modelsLoaded == 3 && geometry.scene.HasCompleteTriangleProvenance());
+                const auto &report = geometry.references[hearthFirst ? 2 : 1];
+                assert(report.collisionType == "fire hearth bounds" && report.vertices == 8 && report.triangles == 12);
+                core::AABB bounds;
+                for (std::size_t index = report.meshVertexOffset; index < report.meshVertexOffset + report.vertices;
+                     ++index)
+                {
+                    bounds.Expand(geometry.scene.mesh.vertices[index]);
+                }
+                assert(std::abs(bounds.min.x + 128) < 0.01F && std::abs(bounds.max.x - 384) < 0.01F);
+                assert(std::abs(bounds.min.y - 32) < 0.01F && std::abs(bounds.max.y - 224) < 0.01F);
+                assert(std::abs(bounds.min.z + 32) < 0.01F && std::abs(bounds.max.z - 6) < 0.01F);
+                for (const auto partitioning :
+                     {core::RegionPartitioningAlgorithm::Watershed, core::RegionPartitioningAlgorithm::Monotone,
+                      core::RegionPartitioningAlgorithm::Layers})
+                {
+                    const auto candidate = core::RecastCandidateGenerator{}.Generate(
+                        geometry.scene, {}, std::nullopt, {}, partitioning, {}, core::CandidateRetention::AllWalkable);
+                    assert(candidate.topology.valid);
+                    assert(!HasNavigationAt(candidate, pose.ApplyPoint({0, 96, 0})));
+                    assert(HasNavigationAt(candidate, pose.ApplyPoint({96, 0, 0})));
+                }
+            }
+
+            // Reusing the same cached fire without a matching host restores its own
+            // model bounds. Disabled/deleted or unrelated hosts cannot affect it.
+            for (const auto state : {0, 1, 2, 3})
+            {
+                auto input = cell;
+                if (state == 0)
+                {
+                    input.references.resize(2);
+                }
+                else if (state == 1)
+                {
+                    input.references[2].initiallyDisabled = true;
+                }
+                else if (state == 2)
+                {
+                    input.references[2].deleted = true;
+                }
+                else
+                {
+                    input.references[2].modelPath = "Architecture/UnmarkedFixture.nif";
+                }
+                const auto geometry =
+                    skyrim::ExtractGeometry(root, input, root, {}, {}, nullptr, &cache, navigationOnly);
+                assert(geometry.references[1].collisionType == "fire fuel bounds");
+                core::AABB bounds;
+                const auto &report = geometry.references[1];
+                for (std::size_t index = report.meshVertexOffset; index < report.meshVertexOffset + report.vertices;
+                     ++index)
+                {
+                    bounds.Expand(geometry.scene.mesh.vertices[index]);
+                }
+                assert(bounds.min.x == -128 && bounds.max.x == 384 && bounds.min.y == -128 && bounds.max.y == 384);
+            }
+        }
+    }
 } // namespace
 
 void TestNativeBsaGeometry()
@@ -297,4 +506,6 @@ void TestNativeBsaGeometry()
     const auto architecture = skyrim::ExtractGeometry(root, cell, snapshot);
     assert(architecture.modelsLoaded == 1 && !architecture.scene.geometrySources[0].navigationObstacle);
     CheckFurnitureAndFire(root);
+    CheckFireFootprints(root);
+    CheckHearthFireBounds(root);
 }
