@@ -1616,6 +1616,71 @@ namespace
         Require(standalone && !standalone->waterHeight);
     }
     void WriteTextFile(const std::filesystem::path& path, const std::string& text) { std::ofstream output(path, std::ios::binary); output << text; }
+    void TestMo2UnicodeProfileImport()
+    {
+        const auto root = std::filesystem::current_path() / "build" / "mo2-unicode-fixture";
+        const auto game = root / std::filesystem::path(u8"Game \u00E9") / "Data";
+        const auto mods = root / std::filesystem::path(u8"Mods \u4E2D");
+        const auto profiles = root / std::filesystem::path(u8"Profiles \u00E9");
+        const auto profilePath = std::filesystem::path(u8"Profile \u4E2D");
+        const auto modPath = std::filesystem::path(u8"Unicode Patch \u2122 \U0001F680");
+        const auto overwrite = root / std::filesystem::path(u8"Overwrite \u2122");
+        const auto cache = root / std::filesystem::path(u8"Cache \u00E9");
+        const auto utf8 = [](const std::filesystem::path &path)
+        {
+            const auto bytes = path.generic_u8string();
+            return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+        };
+        std::filesystem::create_directories(game);
+        std::filesystem::create_directories(mods / modPath / "meshes");
+        std::filesystem::create_directories(profiles / profilePath);
+        std::filesystem::create_directories(overwrite / "meshes");
+        WriteTextFile(root / "ModOrganizer.ini",
+                      "gamePath=@ByteArray(" + utf8(game.parent_path()) + ")\nmod_directory=" + utf8(mods) +
+                          "\nprofiles_directory=" + utf8(profiles) + "\noverwrite_directory=" + utf8(overwrite) + "\n");
+        WritePlugin(game / "Base.esm", {}, false, {});
+        WritePlugin(mods / modPath / "Patch.esp", {"Base.esm"}, false,
+                    {{"CELL", 0x01000800, CellPayload("UnicodeCell")}});
+        WriteTextFile(profiles / profilePath / "modlist.txt", "+" + utf8(modPath) + "\n");
+        WriteTextFile(profiles / profilePath / "plugins.txt", "*Base.esm\n*Patch.esp\n");
+        WriteTextFile(profiles / profilePath / "loadorder.txt", "Base.esm\nPatch.esp\n");
+        const auto model = mods / modPath / "meshes" / std::filesystem::path(u8"model \u4E2D.nif");
+        WriteTextFile(model, "unicode model fixture");
+        WriteTextFile(overwrite / "meshes" / "marker.nif", "overwrite fixture");
+        const auto archive = mods / modPath / "Patch - Meshes.bsa";
+        WriteTextFile(archive, "archive path fixture");
+
+        const auto checkImport = [&](const navmesh::skyrim::Mo2ProfileInput &input)
+        {
+            Require(input.diagnostics.empty());
+            Require(input.gameData == game && input.modsDirectory == mods);
+            Require(input.profileDirectory == profiles / profilePath);
+            Require(input.enabledMods.size() == 1 && input.enabledMods.front().path == mods / modPath);
+            Require(input.enabledMods.front().name == utf8(modPath));
+            Require(input.pluginPaths ==
+                    std::vector<std::filesystem::path>{game / "Base.esm", mods / modPath / "Patch.esp"});
+            Require(input.archivePaths == std::vector<std::filesystem::path>{archive});
+            Require(std::any_of(input.looseAssetWinners.begin(), input.looseAssetWinners.end(), [&](const auto &file)
+                                { return file.physicalPath == model && file.source == utf8(modPath); }));
+            Require(std::any_of(input.looseAssetWinners.begin(), input.looseAssetWinners.end(), [&](const auto &file)
+                                { return file.physicalPath == overwrite / "meshes" / "marker.nif"; }));
+            Require(navmesh::skyrim::ProfileSnapshotMatches(input));
+            const auto resolved =
+                navmesh::skyrim::ResolveLoadOrder({.dataDirectory = game, .plugins = input.pluginPaths});
+            Require(resolved.diagnostics.empty() && resolved.cells.size() == 1);
+            Require(resolved.cells.front().editorId == "UnicodeCell");
+            const auto report = navmesh::skyrim::ToJson(input);
+            Require(report.find(utf8(modPath)) != std::string::npos);
+            Require(report.find(utf8(model)) != std::string::npos);
+        };
+        const auto imported = navmesh::skyrim::ImportMo2Profile(root, utf8(profilePath), {}, cache);
+        checkImport(imported);
+        Require(std::filesystem::is_regular_file(imported.looseAssetCachePath));
+        const auto cached = navmesh::skyrim::ImportMo2Profile(root, utf8(profilePath), {}, cache);
+        checkImport(cached);
+        Require(cached.looseAssetCacheUsed && cached.snapshotHash == imported.snapshotHash);
+    }
+
     void TestMo2ProfileImport()
     {
         const auto root = std::filesystem::temp_directory_path() / "navmesh-mo2-import-test"; std::filesystem::remove_all(root);
@@ -2677,6 +2742,12 @@ int main(int argc, char **argv)
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 #endif
     TestBorderCavityRegressions();
+    if (argc == 2 && std::string_view(argv[1]) == "--mo2-only")
+    {
+        TestMo2ProfileImport();
+        TestMo2UnicodeProfileImport();
+        return 0;
+    }
     if (const auto result = RunSceneFixtureCommand(argc, argv))
     {
         return *result;
@@ -2779,6 +2850,7 @@ int main(int argc, char **argv)
     TestResolvedLoadOrder();
     TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();
+    TestMo2UnicodeProfileImport();
     TestLossAwareRecordReader();
     TestNavmeshOverrideWriter();
     TestNewNavmeshRecords();

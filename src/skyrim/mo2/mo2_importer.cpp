@@ -42,6 +42,12 @@ namespace
         const auto value = path.generic_u8string();
         return {reinterpret_cast<const char *>(value.data()), value.size()};
     }
+    /// Decode UTF-8 profile, configuration and catalog text into native filesystem paths.
+    std::filesystem::path PathFromUtf8(const std::string_view text)
+    {
+        // char8_t identifies the source encoding independently of the Windows ANSI code page.
+        return std::filesystem::path(std::u8string(text.begin(), text.end()));
+    }
     std::string Escape(const std::string &text)
     {
         constexpr char hex[] = "0123456789abcdef";
@@ -175,7 +181,7 @@ namespace
         {
             return fallback;
         }
-        const std::filesystem::path value(found->second);
+        const auto value = PathFromUtf8(found->second);
         if (value.is_absolute())
         {
             return value.lexically_normal();
@@ -260,7 +266,7 @@ namespace
             {
                 return false;
             }
-            VirtualFile file{line.substr(0, first), std::filesystem::path(line.substr(first + 1, second - first - 1)),
+            VirtualFile file{line.substr(0, first), PathFromUtf8(line.substr(first + 1, second - first - 1)),
                              line.substr(second + 1)};
             if (!std::filesystem::is_regular_file(file.physicalPath))
             {
@@ -428,7 +434,7 @@ namespace navmesh::skyrim
             std::filesystem::is_directory(base / "overwrite") ? base / "overwrite" : requestedRoot / "overwrite");
         const auto game = ConfigPath(ini, "gamepath", requestedRoot, base, {});
         result.gameData = std::filesystem::is_directory(game / "Data") ? game / "Data" : game;
-        result.profileDirectory = profiles / profile;
+        result.profileDirectory = profiles / PathFromUtf8(profile);
         result.modsDirectory = mods;
         if (game.empty())
         {
@@ -484,7 +490,7 @@ namespace navmesh::skyrim
                 continue;
             }
             const auto name = Trim(line.substr(1));
-            const auto path = mods / name;
+            const auto path = mods / PathFromUtf8(name);
             result.enabledMods.push_back({name, path, priority++});
             if (!std::filesystem::is_directory(path))
             {

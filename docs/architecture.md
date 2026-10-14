@@ -314,6 +314,12 @@ automatic selection cannot identify loose-only replacements; explicit Cell
 selection supplies those targets. Custom INI archive lists are outside this input
 contract. MO2 retains its independent virtual-file importer and catalog cache.
 
+The MO2 importer treats profile and enabled-mod names, decoded configuration
+paths, and serialized asset-catalog paths as UTF-8. It converts that text
+explicitly into native filesystem paths independently of the Windows ANSI
+code page. Catalogs, input reports, and MO2 path diagnostics retain UTF-8 text;
+cache reads preserve the same physical asset winners as a fresh import.
+
 `app::Options::cellSelection` carries an explicit list independently of single-cell
 selectors and automatic impact selection. `ParseCellSelection` shares delimiter
 handling between CLI, desktop validation and persisted list encoding. Cell

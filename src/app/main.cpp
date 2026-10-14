@@ -38,6 +38,13 @@
 
 namespace
 {
+    /// Serialize native paths as UTF-8 for mod-manager diagnostics and progress text.
+    std::string PathUtf8(const std::filesystem::path &path)
+    {
+        const auto text = path.generic_u8string();
+        return {reinterpret_cast<const char *>(text.data()), text.size()};
+    }
+
     /// Scene markers identify exits from teleport metadata or authored door associations,
     /// independently of whether this run generated a candidate. Cave exits need no visible model.
     [[nodiscard]] std::vector<navmesh::core::CandidateExit> CollectSceneDoors(
@@ -305,7 +312,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         std::cerr << "Importing MO2 profile and virtual-file winners...\n";
         if (!options.modsDirectory.empty())
         {
-            std::cerr << "Using --mods-dir override: " << options.modsDirectory.string() << "\n";
+            std::cerr << "Using --mods-dir override: " << PathUtf8(options.modsDirectory) << "\n";
         }
         try
         {
@@ -317,7 +324,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         catch (const std::exception &error)
         {
             mo2Input = navmesh::skyrim::Mo2ProfileInput{.instanceRoot = options.mo2, .profile = options.profile};
-            mo2Input->diagnostics.push_back({navmesh::skyrim::DiagnosticKind::InvalidPlugin, options.mo2.string(),
+            mo2Input->diagnostics.push_back({navmesh::skyrim::DiagnosticKind::InvalidPlugin, PathUtf8(options.mo2),
                                              std::string("MO2 import failed: ") + error.what()});
         }
         if (!navmesh::skyrim::WriteInputReport(options.output / "input-report.json", *mo2Input,
@@ -328,8 +335,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         update(15, mo2Input->looseAssetCacheUsed ? "MO2 loose-asset cache loaded" : "MO2 loose-asset cache created");
         std::cerr << (mo2Input->looseAssetCacheUsed ? "Using" : "Created") << " MO2 loose-asset cache in "
-                  << (sharedCacheRoot / ".mo2").string() << "\n";
-        std::cerr << "Effective MO2 mods directory: " << mo2Input->modsDirectory.string() << "\n";
+                  << PathUtf8(sharedCacheRoot / ".mo2") << "\n";
+        std::cerr << "Effective MO2 mods directory: " << PathUtf8(mo2Input->modsDirectory) << "\n";
         for (const auto &diagnostic : mo2Input->diagnostics)
         {
             std::cerr << diagnostic.plugin << ": " << diagnostic.message << "\n";

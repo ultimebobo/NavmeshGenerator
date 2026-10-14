@@ -44,8 +44,9 @@ namespace navmesh::skyrim
     };
 
     /** Resolve an existing MO2 profile and its winning physical inputs without modifying configuration.
+     * Configuration paths, enabled mod names and catalog paths are decoded from UTF-8 into native filesystem paths.
      * @param instanceOrPortableRoot Directory containing ModOrganizer.ini.
-     * @param profile Existing profile name beneath the configured profiles directory.
+     * @param profile Existing UTF-8 profile name beneath the configured profiles directory.
      * @param modsDirectoryOverride Optional developer override for physical mod storage.
      * Otherwise mod_directory is used, with mods_directory and the instance layout as fallbacks.
      * Relative configured paths resolve against the instance root or configured base directory.

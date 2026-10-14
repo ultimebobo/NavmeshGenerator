@@ -154,6 +154,48 @@ class BatchRebuild(unittest.TestCase):
                 self.assertEqual(ini.read_bytes(), original_ini)
                 self.assertTrue((output / "cells.json").exists())
 
+    def test_mo2_unicode_paths_and_cached_winners(self):
+        instance = self.root / "Instance"
+        game = self.root / "Game" / "Data"
+        game.mkdir(parents=True)
+        (game / "Baseline.esm").write_bytes((self.root / "Baseline.esm").read_bytes())
+        mods = instance / "Mods \u4e2d"
+        mod = mods / "Unicode Patch \u2122 \U0001f680"
+        profile = instance / "profiles" / "Default"
+        profile.mkdir(parents=True)
+        (mod / "meshes").mkdir(parents=True)
+        (mod / "Patch.esp").write_bytes((self.root / "Patch.esp").read_bytes())
+        (self.root / "Patch.esp").unlink()
+        model = mod / "meshes" / "model \u4e2d.nif"
+        model.write_bytes(b"model path fixture")
+        (profile / "modlist.txt").write_text(f"+{mod.name}\n", encoding="utf-8")
+        (profile / "plugins.txt").write_text("*Baseline.esm\n*Patch.esp\n", encoding="utf-8")
+        (profile / "loadorder.txt").write_text("Baseline.esm\nPatch.esp\n", encoding="utf-8")
+        for encoding in ("utf-8", "utf-8-sig", "utf-16"):
+            with self.subTest(encoding=encoding):
+                ini = instance / "ModOrganizer.ini"
+                ini.write_text(f"gamePath={game.parent.as_posix()}\nmod_directory={mods.name}\n",
+                               encoding=encoding)
+                original_ini = ini.read_bytes()
+                for cached in (False, True):
+                    output = self.root / f"unicode-{encoding}-{cached}"
+                    completed = subprocess.run(
+                        [str(EXE), "--mo2", str(instance), "--profile", "Default", "--list-cells",
+                         "--asset-cache", str(self.root / "cache"), "--output", str(output)],
+                        capture_output=True, text=True, encoding="utf-8", timeout=90)
+                    self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                    report = json.loads((output / "input-report.json").read_text(encoding="utf-8"))
+                    self.assertEqual(report["diagnostics"], [])
+                    self.assertEqual(Path(report["mods_directory"]), mods)
+                    self.assertEqual(report["loose_asset_cache_used"], cached)
+                    self.assertEqual([Path(path) for path in report["active_plugins"]],
+                                     [game / "Baseline.esm", mod / "Patch.esp"])
+                    self.assertTrue(any(Path(file["physical_path"]) == model
+                                        for file in report["loose_asset_winners"]))
+                    self.assertTrue((output / "cells.json").exists())
+                    self.assertIn(mods.name, completed.stderr)
+                    self.assertEqual(ini.read_bytes(), original_ini)
+
     def vortex_deployment(self):
         game = self.root / "Game"
         data = game / "Data"
