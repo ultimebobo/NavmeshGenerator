@@ -5,6 +5,7 @@
 #include "skyrim/extraction/asset_cache.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "core/navmesh/generator.h"
+#include "core/geometry/convex_hull.h"
 
 #include <NifFile.hpp>
 #include <bhk.hpp>
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <fstream>
 #include <sstream>
+#include <set>
 
 namespace
 {
@@ -111,6 +113,309 @@ namespace
             }
         }
         return false;
+    }
+
+    void CheckConvexHulls()
+    {
+        using namespace navmesh::core;
+        const std::vector<Vec3> corners = {{-2, -3, -4}, {2, -3, -4}, {2, 3, -4}, {-2, 3, -4},
+                                           {-2, -3, 4},  {2, -3, 4},  {2, 3, 4},  {-2, 3, 4}};
+        for (const float scale : {0.001F, 1.0F, 1000.0F})
+        {
+            auto points = corners;
+            points.push_back({0, 0, 0});
+            points.push_back(corners.front());
+            points.push_back({0, 3, 0});
+            std::reverse(points.begin(), points.end());
+            const Vec3 translation{11 * scale, -23 * scale, 37 * scale};
+            for (auto &point : points)
+            {
+                // A skewed box exercises non-axis-aligned faces without changing its known volume.
+                point.x += point.z / 2;
+                point = point * scale + translation;
+            }
+            const auto hull = TriangulateConvexHull(points);
+            assert(hull && !hull->empty());
+            std::set<std::pair<std::uint32_t, std::uint32_t>> edges;
+            double volume = 0;
+            for (const auto &triangle : *hull)
+            {
+                const auto a = points[triangle.vertices[0]] - translation;
+                const auto b = points[triangle.vertices[1]] - translation;
+                const auto c = points[triangle.vertices[2]] - translation;
+                const auto cross = [](Vec3 lhs, Vec3 rhs)
+                {
+                    return Vec3{lhs.y * rhs.z - lhs.z * rhs.y, lhs.z * rhs.x - lhs.x * rhs.z,
+                                lhs.x * rhs.y - lhs.y * rhs.x};
+                };
+                const auto dot = [](Vec3 lhs, Vec3 rhs)
+                {
+                    return static_cast<double>(lhs.x) * rhs.x + static_cast<double>(lhs.y) * rhs.y +
+                           static_cast<double>(lhs.z) * rhs.z;
+                };
+                volume += dot(a, cross(b, c)) / 6;
+                const auto normal = cross(b - a, c - a);
+                for (const auto &point : points)
+                {
+                    assert(dot(normal, point - translation - a) <= 0.001 * scale * scale * scale);
+                }
+                for (std::size_t edge = 0; edge < 3; ++edge)
+                {
+                    assert(edges.emplace(triangle.vertices[edge], triangle.vertices[(edge + 1) % 3]).second);
+                }
+            }
+            for (const auto &[a, b] : edges)
+            {
+                assert(edges.contains({b, a}));
+            }
+            const auto expected = 192.0 * scale * scale * scale;
+            assert(std::abs(volume - expected) < expected * 0.0001);
+        }
+        assert(!TriangulateConvexHull(std::vector<Vec3>{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}));
+        assert(!TriangulateConvexHull(std::vector<Vec3>{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0}}));
+        assert(!TriangulateConvexHull(std::vector<Vec3>{{0, 0, 0}, {1, 0, 0}, {2, 0, 0}, {3, 0, 0}}));
+        auto invalid = corners;
+        invalid[0].x = std::numeric_limits<float>::quiet_NaN();
+        assert(!TriangulateConvexHull(invalid));
+        // Almost coplanar exterior samples must retain a closed hull instead of producing duplicate horizon edges.
+        const std::vector<Vec3> precise = {{-1, -1, -1},
+                                           {1, -1, -1},
+                                           {1, 1, -1},
+                                           {-1, 1, -1},
+                                           {-1, -1, 1},
+                                           {1, -1, 1},
+                                           {1, 1, 1},
+                                           {-1, 1, 1},
+                                           {1.00000024F, -0.389362335F, 0.0772417784F},
+                                           {1.0000006F, -0.648997784F, -0.790054202F},
+                                           {1.00000036F, -0.268090487F, 0.310449958F}};
+        const auto preciseHull = TriangulateConvexHull(precise);
+        assert(preciseHull && !preciseHull->empty());
+    }
+
+    void WriteConvexModel(const std::filesystem::path &path, bool solid = true, bool flat = false,
+                          std::uint8_t layer = 1, nifly::hkResponseType response = nifly::RESPONSE_SIMPLE_CONTACT)
+    {
+        nifly::NifFile nif;
+        nif.Create({nifly::V20_2_0_7, 12, 130});
+        auto shape = std::make_unique<nifly::bhkConvexVerticesShape>();
+        constexpr float units = 69.99125F;
+        const float top = flat ? 0 : 24 / units;
+        // Duplicate and interior samples must not produce overlapping triangles or change the collision envelope.
+        const std::vector<nifly::Vector4> vertices = {
+            {-64 / units, -64 / units, 0, 0}, {64 / units, -64 / units, 0, 0},    {64 / units, 64 / units, 0, 0},
+            {-64 / units, 64 / units, 0, 0},  {-64 / units, -64 / units, top, 0}, {64 / units, -64 / units, top, 0},
+            {64 / units, 64 / units, top, 0}, {-64 / units, 64 / units, top, 0},  {0, 0, top / 2, 0},
+            {-64 / units, -64 / units, 0, 0}};
+        shape->verts.resize(static_cast<std::uint32_t>(vertices.size()));
+        for (std::uint32_t index = 0; index < vertices.size(); ++index)
+        {
+            shape->verts[index] = vertices[index];
+        }
+        auto list = std::make_unique<nifly::bhkConvexListShape>();
+        list->shapeRefs.AddBlockRef(nif.GetHeader().AddBlock(std::move(shape)));
+        auto body = std::make_unique<nifly::bhkRigidBodyT>();
+        body->shapeRef.index = nif.GetHeader().AddBlock(std::move(list));
+        body->collisionFilter.layer = layer;
+        body->collisionFilterCopy.layer = layer;
+        body->collisionResponse = response;
+        body->translation = {16 / units, 8 / units, 0, 0};
+        body->rotation = {0, 0, std::sqrt(0.5F), std::sqrt(0.5F)};
+        if (!solid)
+        {
+            body->collisionResponse = nifly::RESPONSE_NONE;
+        }
+        auto object = std::make_unique<nifly::bhkCollisionObject>();
+        object->bodyRef.index = nif.GetHeader().AddBlock(std::move(body));
+        object->targetRef.index = nif.GetBlockID(nif.GetRootNode());
+        nif.GetRootNode()->collisionRef.index = nif.GetHeader().AddBlock(std::move(object));
+        // Visual geometry deliberately exceeds collision so fallback cannot accidentally satisfy obstruction checks.
+        const std::vector<nifly::Vector3> visual = {{-512, -512, 0}, {512, -512, 0}, {0, 512, 64}};
+        const std::vector<nifly::Triangle> faces = {{0, 1, 2}};
+        assert(nif.CreateShapeFromData("Display", &visual, &faces, nullptr));
+        assert(nif.Save(path) == 0);
+    }
+
+    void CheckFixedClutter(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        CheckConvexHulls();
+        std::filesystem::create_directories(root / "meshes/clutter/common");
+        WriteCollisionModel(root / "meshes/floor.nif", 768, 0);
+        WriteCollisionModel(root / "meshes/clutter/barrel.nif", 64, 24);
+        WriteConvexModel(root / "meshes/clutter/common/crate.nif");
+        WriteConvexModel(root / "meshes/clutter/common/sack.nif");
+        core::Cell cell;
+        cell.references = {{.id = 1, .recordType = "REFR", .modelPath = "floor.nif", .baseRecordType = "STAT"},
+                           {.id = 2,
+                            .recordType = "REFR",
+                            .modelPath = "MESHES\\CLUTTER\\Barrel.nif",
+                            .position = {-256, 0, 0},
+                            .baseRecordType = "STAT"},
+                           {.id = 3,
+                            .recordType = "REFR",
+                            .modelPath = "clutter/common/crate.nif",
+                            .position = {256, 0, 0},
+                            .rotation = {0, 0, 1.57079632679F},
+                            .scale = 2,
+                            .baseRecordType = "STAT"},
+                           {.id = 4,
+                            .recordType = "REFR",
+                            .modelPath = "clutter/common/sack.nif",
+                            .position = {0, -256, 0},
+                            .baseRecordType = "CONT"},
+                           {.id = 5,
+                            .recordType = "REFR",
+                            .modelPath = "clutter/common/crate.nif",
+                            .position = {0, 256, 0},
+                            .baseRecordType = "MISC"}};
+        skyrim::ModelGeometryCache cache;
+        for (const bool navigationOnly : {false, true})
+        {
+            const auto geometry = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, navigationOnly);
+            assert(geometry.modelsLoaded == 4 && geometry.modelsExcluded == 1);
+            assert(geometry.collisionModelsLoaded == 4 && geometry.collisionTriangles == 28);
+            assert(geometry.scene.HasCompleteTriangleProvenance());
+            for (const auto &source : geometry.scene.geometrySources)
+            {
+                assert(source.reference.formId != 5);
+                if (source.sourceType == core::GeometrySourceType::Collision)
+                {
+                    assert(source.navigationObstacle == (source.reference.formId != 1));
+                }
+            }
+            assert(geometry.references[2].collisionType == "bhkConvexVerticesShape");
+            assert(!geometry.references[2].usedRenderFallback);
+            core::AABB bounds;
+            const auto &crate = geometry.references[2];
+            for (std::size_t index = crate.meshVertexOffset; index < crate.meshVertexOffset + crate.vertices; ++index)
+            {
+                bounds.Expand(geometry.scene.mesh.vertices[index]);
+            }
+            assert(std::abs(bounds.min.x - 144) < 0.01F && std::abs(bounds.max.x - 400) < 0.01F);
+            assert(std::abs(bounds.min.y + 160) < 0.01F && std::abs(bounds.max.y - 96) < 0.01F);
+            assert(std::abs(bounds.max.z - 48) < 0.01F);
+            for (const auto partitioning :
+                 {core::RegionPartitioningAlgorithm::Watershed, core::RegionPartitioningAlgorithm::Monotone,
+                  core::RegionPartitioningAlgorithm::Layers})
+            {
+                const auto candidate = core::RecastCandidateGenerator{}.Generate(
+                    geometry.scene, {}, std::nullopt, {}, partitioning, {}, core::CandidateRetention::AllWalkable);
+                assert(candidate.topology.valid);
+                assert(!HasNavigationAt(candidate, {-256, 0, 0}));
+                assert(!HasNavigationAt(candidate, {-256, 0, 24}));
+                assert(!HasNavigationAt(candidate, {272, -32, 0}));
+                assert(!HasNavigationAt(candidate, {272, -32, 48}));
+                assert(!HasNavigationAt(candidate, {16, -248, 0}));
+                assert(HasNavigationAt(candidate, {0, 256, 0}));
+                assert(HasNavigationAt(candidate, {-512, 0, 0}));
+            }
+        }
+        // Non-solid and degenerate hulls must not borrow display geometry in navigation-only extraction.
+        WriteConvexModel(root / "meshes/clutter/common/nonsolid.nif", false);
+        WriteConvexModel(root / "meshes/clutter/common/flat.nif", true, true);
+        cell.references.resize(1);
+        cell.references[0].modelPath = "clutter/common/nonsolid.nif";
+        const auto nonSolid = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, true);
+        assert(nonSolid.modelsExcluded == 1 && nonSolid.collisionTriangles == 0);
+        cell.references[0].modelPath = "clutter/common/flat.nif";
+        const auto flat = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, true);
+        assert(flat.modelsUnsupported == 1 && flat.collisionTriangles == 0);
+    }
+
+    void CheckCollisionEligibility(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        std::filesystem::create_directories(root / "meshes/plants");
+        core::Cell cell;
+        cell.references = {
+            {.id = 1, .recordType = "REFR", .modelPath = "plants/fixture.nif", .baseRecordType = "FLOR"}};
+        // A geometric shape with normal contact response can still be authored as a nonblocking volume.
+        for (const std::uint8_t layer :
+             {11, 12, 15, 21, 22, 23, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 51, 53, 54})
+        {
+            WriteConvexModel(root / "meshes/plants/fixture.nif", true, false, layer);
+            for (const bool navigationOnly : {false, true})
+            {
+                const auto geometry =
+                    skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+                assert(geometry.modelsExcluded == 1 && geometry.collisionTriangles == 0);
+                assert(geometry.scene.mesh.triangles.empty() && geometry.scene.renderFallbackMesh.triangles.empty());
+                assert(geometry.scene.coverage[0].status == core::GeometryCoverage::Excluded);
+            }
+        }
+        for (const auto response : {nifly::RESPONSE_NONE, nifly::RESPONSE_REPORTING, nifly::RESPONSE_INVALID})
+        {
+            WriteConvexModel(root / "meshes/plants/fixture.nif", true, false, 1, response);
+            const auto geometry = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, true);
+            assert(geometry.modelsExcluded == 1 && geometry.collisionTriangles == 0);
+        }
+        // Real solid collision on a flora record remains eligible; record names never decide solidity.
+        WriteConvexModel(root / "meshes/plants/fixture.nif");
+        const auto solid = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, true);
+        assert(solid.collisionModelsLoaded == 1 && solid.collisionTriangles == 12);
+
+        // The layer filter applies to packed meshes too, and keeps a solid sibling in a mixed NIF.
+        WriteCollisionModel(root / "meshes/plants/packed.nif", 64, 24);
+        nifly::NifFile packed(root / "meshes/plants/packed.nif");
+        for (std::uint32_t block = 0; block < packed.GetHeader().GetNumBlocks(); ++block)
+        {
+            if (auto *body = packed.GetHeader().GetBlock<nifly::bhkRigidBody>(block))
+            {
+                body->collisionFilter.layer = 15;
+                body->collisionFilterCopy.layer = 15;
+            }
+        }
+        assert(packed.Save(root / "meshes/plants/packed.nif") == 0);
+        cell.references[0].modelPath = "plants/packed.nif";
+        const auto ignoredPacked = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, true);
+        assert(ignoredPacked.modelsExcluded == 1 && ignoredPacked.collisionTriangles == 0);
+        nifly::bhkPackedNiTriStripsShape *solidShape = nullptr;
+        for (std::uint32_t block = 0; block < packed.GetHeader().GetNumBlocks(); ++block)
+        {
+            if (auto *body = packed.GetHeader().GetBlock<nifly::bhkRigidBody>(block);
+                body && body->collisionFilter.layer == 15)
+            {
+                body->collisionFilter.layer = 1;
+                body->collisionFilterCopy.layer = 1;
+                solidShape = packed.GetHeader().GetBlock<nifly::bhkPackedNiTriStripsShape>(body->shapeRef);
+            }
+        }
+        assert(solidShape);
+        auto queryShape = std::make_unique<nifly::bhkPackedNiTriStripsShape>(*solidShape);
+        auto query = std::make_unique<nifly::bhkRigidBody>();
+        query->collisionFilter.layer = 40;
+        query->collisionFilterCopy.layer = 40;
+        query->shapeRef.index = packed.GetHeader().AddBlock(std::move(queryShape));
+        auto queryObject = std::make_unique<nifly::bhkCollisionObject>();
+        queryObject->bodyRef.index = packed.GetHeader().AddBlock(std::move(query));
+        queryObject->targetRef.index = packed.GetBlockID(packed.GetRootNode());
+        packed.GetHeader().AddBlock(std::move(queryObject));
+        assert(packed.Save(root / "meshes/plants/mixed.nif") == 0);
+        cell.references[0].modelPath = "plants/mixed.nif";
+        const auto mixed = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, true);
+        assert(mixed.collisionModelsLoaded == 1 && mixed.collisionTriangles == 2);
+
+        // A static clutter tag cannot turn a purely visual mesh into supported collision or block the floor.
+        nifly::NifFile visual;
+        visual.Create({nifly::V20_2_0_7, 12, 130});
+        const std::vector<nifly::Vector3> vertices = {{-128, -128, 24}, {128, -128, 24}, {0, 128, 24}};
+        const std::vector<nifly::Triangle> triangles = {{0, 1, 2}};
+        assert(visual.CreateShapeFromData("Display", &vertices, &triangles, nullptr));
+        assert(visual.Save(root / "meshes/clutter/display.nif") == 0);
+        cell.references = {
+            {.id = 1, .recordType = "REFR", .modelPath = "floor.nif", .baseRecordType = "STAT"},
+            {.id = 2, .recordType = "REFR", .modelPath = "clutter/display.nif", .baseRecordType = "STAT"}};
+        for (const bool navigationOnly : {false, true})
+        {
+            const auto geometry = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+            assert(geometry.collisionTriangles == 2 && geometry.collisionModelsLoaded == 1);
+            const auto candidate = core::RecastCandidateGenerator{}.Generate(
+                geometry.scene, {}, std::nullopt, {}, core::RegionPartitioningAlgorithm::Watershed, {},
+                core::CandidateRetention::AllWalkable);
+            assert(candidate.topology.valid && HasNavigationAt(candidate, {0, 0, 0}));
+            assert(!HasNavigationAt(candidate, {0, 0, 24}));
+        }
     }
 
     // Exercise the extraction policy and the neutral generator together. Low furniture
@@ -535,6 +840,8 @@ void TestNativeBsaGeometry()
     const auto architecture = skyrim::ExtractGeometry(root, cell, snapshot);
     assert(architecture.modelsLoaded == 1 && !architecture.scene.geometrySources[0].navigationObstacle);
     CheckFurnitureAndFire(root);
+    CheckFixedClutter(root);
+    CheckCollisionEligibility(root);
     CheckFireFootprints(root);
     CheckHearthFireBounds(root);
 }

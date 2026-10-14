@@ -17,11 +17,19 @@ prefix. The neutral generator consumes this tag without interpreting model
 names. Every tagged face contributes a solid raster span but cannot become
 a walkable floor, including through coincident terrain or low-obstacle promotion.
 The policy leaves architectural stone and terrain eligible for navigation.
-Furniture base records, containers, furniture-directory assets and recognized
-clutter furniture retain supported collision with the same obstacle-only tag.
-Seats, shelves and cabinet tops cannot become floor evidence or seam-repair anchors.
-Furniture without supported collision remains unsupported for generation; visual
-fallback meshes do not supply permanent furniture obstruction.
+Furniture base records, containers, furniture-directory assets, recognized
+clutter furniture and static assets in the clutter directory retain supported
+collision with the same obstacle-only tag. Seats, barrels, crates, sacks and other
+fixed clutter cannot become floor evidence or seam-repair anchors. Inventory
+placements retain their existing exclusion policy. Extraction triangulates closed
+`bhkConvexVerticesShape` vertex hulls, including through supported list wrappers,
+before rigid-body and reference transforms; convex skin radii are not expanded.
+Degenerate hulls supply no collision. Without supported collision these obstacles
+remain unsupported for generation; visual fallback meshes do not supply permanent obstruction.
+Shape decoding requires physical contact response and excludes nonphysical Skyrim
+collision layers, including NonCollidable, triggers and query volumes. A shape's
+presence or an asset's clutter classification cannot create solid collision.
+The same filter applies to inspection, generation and collision-impact selection.
 
 Persistent static fire effects supply a `navigation_exclusion` source even when their
 NIF has no supported solid collision. Extraction bounds visible coal, ember and

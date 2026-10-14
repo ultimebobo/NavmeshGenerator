@@ -170,6 +170,59 @@ void TestCollisionImpactSelection()
                                      .baseFormId = 10,
                                      .position = core::Vec3{1024, 1024, 0}};
     {
+        // Fixed clutter footprints use decoded convex collision for additions, moves and removal.
+        nifly::NifFile nif;
+        nif.Create({nifly::V20_2_0_7, 12, 130});
+        auto shape = std::make_unique<nifly::bhkConvexVerticesShape>();
+        const std::vector<nifly::Vector4> vertices = {{-1, -1, 0, 0}, {1, -1, 0, 0}, {1, 1, 0, 0}, {-1, 1, 0, 0},
+                                                      {-1, -1, 1, 0}, {1, -1, 1, 0}, {1, 1, 1, 0}, {-1, 1, 1, 0}};
+        shape->verts.resize(static_cast<std::uint32_t>(vertices.size()));
+        for (std::uint32_t index = 0; index < vertices.size(); ++index)
+        {
+            shape->verts[index] = vertices[index];
+        }
+        auto body = std::make_unique<nifly::bhkRigidBody>();
+        body->shapeRef.index = nif.GetHeader().AddBlock(std::move(shape));
+        auto object = std::make_unique<nifly::bhkCollisionObject>();
+        object->bodyRef.index = nif.GetHeader().AddBlock(std::move(body));
+        object->targetRef.index = nif.GetBlockID(nif.GetRootNode());
+        nif.GetRootNode()->collisionRef.index = nif.GetHeader().AddBlock(std::move(object));
+        std::filesystem::create_directories(root / "meshes/clutter");
+        Require(nif.Save(root / "meshes/clutter/solid.nif") == 0);
+        auto order = Fixture();
+        auto &base = order.records.back();
+        base.modelPath = "clutter/solid.nif";
+        base.winning.modelPath = *base.modelPath;
+        base.origins.front().modelPath = *base.modelPath;
+        PutReference(order, {added});
+        Require(Select(order, root) == std::set<std::uint32_t>{101});
+        auto before = added;
+        before.plugin = "Base.esm";
+        auto moved = added;
+        moved.position = core::Vec3{9216, 1024, 0};
+        order.records.pop_back();
+        PutReference(order, {before, moved});
+        Require(Select(order, root) == std::set<std::uint32_t>{101, 103});
+        moved.deleted = true;
+        order.records.back().winning = moved;
+        order.records.back().origins.back() = moved;
+        Require(Select(order, root) == std::set<std::uint32_t>{101});
+        order.records[order.records.size() - 2].type = "MISC";
+        Require(Select(order, root).empty());
+        // Authored noncollidable shapes cannot select rebuild targets, regardless of supported shape or base class.
+        order.records[order.records.size() - 2].type = "FLOR";
+        for (std::uint32_t block = 0; block < nif.GetHeader().GetNumBlocks(); ++block)
+        {
+            if (auto *nonblockingBody = nif.GetHeader().GetBlock<nifly::bhkRigidBody>(block))
+            {
+                nonblockingBody->collisionFilter.layer = 15;
+                nonblockingBody->collisionFilterCopy.layer = 15;
+            }
+        }
+        Require(nif.Save(root / "meshes/clutter/solid.nif") == 0);
+        Require(Select(order, root).empty());
+    }
+    {
         auto order = Fixture();
         auto &base = order.records.back();
         base.type = "DOOR";

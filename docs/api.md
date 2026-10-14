@@ -7,6 +7,9 @@ this reference. The showcase utilities and renderer are described in the
 
 ## Code map
 
+- `navmesh::core::TriangulateConvexHull`: closed, outward-facing hull triangles
+  indexing finite input points without moving them; rejects degenerate or
+  unrepresentable hulls. Used by Skyrim convex collision extraction.
 - `navmesh::core::SimplifyGeneratedSurface`: conservative cleanup of an unlinked
   generated floor. Retriangulates nearly planar incident fans and removes straight
   exposed boundary samples without moving the rim or filling openings. Bounds

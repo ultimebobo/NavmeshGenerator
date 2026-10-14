@@ -4,6 +4,11 @@ This project is intentionally split into processing stages so the analysis logic
 
 The build targets the Windows application, neutral core, and tests. Runtime game APIs are outside the processing pipeline.
 
+The neutral `core/geometry/convex_hull` helper triangulates closed vertex hulls
+without game or platform dependencies. Skyrim extraction decodes Havok vertices,
+applies the existing rigid-body and reference transforms, and classifies fixed
+clutter as obstacle-only before passing geometry to generation or impact selection.
+
 The application-owned `app/cell_scene` accumulator joins Cell-mode inspection and
 batch extraction into an optional complete-selection scene. It deduplicates by
 source identity, original triangle and exact world-space positions, rebases vertex

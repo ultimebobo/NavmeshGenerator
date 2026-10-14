@@ -851,10 +851,10 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             .warnings = {geometry.terrainLandMissing
                              ? "Terrain coverage is missing for this exterior CELL; no flat substitute was emitted."
                              : "Terrain is not applicable to this interior CELL.",
-                         geometry.collisionGeometrySupported ? "Collision support is limited to reachable "
-                                                               "bhkPackedNiTriStripsData; unsupported Havok shapes are "
+                         geometry.collisionGeometrySupported ? "Collision support includes reachable triangle meshes "
+                                                               "and convex vertex hulls; unsupported Havok shapes are "
                                                                "not approximated."
-                                                             : "No supported packed Havok collision was found; any "
+                                                             : "No supported Havok collision was found; any "
                                                                "render triangles are low-confidence fallbacks."}};
         const auto findings = navmesh::validation::Validate(*cell);
         const auto report = navmesh::cli::ToJson(*cell, findings, metadata);

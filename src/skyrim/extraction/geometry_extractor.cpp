@@ -1,6 +1,7 @@
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/asset_cache.h"
 #include "skyrim/extraction/bsa_archive.h"
+#include "core/geometry/convex_hull.h"
 
 #include <NifFile.hpp>
 #include <bhk.hpp>
@@ -90,6 +91,13 @@ namespace
                                                   { return name.find(kind) != std::string::npos; });
         return reference.baseRecordType == "FURN" || reference.baseRecordType == "CONT" ||
                path.starts_with("furniture/") || clutterFurniture;
+    }
+
+    /// Static clutter and containers are permanent obstacles; inventory and movable bases keep their own policies.
+    [[nodiscard]] bool IsFixedClutter(const navmesh::core::Reference &reference)
+    {
+        return (reference.baseRecordType == "STAT" || reference.baseRecordType == "CONT") &&
+               NormalizedModelPath(reference.modelPath).starts_with("clutter/");
     }
 
     [[nodiscard]] std::string EscapeJson(std::string value)
@@ -408,13 +416,108 @@ namespace
         }
     }
 
-    // SE static-world collision is normally bhkMoppBvTreeShape ->
-    // bhkPackedNiTriStripsShape -> hkPackedNiTriStripsData.  Nifly retains the
-    // packed vertices/triangles losslessly, so support that compact path first.
-    // Older assets can instead use bhkNiTriStripsShape -> NiTriStripsData;
-    // this is triangle data too, not a render-geometry approximation.
-    // Other Havok primitives are intentionally reported as unsupported rather
-    // than approximated with decorative render geometry.
+    /// Decode the closed vertex hull in Havok units before applying rigid-body and placed-reference transforms.
+    /// Degenerate or nonfinite hulls supply no partial collision; the render mesh remains diagnostic fallback.
+    void AddConvexTriangles(const nifly::bhkConvexVerticesShape &shape, const nifly::bhkRigidBody &body,
+                            TriangleGeometry &result)
+    {
+        std::vector<navmesh::core::Vec3> vertices;
+        for (auto vertex = shape.verts.cbegin(); vertex != shape.verts.cend(); ++vertex)
+        {
+            vertices.push_back({vertex->x, vertex->y, vertex->z});
+        }
+        const auto triangles = navmesh::core::TriangulateConvexHull(vertices);
+        if (!triangles)
+        {
+            return;
+        }
+        const auto base = static_cast<std::uint32_t>(result.vertices.size());
+        for (const auto &vertex : vertices)
+        {
+            result.vertices.push_back(ApplyRigidBodyTransform(body, {vertex.x, vertex.y, vertex.z}));
+        }
+        for (auto triangle : *triangles)
+        {
+            for (auto &index : triangle.vertices)
+            {
+                index += base;
+            }
+            result.triangles.push_back(triangle);
+        }
+        result.shapes.push_back("bhkConvexVerticesShape");
+    }
+
+    /// Skyrim's nonphysical layers describe queries or event volumes, even when their bodies have contact response.
+    /// Values follow the SkyrimLayer enum in the NIF format; older Bethesda assets use different layer tables.
+    enum class NonPhysicalSkyrimLayer : std::uint8_t
+    {
+        Water = 11,
+        Trigger = 12,
+        NonCollidable = 15,
+        AcousticSpace = 21,
+        ActorZone = 22,
+        ProjectileZone = 23,
+        CameraSphere = 36,
+        DoorDetection = 37,
+        ConeProjectile = 38,
+        CameraPick = 39,
+        ItemPick = 40,
+        LineOfSight = 41,
+        PathPick = 42,
+        CustomPick1 = 43,
+        CustomPick2 = 44,
+        SpellExplosion = 45,
+        DroppingPick = 46,
+        DeadActorZone = 47,
+        FallingTrapTrigger = 48,
+        SpellTrigger = 51,
+        Detection = 53,
+        TrapTrigger = 54
+    };
+
+    /// Only physical contact bodies outside known nonblocking Skyrim layers can supply solid navigation geometry.
+    [[nodiscard]] bool HasSolidNavigationCollision(const nifly::bhkRigidBody &body, const nifly::NiVersion &version)
+    {
+        if (body.collisionResponse != nifly::RESPONSE_SIMPLE_CONTACT)
+        {
+            return false;
+        }
+        if (!version.IsBethesda() || version.Stream() < 83)
+        {
+            return true;
+        }
+        switch (static_cast<NonPhysicalSkyrimLayer>(body.collisionFilter.layer))
+        {
+        case NonPhysicalSkyrimLayer::Water:
+        case NonPhysicalSkyrimLayer::Trigger:
+        case NonPhysicalSkyrimLayer::NonCollidable:
+        case NonPhysicalSkyrimLayer::AcousticSpace:
+        case NonPhysicalSkyrimLayer::ActorZone:
+        case NonPhysicalSkyrimLayer::ProjectileZone:
+        case NonPhysicalSkyrimLayer::CameraSphere:
+        case NonPhysicalSkyrimLayer::DoorDetection:
+        case NonPhysicalSkyrimLayer::ConeProjectile:
+        case NonPhysicalSkyrimLayer::CameraPick:
+        case NonPhysicalSkyrimLayer::ItemPick:
+        case NonPhysicalSkyrimLayer::LineOfSight:
+        case NonPhysicalSkyrimLayer::PathPick:
+        case NonPhysicalSkyrimLayer::CustomPick1:
+        case NonPhysicalSkyrimLayer::CustomPick2:
+        case NonPhysicalSkyrimLayer::SpellExplosion:
+        case NonPhysicalSkyrimLayer::DroppingPick:
+        case NonPhysicalSkyrimLayer::DeadActorZone:
+        case NonPhysicalSkyrimLayer::FallingTrapTrigger:
+        case NonPhysicalSkyrimLayer::SpellTrigger:
+        case NonPhysicalSkyrimLayer::Detection:
+        case NonPhysicalSkyrimLayer::TrapTrigger:
+            return false;
+        default:
+            return true;
+        }
+    }
+
+    // Follow reachable triangle meshes and convex vertex hulls through supported shape wrappers.
+    // Unsupported primitives remain diagnostic fallback rather than decorative render collision.
     void LoadPackedCollision(const nifly::NifFile &nif, TriangleGeometry &result, std::vector<std::string> &shapeTypes,
                              bool &nonSolidCollision)
     {
@@ -442,6 +545,22 @@ namespace
                 for (const auto &child : list->subShapeRefs)
                 {
                     visit(header.GetBlock(child), body);
+                }
+                return;
+            }
+            if (auto *convexList = dynamic_cast<nifly::bhkConvexListShape *>(shape))
+            {
+                for (const auto &child : convexList->shapeRefs)
+                {
+                    visit(header.GetBlock(child), body);
+                }
+                return;
+            }
+            if (auto *convex = dynamic_cast<nifly::bhkConvexVerticesShape *>(shape))
+            {
+                if (reachablePacked.insert(header.GetBlockID(convex)).second)
+                {
+                    AddConvexTriangles(*convex, body, result);
                 }
                 return;
             }
@@ -501,7 +620,7 @@ namespace
             }
             const auto *body =
                 dynamic_cast<nifly::bhkRigidBody *>(header.GetBlock<nifly::NiObject>(collision->bodyRef));
-            if (body && body->collisionResponse == nifly::RESPONSE_NONE)
+            if (body && !HasSolidNavigationCollision(*body, header.GetVersion()))
             {
                 nonSolidCollision = true;
                 continue;
@@ -1241,8 +1360,8 @@ namespace navmesh::skyrim
                 .modelPath = reference.modelPath,
                 .reference = {reference.sourcePlugin, reference.id, reference.recordType},
                 .baseObject = {reference.basePlugin, reference.baseObjectId, reference.baseRecordType},
-                .navigationObstacle = IsLandscapeRock(reference.modelPath) || IsFurniture(reference) || fireEffect ||
-                                      reference.envelope.has_value(),
+                .navigationObstacle = IsLandscapeRock(reference.modelPath) || IsFurniture(reference) ||
+                                      IsFixedClutter(reference) || fireEffect || reference.envelope.has_value(),
                 .inputConfig = reference.inputConfig};
             if (reference.deleted || reference.initiallyDisabled)
             {
