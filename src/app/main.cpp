@@ -9,6 +9,7 @@
 #include "core/navmesh/candidate.h"
 #include "core/navmesh/candidate_reachability.h"
 #include "core/navmesh/generator.h"
+#include "core/navmesh/surface_simplification.h"
 #include "core/navmesh/triangle_tagging.h"
 #include "core/scene/scene_exporter.h"
 #include "skyrim/extraction/geometry_extractor.h"
@@ -972,6 +973,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                         .bounds = candidateBounds,
                         .candidate = &*candidate}};
                     (void)navmesh::core::RemoveCandidateIslands(reachability);
+                    (void)navmesh::core::SimplifyCandidateSurface(*candidate, candidateBounds);
                 }
                 navmesh::core::TagCandidateTriangles(*candidate, cell->navMeshes, cell->waterHeight,
                                                      options.tagTriangles);

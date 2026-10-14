@@ -127,6 +127,28 @@ shared detail-patch vertices are joined before neutral adjacency is built.
 `core/navmesh/detail_triangulation` repairs overlapping sampled patches through
 boundary ear clipping and incremental sample insertion. It preserves the original
 hull and sampled floor heights; the Recast adapter owns patch decoding and replacement.
+`core/navmesh/surface_simplification` removes coplanar interior samples and
+straight exposed boundary samples from the clipped, unlinked mesh. It retains
+the complete floor footprint and rim, pins CELL seam samples, respects contour
+edge limits, and refuses ambiguous topology or mixed flags. Immutable original
+triangle contributors preserve exact floor heights at this generator stage.
+The Recast adapter runs cleanup before assigning source, region, door or portal indices. Bounded passes
+of disjoint fan replacements keep geometry editing separate from Skyrim I/O and
+connection remapping. CLI and desktop calls share the same generator, and the
+candidate cache compatibility revision includes this stage.
+The same module performs transactional candidate cleanup after authored border
+repair: it prunes exposed triangles and trims outward fans inside the immutable
+boundary band derived from the agent footprint. Convex capsule coverage proves
+the entire removed footprint stays in that band; shared-edge route guards retain
+passages, and cumulative area loss is limited per original connected floor.
+Fan retriangulation bounds height error against immutable triangle contributors
+by the vertical voxel size; replacement slopes preserve the original envelope
+or movement limit. The exact generator pass leaves this approximation budget
+unspent. It preserves portal and door triangles,
+remaps evidence and region membership, and rebuilds topology before publication.
+Single-cell orchestration invokes it after island filtering; batch workers invoke
+it before cache publication and generated seam reconciliation. Generated-to-generated
+triangle identities are never changed independently by this cell-local pass.
 Detail triangles are clipped to the target CELL in the project's neutral model for JSON, OBJ, and the
 `Candidate NAVM` GLB layer. Eligible generated geometry can enter the guarded
 plugin writer. The application then matches selected exterior boundary edges to

@@ -112,9 +112,10 @@ namespace navmesh::core
             rejectedSource{}, rejectedDegenerate{}, rejectedSmallRegion{};
         /// Generated triangles discarded by standalone or complete-batch reachability filtering.
         std::size_t rejectedUnreachable{};
-        /// Polygon count after filtering and before conservative interior simplification.
+        /// Triangle count entering surface simplification; Recast records this after CELL clipping,
+        /// before component retention. The polygon generator records it after initial filtering.
         std::size_t polygonsBeforeSimplification{};
-        /// Final candidate triangle count after interior simplification.
+        /// Final candidate triangle count after surface simplification and retention.
         std::size_t outputPolygons{};
     };
     /// Neutral candidate geometry and evidence; a separate guarded writer can encode eligible overrides.

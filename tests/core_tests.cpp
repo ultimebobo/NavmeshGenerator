@@ -2598,6 +2598,7 @@ void TestVortexDeploymentImport();
 void TestCellSceneAccumulation();
 void TestNavigationObstacleFixture();
 void TestRecastContourRecovery();
+void TestSurfaceSimplification();
 void ExportNavigationObstacleFixture(const std::filesystem::path &directory);
 void ExportSpiralNavigationFixture(const std::filesystem::path &directory);
 void TestSpiralNavigationFixture();
@@ -2702,6 +2703,11 @@ int main(int argc, char **argv)
         TestNewExteriorNavmeshRecord();
         TestReciprocalCellTransitions();
         TestReciprocalCellTransitions(2.5F, true);
+        return 0;
+    }
+    TestSurfaceSimplification();
+    if (argc == 2 && std::string_view(argv[1]) == "--surface-simplification-only")
+    {
         return 0;
     }
     TestRecastContourRecovery();

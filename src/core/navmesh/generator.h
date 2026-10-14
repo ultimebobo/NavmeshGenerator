@@ -78,8 +78,11 @@ namespace navmesh::core
          * of climb and vertical voxel size. Contour error is refined if a retained voxel
          * region would collapse. Unrepresentable watershed contours trigger layer recovery
          * over the already-retained spans, reported in warnings. Coarse polygon winding,
-         * convexity and directed edges are validated before sampling; folded partitions
-         * trigger shared contour refinement and watershed layer recovery. Obstacle-only sources cannot supply
+         * convexity and directed edges are validated before sampling. Coplanar detail fans
+         * and straight exposed boundary samples are simplified with exact floor heights,
+         * before evidence and connection assignment; exterior CELL seam samples remain pinned.
+         * Folded partitions trigger shared contour refinement and watershed layer recovery.
+         * Obstacle-only sources cannot supply
          * walkable floors. Unsupported raster seams within the agent radius can join
          * climb-compatible standing floors when intervening solids permit clearance.
          * Narrow slope-rejected risers below the crossing height permit step repair;

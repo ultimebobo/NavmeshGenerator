@@ -5,6 +5,7 @@
 #include "core/navmesh/batch_stitching.h"
 #include "core/navmesh/candidate_reachability.h"
 #include "core/navmesh/generator.h"
+#include "core/navmesh/surface_simplification.h"
 #include "core/navmesh/triangle_tagging.h"
 #include "core/reproducibility/export_metadata.h"
 
@@ -185,6 +186,7 @@ namespace navmesh::app::detail
                                                            result.cell->navMeshes, true, &input.geometry.scene, false,
                                                            result.cell->waterHeight);
                     }
+                    (void)core::SimplifyCandidateSurface(result.candidate, input.bounds);
                     core::TagCandidateTriangles(result.candidate, result.cell->navMeshes, result.cell->waterHeight,
                                                 options.tagTriangles);
                     if (!result.candidate.topology.valid)

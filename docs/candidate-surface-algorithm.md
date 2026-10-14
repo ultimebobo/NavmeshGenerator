@@ -100,6 +100,69 @@ patch vertices before adjacency and reachability filtering. Landings and stair
 interiors therefore retain floor evidence beyond the contour corners. Long
 contour edges and detail sampling limits still require scene inspection.
 
+After CELL clipping, a neutral surface cleanup removes redundant samples before
+source evidence, regions, doors or portals receive triangle identities. A sample
+inside the floor can be removed only when its complete incident fan is coplanar.
+An exposed sample additionally requires a straight boundary in world XYZ and
+must respect the configured contour edge-length limit. The fan's untouched rim
+is triangulated without moving its vertices or changing the floor footprint.
+This removes small straight-edge triangles and redundant planar detail across
+Recast patch interfaces while preserving obstacle openings and narrow routes.
+Boundary height bends, silhouette corners, mixed triangle flags, CELL seam samples
+and ambiguous or unrepresentable fans remain intact. This stage preserves floor
+heights with only double arithmetic roundoff, leaving the vertical approximation
+budget available for cleanup after connection repair.
+Disjoint fan edits run in bounded passes; cleanup favors safety over a minimum
+possible triangle count. Both desktop and CLI generation use this automatic
+stage, including batch workers. The candidate pipeline revision invalidates
+cached meshes produced with different simplification semantics.
+
+After authored border repairs, a second cleanup targets small triangles with
+exposed edges, including uneven collision outlines. It prunes exposed triangles
+smallest first, including leaves attached to the remaining floor by one shared
+edge. A triangle with one exposed edge can be removed only when its opposite
+vertex is interior, preserving an alternate shared-edge route through that fan.
+Triangles spanning a passage between boundary vertices and entire islands remain
+intact. Every removed footprint must stay inside a horizontal band around the
+immutable original boundary of its own connected floor. The band width derives
+from the agent footprint diameter, and cumulative removed horizontal area is
+capped separately for each original connected floor.
+
+Several original boundary segments can jointly cover a long, thin triangle.
+Coverage is proven by subdividing its footprint into pieces whose corners lie
+within one convex segment-distance band. A piece with unproven interior coverage
+at the subdivision limit is retained. Corner-only distance tests are insufficient.
+Pruning changes no surviving floor heights. Subsequent fan retriangulation can
+trim outward ears, but never fill concave obstacle corners. Both pruning and fan
+cuts consume the same original-boundary and area budgets, preventing progressive
+inward peeling. New boundary edges respect the configured contour edge limit.
+
+Vertical approximation during fan cleanup is bounded by the vertical voxel size
+against the candidate entering this stage. Every contributing original triangle's
+vertices must lie within half that budget of a fitted plane. Linear interpolation
+then bounds the difference between input and output everywhere in the replacement
+patch. Immutable contributor unions preserve this bound across all passes;
+contributor neighborhoods are bounded to keep approximation local. Replacement
+slopes stay within the greater of the movement profile's slope limit and the
+original patch's slope envelope. The approximation pass runs once, after the
+generator's exact cleanup, so separate stages do not spend the height budget twice.
+Door and portal triangles are pinned;
+source contributors, region membership and connection indices are remapped
+transactionally, and failed topology validation leaves the candidate intact.
+Single-cell runs invoke this pass after reachability filtering; batch workers
+invoke it before caching and generated-to-generated border reconciliation, so
+reciprocal generated triangle identities remain under the batch linker's control.
+
+`polygons_before_simplification` records Recast triangles after CELL clipping,
+before this cleanup and component retention. `output_polygons` records the
+surviving result; their difference also includes unreachable component removal.
+Warnings separately report triangle reductions and local error budgets. Counts after
+border stitching can include additional portal repair triangles. Cleanup does
+not impose an engine triangle budget or remove necessary geometry to hit one.
+Reductions depend on redundant floor detail and boundary slivers; curved terrain,
+height transitions and narrow passages can require substantially more triangles
+than flat floors.
+
 Automated checks verify coverage at matching floor heights, shared-edge
 reachability, clearance rejection and separation of stacked levels. Geometry,
 parameters and expectations live in the test builders; exported scenes and

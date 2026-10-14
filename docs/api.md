@@ -6,6 +6,22 @@ this reference.
 
 ## Code map
 
+- `navmesh::core::SimplifyGeneratedSurface`: conservative cleanup of an unlinked
+  generated floor. Retriangulates nearly planar incident fans and removes straight
+  exposed boundary samples without moving the rim or filling openings. Bounds
+  cumulative vertical approximation against immutable input triangle contributors
+  and preserves the slope envelope. Pins exterior CELL seams, respects the contour edge limit,
+  preserves mixed-flag interfaces, and resets neighbors for subsequent rebuilding.
+- `navmesh::core::SimplifyCandidateSurface`, `SurfaceSimplificationSettings`:
+  bounded exposed-triangle pruning and fan cleanup after authored border
+  repair. Pins door/portal triangles and CELL seams; transactionally remaps
+  contributors, regions and connection indices. Uses immutable boundary-band
+  coverage, shared-edge route guards and per-floor area budgets for conservative
+  inward trimming, including uneven collision outlines. Fan approximation uses
+  the vertical voxel budget left unspent by exact generator cleanup.
+  Rejects independent edits once
+  generated-to-generated portal identities require coordinated remapping.
+
 - `navmesh::core::StitchCandidateBorders`: transactional authored portal repair,
   including terminal boundary chains, authored floor slope envelopes and shared
   corner height offsets. Optional generation-scene evidence identifies crossings

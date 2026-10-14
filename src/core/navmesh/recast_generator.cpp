@@ -2,6 +2,7 @@
 
 #include "core/navmesh/detail_triangulation.h"
 #include "core/navmesh/recast_contours.h"
+#include "core/navmesh/surface_simplification.h"
 
 #include <Recast.h>
 #include <RecastAlloc.h>
@@ -1057,6 +1058,30 @@ namespace
         }
     }
 
+    /// Pin complete original triangles within door matching reach, including long faces spanning a threshold.
+    std::vector<std::uint32_t> ExitProtectedVertices(const NavMesh &mesh, const std::vector<CandidateExit> &exits,
+                                                     float horizontalReach, float verticalReach)
+    {
+        std::set<std::uint32_t> pinned;
+        for (const auto &face : mesh.polygons)
+        {
+            for (const auto &exit : exits)
+            {
+                const auto point =
+                    ClosestPointOnTriangle(exit.position, mesh.vertices[face.vertices[0]],
+                                           mesh.vertices[face.vertices[1]], mesh.vertices[face.vertices[2]]);
+                if (std::hypot(static_cast<double>(point.x) - exit.position.x,
+                               static_cast<double>(point.y) - exit.position.y) <= horizontalReach &&
+                    std::abs(static_cast<double>(point.z) - exit.position.z) <= verticalReach)
+                {
+                    pinned.insert(face.vertices.begin(), face.vertices.end());
+                    break;
+                }
+            }
+        }
+        return {pinned.begin(), pinned.end()};
+    }
+
     /** Retain whole shared-edge components anchored to a border or matched door.
      * Stable polygon compaction preserves processing order and source provenance.
      * Every polygon, neighbor, region and door index is rebased before unused
@@ -1271,6 +1296,26 @@ namespace navmesh::core
         {
             ClipGeneratedMesh(result.mesh, *cellBounds);
         }
+        // Remove redundant floor detail before assigning source,
+        // region, door or portal identities. CELL seams remain available to stitching.
+        result.statistics.polygonsBeforeSimplification = result.mesh.polygons.size();
+        const auto horizontalExitReach = profile.agentRadius * 4 + config.cs * 2;
+        const auto verticalExitReach = profile.stepHeight + config.ch * 2;
+        const auto pinnedVertices = ExitProtectedVertices(result.mesh, result.exits, horizontalExitReach + config.cs,
+                                                          verticalExitReach + config.ch);
+        const SurfaceSimplificationSettings simplification{.maximumBoundaryEdgeLength = settings.maxEdgeLength,
+                                                           .maximumHeightError = 0,
+                                                           .maximumSlopeDegrees = profile.maxSlopeDegrees,
+                                                           .maximumBoundaryInset = 0};
+        const auto removed = SimplifyGeneratedSurface(result.mesh, cellBounds, simplification, pinnedVertices);
+        if (removed != 0)
+        {
+            result.warnings.push_back(std::format(
+                "Removed {} redundant detail triangles with at most {} Skyrim units of vertical approximation "
+                "and at most {} Skyrim units of inward boundary deviation; CELL seams and door neighborhoods remain "
+                "pinned.",
+                removed, simplification.maximumHeightError, simplification.maximumBoundaryInset));
+        }
         BuildMeshAdjacency(result.mesh);
         AssignSourceProvenance(result, scene, sourceIndex, fallbackSource);
 
@@ -1282,7 +1327,6 @@ namespace navmesh::core
         {
             RetainReachableRegions(result);
         }
-        result.statistics.polygonsBeforeSimplification = result.mesh.polygons.size();
         result.statistics.outputPolygons = result.mesh.polygons.size();
         result.warnings.push_back("Recast source-triangle provenance is matched by nearest surface after voxelization; "
                                   "generated geometry remains inspection-only.");
