@@ -32,6 +32,7 @@ namespace
     {
         return static_cast<std::int32_t>(U32(b, p));
     }
+
     std::string Text(std::span<const std::uint8_t> b, std::size_t p, std::size_t n)
     {
         return p + n <= b.size() ? std::string(reinterpret_cast<const char *>(b.data() + p), n) : "";
@@ -817,6 +818,17 @@ namespace navmesh::skyrim
                         {
                             record.winning.parentWorldFormId = resolve(i, U32(sub.data, 0));
                         }
+                        if (record.type == "REFR" && sub.type == "XTEL" && sub.data.size() >= 28 &&
+                            U32(sub.data, 0) != 0)
+                        {
+                            record.winning.teleportDestinationId = resolve(i, U32(sub.data, 0));
+                            core::Vec3 position;
+                            std::memcpy(&position, sub.data.data() + 4, sizeof(position));
+                            if (std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z))
+                            {
+                                record.winning.teleportDestinationPosition = position;
+                            }
+                        }
                         if (record.type == "WRLD" && sub.type == "PNAM" && sub.data.size() >= 2)
                         {
                             record.winning.inheritsParentLand = (U16(sub.data, 0) & 1U) != 0;
@@ -846,6 +858,14 @@ namespace navmesh::skyrim
                         {
                             std::array<std::int16_t, 6> bounds{};
                             std::memcpy(bounds.data(), sub.data.data(), 12);
+                            if (bounds[0] < bounds[3] && bounds[1] < bounds[4] && bounds[2] < bounds[5])
+                            {
+                                record.winning.localBounds =
+                                    core::AABB{{static_cast<float>(bounds[0]), static_cast<float>(bounds[1]),
+                                                static_cast<float>(bounds[2])},
+                                               {static_cast<float>(bounds[3]), static_cast<float>(bounds[4]),
+                                                static_cast<float>(bounds[5])}};
+                            }
                             const auto x = static_cast<float>(
                                 std::max(std::abs(static_cast<int>(bounds[0])), std::abs(static_cast<int>(bounds[3]))));
                             const auto y = static_cast<float>(
@@ -1079,6 +1099,20 @@ namespace navmesh::skyrim
                 reference.modelPath = base->modelPath.value_or("");
                 reference.basePlugin = base->winning.plugin;
                 reference.baseRecordType = base->type;
+                reference.localBounds = base->winning.localBounds;
+            }
+            if (record.winning.teleportDestinationId)
+            {
+                const auto partner = winners.find(*record.winning.teleportDestinationId);
+                if (partner != winners.end())
+                {
+                    const auto &arrival = result.records[partner->second].winning;
+                    if (!arrival.deleted && !arrival.initiallyDisabled &&
+                        arrival.teleportDestinationId == record.formId)
+                    {
+                        reference.teleportArrival = arrival.teleportDestinationPosition;
+                    }
+                }
             }
             // A reference-local MODL is unusual, but remains a valid resolved source.
             if (reference.modelPath.empty() && record.modelPath)

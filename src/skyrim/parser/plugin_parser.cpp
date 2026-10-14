@@ -73,12 +73,15 @@ namespace
         std::string type;
         std::string editorId;
         std::string modelPath;
+        std::optional<navmesh::core::AABB> localBounds;
     };
 
     struct ParsedReference
     {
         navmesh::core::Reference reference;
         std::uint32_t cellId{};
+        std::uint32_t teleportDestinationId{};
+        std::optional<navmesh::core::Vec3> teleportDestinationPosition;
     };
 
     void ParseReferencePayload(const std::vector<std::uint8_t> &payload, const RecordHeader &header,
@@ -89,6 +92,8 @@ namespace
         reference.recordType = type;
         reference.initiallyDisabled = (header.flags & (1U << 11)) != 0;
         reference.deleted = (header.flags & (1U << 5)) != 0;
+        std::uint32_t teleportDestinationId{};
+        std::optional<navmesh::core::Vec3> teleportDestinationPosition;
         std::size_t offset = 0;
         while (offset + 6 <= payload.size())
         {
@@ -120,10 +125,20 @@ namespace
             else if (subType == "XTEL" && subSize >= 4)
             {
                 reference.teleportExit = ReadU32LE(payload, dataStart) != 0;
+                teleportDestinationId = ReadU32LE(payload, dataStart);
+                if (subSize >= 28)
+                {
+                    navmesh::core::Vec3 position;
+                    std::memcpy(&position, payload.data() + dataStart + 4, sizeof(position));
+                    if (std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z))
+                    {
+                        teleportDestinationPosition = position;
+                    }
+                }
             }
             offset = dataEnd;
         }
-        references.push_back({std::move(reference), 0});
+        references.push_back({std::move(reference), 0, teleportDestinationId, teleportDestinationPosition});
     }
 
     [[nodiscard]] std::optional<RecordHeader> ParseRecordHeader(const std::vector<std::uint8_t> &buffer,
@@ -417,6 +432,19 @@ namespace navmesh::skyrim
                             {
                                 record.modelPath = TrimNulls(ReadAscii(*payload, subDataStart, subSize));
                             }
+                            else if (subType == "OBND" && subSize == 12)
+                            {
+                                std::array<std::int16_t, 6> values;
+                                std::memcpy(values.data(), payload->data() + subDataStart, sizeof(values));
+                                if (values[0] < values[3] && values[1] < values[4] && values[2] < values[5])
+                                {
+                                    record.localBounds =
+                                        core::AABB{{static_cast<float>(values[0]), static_cast<float>(values[1]),
+                                                    static_cast<float>(values[2])},
+                                                   {static_cast<float>(values[3]), static_cast<float>(values[4]),
+                                                    static_cast<float>(values[5])}};
+                                }
+                            }
                             subOffset = subDataEnd;
                         }
                     }
@@ -427,6 +455,15 @@ namespace navmesh::skyrim
         };
 
         walk(walk, fileStart, buffer.size(), 0);
+        // Reciprocal lookups must not rescan every placement when inspecting a whole plugin.
+        std::unordered_map<std::uint32_t, const ParsedReference *> teleportReferences;
+        for (const auto &parsed : references)
+        {
+            if (parsed.teleportDestinationId != 0)
+            {
+                teleportReferences.emplace(parsed.reference.id, &parsed);
+            }
+        }
         for (auto &cell : cells)
         {
             const auto meshes = navMeshesByGroup.find(cell.id);
@@ -442,9 +479,17 @@ namespace navmesh::skyrim
                 }
                 if (const auto base = baseRecords.find(parsed.reference.baseObjectId); base != baseRecords.end())
                 {
-                    parsed.reference.recordType = base->second.type;
+                    parsed.reference.baseRecordType = base->second.type;
                     parsed.reference.editorId = base->second.editorId;
                     parsed.reference.modelPath = base->second.modelPath;
+                    parsed.reference.localBounds = base->second.localBounds;
+                }
+                const auto partner = teleportReferences.find(parsed.teleportDestinationId);
+                if (partner != teleportReferences.end() &&
+                    partner->second->teleportDestinationId == parsed.reference.id &&
+                    !partner->second->reference.deleted && !partner->second->reference.initiallyDisabled)
+                {
+                    parsed.reference.teleportArrival = partner->second->teleportDestinationPosition;
                 }
                 cell.references.push_back(parsed.reference);
             }

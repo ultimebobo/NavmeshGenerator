@@ -161,8 +161,9 @@ own exterior CELL; geometry suppliers do not enlarge the generated area.
 This separation also applies to single-cell generation. Increasing the geometry
 halo is compatible with plugin writing.
 Single-cell generation uses the shared reachability policy after authored border
-matching: it retains the largest connected floor and any components reaching
-matched doors or authored neighbors. Cells without existing NAVM or doors can
+matching, using the [candidate reachability policy](candidate-surface-algorithm.md):
+exterior entrances identify playable networks, with a primary-floor fallback for
+doorless selections and interiors. Cells without existing NAVM or doors can
 receive a new NAVM without requiring a batch selection.
 For single-cell inspection scenes, terrain and authored NAVM are limited to the
 scene neighborhood. Distant suppliers contribute only model triangles whose
@@ -233,9 +234,9 @@ receive exact reversed endpoints and unique reciprocal generated triangle target
 
 After linking, `core/navmesh/candidate_reachability` floods shared-edge adjacency
 and reciprocal generated portals across the complete successful set. It retains
-floor networks reaching matched doors or untouched authored neighbors, together
-with the largest network by horizontal area in each contiguous exterior selection
-and each interior. Separate selections and worldspaces are evaluated independently.
+floor networks under the [candidate reachability policy](candidate-surface-algorithm.md).
+Exterior selections with matched entrances do not use authored NAVM to identify
+playable networks. Separate selections and worldspaces are evaluated independently.
 Generated portals and open CELL borders alone do not provide access: an isolated
 roof spanning multiple CELLs is removed as one component. Vertex-only contact does
 not connect floors. Filtering compacts geometry, source joins, regions, doors and

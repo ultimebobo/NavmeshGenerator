@@ -1880,6 +1880,87 @@ namespace
         Require(staticFrame.collisionModelsLoaded == 1 && staticFrame.scene.mesh.triangles.size() == 1);
     }
 
+    void TestTeleportInputResolution()
+    {
+        using namespace navmesh;
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-teleport-input-test";
+        std::filesystem::create_directories(root);
+        std::vector<std::uint8_t> base;
+        std::vector<std::uint8_t> bounds;
+        for (const auto coordinate : {-8, -64, -4, 8, 64, 256})
+        {
+            PutU16(bounds, static_cast<std::uint16_t>(coordinate));
+        }
+        PutText(base, "OBND", bounds);
+        PutText(base, "MODL", {'t', 'h', 'r', 'e', 's', 'h', 'o', 'l', 'd', '.', 'n', 'i', 'f', 0});
+        const auto placement = [&](std::uint32_t destination, core::Vec3 arrival)
+        {
+            std::vector<std::uint8_t> payload;
+            std::vector<std::uint8_t> name;
+            PutU32(name, 0x310);
+            PutText(payload, "NAME", name);
+            std::vector<std::uint8_t> transform;
+            for (const auto value : {100.0F, 200.0F, 0.0F, 0.0F, 0.0F, 1.57079632679F})
+            {
+                PutFloat(transform, value);
+            }
+            PutText(payload, "DATA", transform);
+            std::vector<std::uint8_t> scale;
+            PutFloat(scale, 2.0F);
+            PutText(payload, "XSCL", scale);
+            std::vector<std::uint8_t> teleport;
+            PutU32(teleport, destination);
+            for (const auto value : {arrival.x, arrival.y, arrival.z, 0.0F, 0.0F, 0.0F})
+            {
+                PutFloat(teleport, value);
+            }
+            PutText(payload, "XTEL", teleport);
+            return payload;
+        };
+        std::vector<std::uint8_t> references;
+        PutRecord(references, "REFR", 0x300, placement(0x301, {400, 500, 0}));
+        PutRecord(references, "REFR", 0x301, placement(0x300, {50, 75, 0}));
+        std::vector<std::uint8_t> cells;
+        PutRecord(cells, "CELL", 0x100, CellPayload("ThresholdExterior", true));
+        PutGroup(cells, 0x100, 6, references);
+        std::vector<std::uint8_t> plugin;
+        PutRecord(plugin, "TES4", 0, {});
+        PutRecord(plugin, "DOOR", 0x310, base);
+        PutRecord(plugin, "WRLD", 0x400, {});
+        PutGroup(plugin, 0x400, 1, cells);
+        const auto source = root / "Thresholds.esm";
+        {
+            std::ofstream file(source, std::ios::binary);
+            file.write(reinterpret_cast<const char *>(plugin.data()), static_cast<std::streamsize>(plugin.size()));
+        }
+        const auto resolved = skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source}});
+        const auto direct = skyrim::ListCells(source);
+        for (const auto &cell : {resolved.cells.front(), direct.front()})
+        {
+            Require(cell.navMeshes.empty() && cell.references.size() == 2);
+            const auto &door = cell.references.front();
+            Require(door.recordType == "REFR" && door.baseRecordType == "DOOR" && door.teleportExit);
+            Require(door.localBounds && door.localBounds->max.y == 64);
+            Require(door.teleportArrival && door.teleportArrival->x == 50 && door.teleportArrival->y == 75);
+            for (const bool navigationOnly : {false, true})
+            {
+                const auto geometry =
+                    skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+                Require(geometry.scene.mesh.triangles.size() == 24 && geometry.modelsMissing == 0);
+                Require(geometry.scene.HasCompleteTriangleProvenance());
+                Require(geometry.scene.geometrySources.front().navigationObstacle);
+                Require(geometry.scene.geometrySources.front().sourceType ==
+                        core::GeometrySourceType::NavigationExclusion);
+                const auto vertex = geometry.scene.mesh.vertices.front();
+                Require(std::abs(vertex.x + 28) < 0.01F && std::abs(vertex.y - 216) < 0.01F && vertex.z == -8);
+            }
+            auto interior = cell;
+            interior.isInterior = true;
+            const auto excluded = skyrim::ExtractGeometry(root, interior, root);
+            Require(excluded.scene.mesh.triangles.empty() && excluded.modelsExcluded == 2);
+        }
+    }
+
     void TestSceneTransforms()
     {
         using navmesh::core::Transform;
@@ -2653,6 +2734,7 @@ namespace
 
 void TestPerformanceCaches();
 void TestGeneratedBatchTopology();
+void TestTeleportEnclosure();
 void TestBatchGenerationFailurePolicy();
 void TestBatchRecoveryBorderNeighbors();
 void TestCollisionImpactSelection();
@@ -2741,6 +2823,14 @@ int main(int argc, char **argv)
     _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 #endif
+    if (argc == 2 && std::string_view(argv[1]) == "--unused-exterior-only")
+    {
+        TestTeleportInputResolution();
+        TestTeleportEnclosure();
+        TestGeneratedBatchTopology();
+        TestCollisionImpactSelection();
+        return 0;
+    }
     TestBorderCavityRegressions();
     if (argc == 2 && std::string_view(argv[1]) == "--mo2-only")
     {
@@ -2848,6 +2938,7 @@ int main(int argc, char **argv)
     TestGeometryNeighborhoodCulling();
     TestAffectedCells();
     TestResolvedLoadOrder();
+    TestTeleportInputResolution();
     TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();
     TestMo2UnicodeProfileImport();

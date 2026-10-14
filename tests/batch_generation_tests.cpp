@@ -4,6 +4,7 @@
 
 #include "app/batch_generation.h"
 #include "app/candidate_cache.h"
+#include "app/geometry_pipeline.h"
 #include "core/navmesh/batch_stitching.h"
 #include "core/navmesh/candidate_reachability.h"
 #include "core/navmesh/detail_triangulation.h"
@@ -144,6 +145,38 @@ namespace
             assert(vertex.z == 0);
         }
 
+        // Entrance-reachable exterior floors take precedence over larger disconnected scenery.
+        // Authored portals cannot turn that unused scenery into a playable component.
+        for (const bool authoredPortal : {false, true})
+        {
+            auto enclosed = Floor(0, 0, 400);
+            auto playable = Floor(0, 0, 0);
+            for (auto &vertex : playable.mesh.vertices)
+            {
+                vertex.x /= 4;
+                vertex.y /= 4;
+            }
+            AppendFloor(enclosed, playable);
+            enclosed.exits = {{200, {100, 100, 0}, 1, 2}};
+            if (authoredPortal)
+            {
+                enclosed.borderLinks = {{0, 0, 300, 0, 0}};
+                enclosed.authoredBorderVertexEdits = {{300, 0, {0, 0, 400}, {0, 0, 401}}};
+            }
+            CandidateReachabilityTarget target{1, 1, singleBounds, &enclosed};
+            assert(RemoveCandidateIslands(std::span(&target, 1)) == 2);
+            assert(enclosed.mesh.polygons.size() == 2 && enclosed.borderLinks.empty());
+            assert(enclosed.authoredBorderVertexEdits.empty());
+            assert(enclosed.exits[0].polygon == 0 && enclosed.topology.valid);
+            assert(enclosed.mesh.vertices.size() == playable.mesh.vertices.size());
+            for (std::size_t index{}; index < playable.mesh.vertices.size(); ++index)
+            {
+                const auto actual = enclosed.mesh.vertices[index];
+                const auto expected = playable.mesh.vertices[index];
+                assert(actual.x == expected.x && actual.y == expected.y && actual.z == expected.z);
+            }
+        }
+
         // This roof spans a CELL seam and acquires reciprocal portals, but has no
         // route to the larger ground network. Put it first so retained identities move.
         std::array<CandidateNavMesh, 2> candidates{Floor(0, 0, 400), Floor(4096, 0, 400, true)};
@@ -280,10 +313,63 @@ namespace
     }
 } // namespace
 
+/// A wall enclosure with a teleport gate must not acquire a route into the surrounding scenery floor.
+void TestTeleportEnclosure()
+{
+    using namespace navmesh;
+    skyrim::GeometryExtraction geometry;
+    geometry.scene.geometrySources.push_back({.sourceType = core::GeometrySourceType::Collision});
+    const auto quad = [&](std::array<core::Vec3, 4> corners)
+    {
+        const auto offset = static_cast<std::uint32_t>(geometry.scene.mesh.vertices.size());
+        geometry.scene.mesh.vertices.insert(geometry.scene.mesh.vertices.end(), corners.begin(), corners.end());
+        for (const auto triangle :
+             {core::Triangle{{offset, offset + 1, offset + 2}}, core::Triangle{{offset, offset + 2, offset + 3}}})
+        {
+            geometry.scene.mesh.triangles.push_back(triangle);
+            geometry.scene.triangleProvenance.push_back({0, geometry.scene.triangleProvenance.size()});
+        }
+    };
+    quad({{{0, 0, 0}, {4096, 0, 0}, {4096, 4096, 0}, {0, 4096, 0}}});
+    const auto wall = [&](core::Vec3 a, core::Vec3 b)
+    { quad({a, b, b + core::Vec3{0, 0, 256}, a + core::Vec3{0, 0, 256}}); };
+    wall({1024, 1024, 0}, {3072, 1024, 0});
+    wall({3072, 1024, 0}, {3072, 3072, 0});
+    wall({3072, 3072, 0}, {2176, 3072, 0});
+    wall({1920, 3072, 0}, {1024, 3072, 0});
+    wall({1024, 3072, 0}, {1024, 1024, 0});
+    core::Cell cell;
+    cell.references.push_back({.id = 1,
+                               .recordType = "REFR",
+                               .modelPath = "synthetic/threshold.nif",
+                               .position = {2048, 3072, 0},
+                               .rotation = {0, 0, 1.57079632679F},
+                               .baseRecordType = "DOOR",
+                               .teleportExit = true,
+                               .teleportArrival = core::Vec3{2048, 2816, 0},
+                               .localBounds = core::AABB{{-8, -128, -8}, {8, 128, 256}}});
+    const auto barrier = skyrim::ExtractGeometry({}, cell, {}, {}, {}, nullptr, nullptr, true);
+    assert(barrier.scene.mesh.triangles.size() == 12 && barrier.scene.HasCompleteTriangleProvenance());
+    app::detail::AppendGeometry(geometry, barrier);
+    const core::AABB bounds{{0, 0, -100}, {4096, 4096, 1000}};
+    auto candidate = core::RecastCandidateGenerator{}.Generate(
+        geometry.scene, {}, bounds, {{1, *cell.references.front().teleportArrival}},
+        core::RegionPartitioningAlgorithm::Watershed, {}, core::CandidateRetention::AllWalkable);
+    assert(candidate.topology.valid && candidate.exits.front().polygon);
+    core::CandidateReachabilityTarget target{1, 1, bounds, &candidate};
+    assert(core::RemoveCandidateIslands(std::span(&target, 1)) > 0);
+    assert(candidate.topology.valid && !candidate.mesh.polygons.empty());
+    for (const auto vertex : candidate.mesh.vertices)
+    {
+        assert(vertex.x > 1024 && vertex.x < 3072 && vertex.y > 1024 && vertex.y < 3072);
+    }
+}
+
 void TestGeneratedBatchTopology()
 {
     using namespace navmesh::core;
     TestCandidateIslandRemoval();
+    TestTeleportEnclosure();
     // Batch interiors retain a supported floor even without any authored NAVM,
     // exterior boundary or door anchor, under every partitioning strategy.
     Scene interior;

@@ -60,7 +60,6 @@
   {
     "id": "riften",
     "title": "Riften",
-    "note": "Triangle tagging disabled; generated navigation extends onto terrain outside the city walls. Review and test NPC navigation before use.",
     "cells": [
       "RiftenCityNorthwest",
       "RiftenCityNorth",

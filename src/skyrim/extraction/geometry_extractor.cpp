@@ -545,6 +545,63 @@ namespace
         return result;
     }
 
+    /// Rasterize a teleport threshold as a volume separator; ordinary hinged doors provide no boundary.
+    bool AppendTeleportBoundary(navmesh::skyrim::GeometryExtraction &output, const navmesh::core::Reference &reference,
+                                navmesh::core::GeometrySource source, navmesh::skyrim::GeometryReferenceReport &report)
+    {
+        using namespace navmesh;
+        if (!reference.teleportExit || !reference.teleportArrival || !reference.localBounds ||
+            reference.baseRecordType != "DOOR" || !std::isfinite(reference.scale) || reference.scale <= 0)
+        {
+            return false;
+        }
+        const auto boundary = BuildBoundsExclusion(*reference.localBounds, "teleport threshold bounds");
+        if (boundary.triangles.empty())
+        {
+            return false;
+        }
+        const auto transform =
+            core::Transform::FromSkyrimReference(reference.position, reference.rotation, reference.scale);
+        std::vector<core::Vec3> placed;
+        for (const auto vertex : boundary.vertices)
+        {
+            const auto point = transform.ApplyPoint(vertex);
+            if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+            {
+                return false;
+            }
+            placed.push_back(point);
+        }
+        source.sourceType = core::GeometrySourceType::NavigationExclusion;
+        source.navigationObstacle = true;
+        source.confidence = 1.0F;
+        source.collisionType = "teleport threshold bounds";
+        const auto sourceIndex = output.scene.geometrySources.size();
+        output.scene.geometrySources.push_back(source);
+        const auto vertexBase = static_cast<std::uint32_t>(output.scene.mesh.vertices.size());
+        report.meshVertexOffset = vertexBase;
+        report.meshTriangleOffset = output.scene.mesh.triangles.size();
+        output.scene.mesh.vertices.insert(output.scene.mesh.vertices.end(), placed.begin(), placed.end());
+        for (auto triangle : boundary.triangles)
+        {
+            for (auto &vertex : triangle.vertices)
+            {
+                vertex += vertexBase;
+            }
+            output.scene.mesh.triangles.push_back(triangle);
+            output.scene.triangleProvenance.push_back(
+                {sourceIndex, output.scene.mesh.triangles.size() - 1 - report.meshTriangleOffset});
+        }
+        report.vertices = boundary.vertices.size();
+        report.triangles = boundary.triangles.size();
+        report.sourceType = "navigation_exclusion";
+        report.collisionType = source.collisionType;
+        report.shapes = boundary.shapes;
+        output.scene.coverage.push_back(
+            {core::GeometryCoverage::Found, source, "exterior teleport threshold navigation boundary"});
+        return true;
+    }
+
     /** Bound valid transformed fuel triangles, using flames only when fuel is absent.
      * Glow and distortion billboards never define the footprint. Bounds use model-local Skyrim units;
      * the rectangular box is policy geometry, not Havok collision.
@@ -1132,6 +1189,11 @@ namespace navmesh::skyrim
                                                    : "winning reference record is initially disabled";
                 output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
                 ++output.modelsExcluded;
+                output.references.push_back(std::move(report));
+                continue;
+            }
+            if (!cell.isInterior && AppendTeleportBoundary(output, reference, source, report))
+            {
                 output.references.push_back(std::move(report));
                 continue;
             }

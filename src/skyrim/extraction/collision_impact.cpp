@@ -150,6 +150,23 @@ namespace navmesh::skyrim
                             if (!input_.terrainOnly)
                             {
                                 Compare(record, rank);
+                                const auto *previous =
+                                    OriginAt(record, rank == 0 ? std::nullopt : std::optional(rank - 1));
+                                // Return-side edits change another entrance's anchor and can enable or disable
+                                // its threshold boundary. Include both destinations at their historical cutoff.
+                                for (const auto *version : {previous, &origin})
+                                {
+                                    if (!version || !version->teleportDestinationId)
+                                    {
+                                        continue;
+                                    }
+                                    const auto *destination = resolved_.FindWinning(*version->teleportDestinationId);
+                                    if (destination)
+                                    {
+                                        AddEntranceOwner(*destination, rank);
+                                        Compare(*destination, rank);
+                                    }
+                                }
                             }
                         }
                         else if (record.type != "NAVM")
@@ -289,7 +306,8 @@ namespace navmesh::skyrim
                                           .scale = origin->scale,
                                           .sourcePlugin = origin->plugin,
                                           .initiallyDisabled = origin->initiallyDisabled,
-                                          .deleted = origin->deleted};
+                                          .deleted = origin->deleted,
+                                          .teleportExit = origin->teleportDestinationId.has_value()};
                 if (origin->baseFormId)
                 {
                     reference.baseObjectId = *origin->baseFormId;
@@ -301,7 +319,18 @@ namespace navmesh::skyrim
                             reference.modelPath = version->modelPath.empty() ? reference.modelPath : version->modelPath;
                             reference.basePlugin = version->plugin;
                             reference.deleted = reference.deleted || version->deleted;
+                            reference.localBounds = version->localBounds;
                         }
+                    }
+                }
+                if (origin->teleportDestinationId)
+                {
+                    const auto *partner = resolved_.FindWinning(*origin->teleportDestinationId);
+                    const auto *arrival = partner ? OriginAt(*partner, cutoff) : nullptr;
+                    if (arrival && !arrival->deleted && !arrival->initiallyDisabled &&
+                        arrival->teleportDestinationId == record.formId)
+                    {
+                        reference.teleportArrival = arrival->teleportDestinationPosition;
                     }
                 }
                 return reference;
@@ -311,7 +340,7 @@ namespace navmesh::skyrim
             core::Cell CollisionSourceContext(const core::Reference &reference, const RecordOrigin &origin,
                                               std::size_t cutoff) const
             {
-                core::Cell source{.references = {reference}};
+                core::Cell source{.isInterior = !origin.worldspaceFormId, .references = {reference}};
                 const bool hearth = IsHearthModelPath(reference.modelPath);
                 if ((!hearth && !IsPersistentFireReference(reference)) || !origin.cellFormId)
                 {
@@ -342,6 +371,25 @@ namespace navmesh::skyrim
                     }
                 }
                 return source;
+            }
+
+            /// Entrance anchors are navigation inputs even when an edit leaves their boundary volume unchanged.
+            void AddEntranceOwner(const ResolvedRecord &record, std::size_t cutoff)
+            {
+                for (const auto version :
+                     {cutoff == 0 ? std::nullopt : std::optional(cutoff - 1), std::optional(cutoff)})
+                {
+                    const auto *origin = OriginAt(record, version);
+                    if (!origin || !origin->position)
+                    {
+                        continue;
+                    }
+                    const core::AABB bounds{*origin->position, *origin->position};
+                    for (const auto *cell : index_.IntersectingCells(*origin, bounds))
+                    {
+                        targets_.insert(cell->id);
+                    }
+                }
             }
 
             PlacedCollision Extract(const ResolvedRecord &record, const RecordOrigin *origin, std::size_t cutoff,

@@ -67,8 +67,10 @@ namespace
                 if (!reference.deleted && !reference.initiallyDisabled &&
                     (reference.teleportExit || authoredDoors.contains(reference.id)))
                 {
-                    doors.try_emplace(reference.id, navmesh::core::CandidateExit{.referenceId = reference.id,
-                                                                                 .position = reference.position});
+                    doors.try_emplace(reference.id,
+                                      navmesh::core::CandidateExit{
+                                          .referenceId = reference.id,
+                                          .position = reference.teleportArrival.value_or(reference.position)});
                 }
             }
         }
@@ -885,7 +887,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                     if (reference.recordType == "REFR" && reference.baseRecordType == "DOOR" && !reference.deleted &&
                         !reference.initiallyDisabled)
                     {
-                        exits.push_back({.referenceId = reference.id, .position = reference.position});
+                        exits.push_back({.referenceId = reference.id,
+                                         .position = reference.teleportArrival.value_or(reference.position)});
                     }
                 }
             }
@@ -918,7 +921,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                             reference.position.y >= candidateBounds->min.y &&
                             reference.position.y <= candidateBounds->max.y)
                         {
-                            exits.push_back({.referenceId = reference.id, .position = reference.position});
+                            exits.push_back({.referenceId = reference.id,
+                                             .position = reference.teleportArrival.value_or(reference.position)});
                         }
                     }
                 }
@@ -969,8 +973,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                                                                 cell->navMeshes, false, &geometry.scene, true,
                                                                 cell->waterHeight);
                 }
-                // Filter after portal matching so uncovered cells retain their largest floor,
-                // while doors and authored neighbors can also preserve separate accessible components.
+                // Match portals before filtering; exterior entrances identify playable networks,
+                // while doorless selections and interiors retain a primary floor.
                 if (candidate->topology.valid)
                 {
                     const auto *selectedRecord = resolved ? resolved->FindWinning(cell->id) : nullptr;

@@ -132,7 +132,9 @@ namespace navmesh::skyrim
     /// Exclusions are distinct from Havok collision and render fallback.
     /// Fire exclusion decoding also runs in navigationOnly mode; decorative billboards do not define the footprint.
     /// Operable DOOR models are excluded from permanent support and obstruction;
-    /// static frames and thresholds remain eligible, and exit metadata is handled by callers.
+    /// exterior teleport thresholds with valid bounds and reciprocal arrival metadata supply obstacle-only
+    /// placed OBND volumes, separating same-space floors without reading authored NAVM or the door model.
+    /// Static frames and thresholds remain eligible, and exit metadata is handled by callers.
     [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path &dataDirectory, const core::Cell &cell,
                                                      const std::filesystem::path &cacheDirectory = {},
                                                      const GeometryProgressCallback &progress = {},

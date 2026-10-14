@@ -32,6 +32,8 @@ namespace navmesh::skyrim
      * New terrain and collision can select cells without authored NAVM, including new
      * worldspaces and submerged terrain. Water-only transitions require supported winning
      * terrain or placed collision because water classifies geometry rather than supplying floor.
+     * Exterior teleport boundaries participate in collision comparisons; return-side edits also
+     * select the physically owning cells of affected entrance anchors at both historical cutoffs.
      * @param resolved Immutable full load order, retained for the duration of selection.
      * @param index Spatial index built from resolved; provides physical ownership and exterior queries.
      * @param input Scope, asset providers and extraction/cancellation policy.

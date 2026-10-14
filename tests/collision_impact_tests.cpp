@@ -172,6 +172,40 @@ void TestCollisionImpactSelection()
     {
         auto order = Fixture();
         auto &base = order.records.back();
+        base.type = "DOOR";
+        base.winning.localBounds = core::AABB{{-8, -128, -8}, {8, 128, 256}};
+        base.origins.front().localBounds = base.winning.localBounds;
+        auto before = added;
+        before.plugin = "Base.esm";
+        before.teleportDestinationId = 21;
+        before.teleportDestinationPosition = core::Vec3{5120, 1024, 0};
+        auto moved = before;
+        moved.plugin = "Edit.esp";
+        moved.position = core::Vec3{9216, 1024, 0};
+        PutReference(order, {before, moved});
+        skyrim::ResolvedRecord partner{.type = "REFR", .formId = 21};
+        partner.winning = before;
+        partner.winning.formId = 21;
+        partner.winning.cellFormId = 102;
+        partner.winning.position = core::Vec3{5120, 1024, 0};
+        partner.winning.teleportDestinationId = 20;
+        partner.winning.teleportDestinationPosition = core::Vec3{1024, 1024, 0};
+        partner.origins = {partner.winning};
+        order.records.push_back(partner);
+        Require(Select(order, root) == std::set<std::uint32_t>{101, 102, 103});
+
+        // Moving an arrival marker changes the destination entrance even when neither door volume moves.
+        order.records[order.records.size() - 2].winning = before;
+        order.records[order.records.size() - 2].origins = {before};
+        partner.winning.plugin = "Edit.esp";
+        partner.winning.teleportDestinationPosition = core::Vec3{2048, 1024, 0};
+        partner.origins.push_back(partner.winning);
+        order.records.back() = partner;
+        Require(Select(order, root) == std::set<std::uint32_t>{101});
+    }
+    {
+        auto order = Fixture();
+        auto &base = order.records.back();
         base.modelPath = "effects/FXFireFixture.nif";
         base.winning.modelPath = *base.modelPath;
         base.origins.front().modelPath = *base.modelPath;

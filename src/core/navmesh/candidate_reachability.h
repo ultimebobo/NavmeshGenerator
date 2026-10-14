@@ -23,11 +23,13 @@ namespace navmesh::core
     /** Remove disconnected floor islands after all generated portals have been reconciled.
      * @param targets Complete successful generated set, with unique CELL keys and mesh pointers. Shared edges
      * and reciprocal generated portals define connectivity; touching vertices do not.
-     * Retains components reaching matched doors or untouched authored NAVMs, plus the largest
-     * component by horizontal area in each contiguous exterior selection and each interior.
+     * Exterior selections with matched doors retain only door-reachable components, independently
+     * of authored NAVM. Doorless selections and interiors also retain untouched authored destinations
+     * and the largest component by horizontal area.
      * Exterior selections are grouped by shared CELL sides within the same worldspace,
      * independently of floor heights. Open CELL borders and generated portals alone are not anchors.
      * Compacts vertices, polygons, regions, source joins, doors and both ends of generated portals;
+     * discards authored vertex edits when no retained portal reaches their NAVM;
      * rebuilds contours and topology, and increments rejectedUnreachable for removed triangles.
      * @return Total removed triangle count. Empty candidates remain valid replacement targets.
      * @throws std::runtime_error On invalid ownership, topology or reciprocal portal destinations.

@@ -85,6 +85,12 @@ namespace navmesh::skyrim
         std::optional<core::Vec3> position;
         /// Rotation-independent model bound radius from OBND, in model-local units.
         std::optional<float> modelRadius;
+        /// Base-object bounds in model-local Skyrim units; absent without a valid three-dimensional OBND.
+        std::optional<core::AABB> localBounds;
+        /// Resolved XTEL destination reference; absent without a supported teleport subrecord.
+        std::optional<std::uint32_t> teleportDestinationId;
+        /// XTEL standing position in the destination's Skyrim world space; absent for invalid coordinates.
+        std::optional<core::Vec3> teleportDestinationPosition;
         /// Whether this version names a model asset, including models removed by overrides.
         bool hasModel{};
         /// Placed-reference scale for this version; multiplies model-local distances.
@@ -205,6 +211,8 @@ namespace navmesh::skyrim
     /// @param input Data directory and plugins in load order, plus optional progress callback.
     /// @param reader Plugin reader implementation; defaults to the direct reader.
     /// @return Winning records, cells, and explicit diagnostics for unsupported input.
+    /// References include valid model-local base bounds and reciprocal teleport arrival positions;
+    /// missing, disabled or deleted return links supply no arrival anchor.
     [[nodiscard]] ResolvedLoadOrder ResolveLoadOrder(const LoadOrderInput &input,
                                                      const IPluginReader &reader = DirectPluginReader{});
 

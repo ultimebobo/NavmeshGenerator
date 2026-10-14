@@ -925,7 +925,8 @@ namespace navmesh::app::detail
             {
                 if (reference.baseRecordType == "DOOR" && !reference.deleted && !reference.initiallyDisabled)
                 {
-                    exits.push_back({.referenceId = reference.id, .position = reference.position});
+                    exits.push_back({.referenceId = reference.id,
+                                     .position = reference.teleportArrival.value_or(reference.position)});
                 }
             }
             update("Generating NAVM");

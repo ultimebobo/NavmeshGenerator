@@ -43,8 +43,17 @@ Collision-impact selection includes historical hearth/fire dependencies.
 
 Operable DOOR references do not supply permanent collision or render geometry:
 their closed model pose would obstruct an intended portal. Extraction records
-them as excluded while preserving reference metadata for exit matching. Static
-door frames, thresholds and adjoining floors remain eligible geometry.
+them as excluded while preserving reference metadata for exit matching. Exterior
+teleport doors with valid base-object bounds and reciprocal arrival metadata
+supply an obstacle-only volume from their placed bounds: teleportation does not
+provide a same-world route through the threshold into scenery. Exit matching uses
+the reciprocal arrival position on the accessible side. Missing or invalid return
+metadata supplies no boundary volume. This policy uses geometry and teleport
+records independently of authored NAVM. Static door frames, thresholds and
+adjoining floors remain eligible geometry.
+Collision-impact selection compares threshold volumes at their historical
+placement/base-record versions and includes destination entrances when return-side
+teleport metadata changes.
 
 Before ledge rejection, standing-clearance filtering and radius erosion, the
 adapter repairs narrow unsupported raster seams between collision pieces. Both
@@ -180,8 +189,11 @@ as the effective constraints.
 
 After polygon construction and CELL clipping, single-cell generation retains all
 surviving walkable components until authored border matching finishes. It then
-uses the shared reachability filter to retain the largest connected floor by
-horizontal area, plus components reaching a matched door or authored neighbor.
+uses the shared reachability filter. Contiguous exterior selections with matched
+doors retain only networks reachable from those entrances, so a larger disconnected
+scenery floor cannot survive through area ranking or authored border constraints.
+Doorless selections and interiors retain the largest connected floor by horizontal
+area, plus components reaching a matched door or authored neighbor.
 Cells without authored navigation or doors can therefore receive generated floors,
 including interiors. Door matching selects the closest compatible triangle within
 the horizontal and vertical reach derived from the movement profile and voxel sizes.

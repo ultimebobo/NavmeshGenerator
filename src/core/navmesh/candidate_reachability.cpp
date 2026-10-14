@@ -146,6 +146,17 @@ namespace
             link.polygon = polygonRemap[link.polygon];
             candidate.regions.at(polygonRegion.at(link.polygon)).reachesBorder = true;
         }
+        // A removed authored portal must not leave edits that the writer could apply to an unused neighbor.
+        std::set<std::uint32_t> authoredDestinations;
+        for (const auto &link : candidate.borderLinks)
+        {
+            if (!link.generatedNeighborCell)
+            {
+                authoredDestinations.insert(link.neighborNavmeshId);
+            }
+        }
+        std::erase_if(candidate.authoredBorderVertexEdits,
+                      [&](const auto &edit) { return !authoredDestinations.contains(edit.navmeshId); });
         for (auto &exit : candidate.exits)
         {
             exit.region.reset();
@@ -276,6 +287,7 @@ namespace navmesh::core
 
         std::vector<double> floorAreas(offsets.back());
         std::vector<bool> retained(offsets.back());
+        std::vector<bool> entranceAnchored(targets.size());
         std::map<std::size_t, std::size_t> largest;
         for (std::size_t index{}; index < targets.size(); ++index)
         {
@@ -296,18 +308,28 @@ namespace navmesh::core
                 if (exit.polygon)
                 {
                     retained[floors.Root(offsets[index] + *exit.polygon)] = true;
+                    if (targets[index].bounds)
+                    {
+                        entranceAnchored[areas.Root(index)] = true;
+                    }
                 }
             }
+        }
+        // Exterior entrance evidence identifies the playable networks independently of authored NAVM.
+        // A larger disconnected scenery floor and authored border constraints cannot override that evidence.
+        for (std::size_t index{}; index < targets.size(); ++index)
+        {
+            const auto &candidate = *targets[index].candidate;
             for (const auto &link : candidate.borderLinks)
             {
-                if (!link.generatedNeighborCell)
+                if (!link.generatedNeighborCell && !entranceAnchored[areas.Root(index)])
                 {
                     retained[floors.Root(offsets[index] + link.polygon)] = true;
                 }
             }
         }
         // Area is summed over the complete network, independent of tessellation.
-        // Separate selected areas and interiors each retain their primary floor.
+        // Doorless selections and interiors retain a primary floor independently.
         for (std::size_t index{}; index < targets.size(); ++index)
         {
             for (auto polygon = offsets[index]; polygon < offsets[index + 1]; ++polygon)
@@ -322,7 +344,10 @@ namespace navmesh::core
         }
         for (const auto &[area, root] : largest)
         {
-            retained[root] = true;
+            if (!entranceAnchored[area])
+            {
+                retained[root] = true;
+            }
         }
 
         // Plan all polygon identities before editing any candidate, then update
