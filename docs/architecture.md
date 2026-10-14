@@ -48,6 +48,24 @@ actual LAND provenance; child records take precedence, and missing, deleted or
 cyclic parents supply no floor. References and authored NAVMs retain their owning
 worldspace identities.
 
+The Skyrim-owned `parser/base_object_swapper` module discovers effective loose
+BOS configs, resolves identities and precedence, and applies runtime placement
+alternatives after plugin resolution and before spatial indexing. Encoded record
+histories remain immutable. Collision impact selection compares original and
+effective placements, including configurations without plugin edits. The app
+owns snapshot reporting and checks config coherence before publishing output.
+See [Base Object Swapper inputs](base-object-swapper.md) for the compatibility contract.
+The record index includes BOS replacement classes independently of extraction
+eligibility. Ordinary placements of those additional classes remain excluded;
+effective runtime placements can supply their models without enabling unrelated
+inventory clutter in the scene.
+
+Uncertain runtime outcomes cross the neutral boundary as `PlacementEnvelope`.
+Model extraction encloses supported collision in filled world bounds on
+`GeometrySource::solidBounds`. The core rasterizer fills those obstruction
+volumes, and analysis excludes their surfaces from floor evidence. No BOS syntax
+or Skyrim runtime policy enters the neutral algorithm layer.
+
 Winning exterior CELL water flags and heights resolve into `Cell::waterHeight`.
 Default heights use winning WRLD water data and master-aware parent-world
 inheritance; invalid, cyclic or unresolved data supplies no water plane. Both engine default-height

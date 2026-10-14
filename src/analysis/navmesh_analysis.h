@@ -116,6 +116,8 @@ namespace navmesh::analysis
         SupportSourceType type{SupportSourceType::Unknown};
         float confidence{0.0F};
         std::string id;
+        /// Uncertain collision contributes obstruction evidence but cannot be selected as a supporting floor.
+        bool obstacleOnly{};
     };
 
     struct AnalysisSummary

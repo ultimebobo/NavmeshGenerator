@@ -76,7 +76,8 @@ namespace navmesh::app::detail
                         : source.sourceType == Type::Terrain ? navmesh::analysis::SupportSourceType::Terrain
                                                              : navmesh::analysis::SupportSourceType::RenderFallback,
                 .confidence = source.confidence,
-                .id = std::format("{}:{:08X}:{}", source.reference.plugin, source.reference.formId, source.modelPath)};
+                .id = std::format("{}:{:08X}:{}", source.reference.plugin, source.reference.formId, source.modelPath),
+                .obstacleOnly = source.solidBounds.has_value()};
         }
         return result;
     }

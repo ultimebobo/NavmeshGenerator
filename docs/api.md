@@ -22,6 +22,16 @@ this reference. The showcase utilities and renderer are described in the
   the vertical voxel budget left unspent by exact generator cleanup.
   Rejects independent edits once
   generated-to-generated portal identities require coordinated remapping.
+- `navmesh::skyrim::DiscoverBaseObjectSwaps`, `ApplyBaseObjectSwaps`:
+  effective loose configuration snapshots, BOS identity/precedence resolution
+  and runtime alternatives separated from encoded record history.
+  `BaseObjectSwapSnapshotMatches` guards publication; `WriteBaseObjectSwapReport`
+  exports winner identity and placement evidence.
+- `navmesh::core::PlacementEnvelope`, `GeometrySource::solidBounds`:
+  model-placement uncertainty in Skyrim world units and filled world obstruction
+  volumes. Extraction encloses possible collision; generation fills interiors
+  and excludes their roofs from support. Analysis uses `TriangleSource::obstacleOnly`
+  to exclude speculative floor hits. See [the BOS contract](base-object-swapper.md).
 
 - `navmesh::core::StitchCandidateBorders`: transactional authored portal repair,
   including terminal boundary chains, authored floor slope envelopes and shared

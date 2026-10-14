@@ -858,6 +858,123 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(json.loads((output / "batch-report.json").read_text())["selected_cells"], 0)
         self.assertFalse((output / "generated-navmesh.esp").exists())
 
+    def bos_fixture(self):
+        test_exe = Path(os.environ.get("NAVMESH_TEST_EXE", str(EXE.with_name("navmesh-tests.exe"))))
+        if not test_exe.exists() and "NAVMESH_TEST_EXE" not in os.environ:
+            test_exe = EXE.parent.parent / "debug" / "navmesh-tests.exe"
+        self.assertTrue(test_exe.exists(), "Build navmesh-tests alongside the desktop executable")
+        completed = subprocess.run([str(test_exe), "--export-bos-model", str(self.root / "meshes" / "Solid.nif")],
+                                   capture_output=True, text=True, timeout=90)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        reference = record("REFR", 0x801, sub("NAME", struct.pack("<I", 0x800))
+                           + sub("DATA", struct.pack("<6f", 1000, 1000, 0, 0, 0, 0)))
+        self.write_baseline(references={0: reference})
+        with (self.root / "Baseline.esm").open("ab") as plugin:
+            plugin.write(record("STAT", 0x800, sub("EDID", b"FixtureBase\0") + sub("MODL", b"Solid.nif\0")))
+        (self.root / "plugins.txt").write_text("Baseline.esm\n")
+
+    def test_bos_base_index_does_not_expand_unmodified_geometry(self):
+        self.bos_fixture()
+        baseline_output = self.run_cli("--cell-formid", "100", terrain_only=False, output="static-only")
+        baseline = json.loads((baseline_output / "geometry.json").read_text())
+        references = record("REFR", 0x801, sub("NAME", struct.pack("<I", 0x800))
+                            + sub("DATA", struct.pack("<6f", 1000, 1000, 0, 0, 0, 0)))
+        base_types = ("LVLI", "MISC", "WEAP", "ARMO", "AMMO", "ALCH", "BOOK",
+                      "SLGM", "KEYM", "INGR", "SCRL", "LIGH", "HAZD", "IDLM")
+        bases = b""
+        for index, kind in enumerate(base_types):
+            base_id = 0x810 + index
+            references += record("REFR", 0x900 + index, sub("NAME", struct.pack("<I", base_id))
+                                 + sub("DATA", struct.pack("<6f", 1200 + index * 100, 1000, 0, 0, 0, 0)))
+            bases += record(kind, base_id, sub("EDID", (f"Fixture{kind}\0").encode())
+                            + sub("MODL", b"Solid.nif\0"))
+        self.write_baseline(references={0: references})
+        with (self.root / "Baseline.esm").open("ab") as plugin:
+            plugin.write(record("STAT", 0x800, sub("EDID", b"FixtureBase\0") + sub("MODL", b"Solid.nif\0")))
+            plugin.write(bases)
+        output = self.run_cli("--cell-formid", "100", terrain_only=False, output="with-clutter")
+        geometry = json.loads((output / "geometry.json").read_text())
+        self.assertEqual(geometry["triangleProvenance"], baseline["triangleProvenance"])
+        self.assertEqual((output / "geometry.obj").read_bytes(), (baseline_output / "geometry.obj").read_bytes())
+
+        config = self.root / "Replacement_SWAP.ini"
+        config.write_text("[References]\n0x801~Baseline.esm|FixtureMISC\n")
+        output = self.run_cli("--cell-formid", "100", terrain_only=False, output="bos-clutter-swap")
+        geometry = json.loads((output / "geometry.json").read_text())
+        collision = [source for source in geometry["triangleProvenance"] if source["sourceType"] == "collision"]
+        self.assertTrue(collision)
+        self.assertEqual({source["reference"]["formId"] for source in collision}, {"00000801"})
+        self.assertEqual({source["baseObject"]["recordType"] for source in collision}, {"MISC"})
+        self.assertTrue(all(source["inputConfig"] for source in collision))
+        self.assertEqual(geometry["vertices"], baseline["vertices"])
+        self.assertEqual(geometry["triangles"], baseline["triangles"])
+
+    def test_bos_ini_only_load_order_and_cell_inputs(self):
+        self.bos_fixture()
+        config = self.root / "Placement_SWAP.ini"
+        config.write_text("[Transforms]\n0x801~Baseline.esm|posA(9000,1000,0)\n")
+        output = self.run_cli("--rebuild-load-order", terrain_only=False)
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual([cell["form_id"] for cell in report["cells"]], ["00000100", "00000102"])
+        bos = json.loads((output / "bos-input.json").read_text())
+        self.assertEqual(bos["placements"][0]["alternatives"][0]["position"], [9000, 1000, 0])
+        first_identity = bos["fingerprint"]
+        config.write_text("[Transforms]\n0x801~Baseline.esm|posA(5000/9000,1000,0)\n")
+        output = self.run_cli("--cell-formid", "101", output="bos-cell", terrain_only=False)
+        bos = json.loads((output / "bos-input.json").read_text())
+        self.assertNotEqual(bos["fingerprint"], first_identity)
+        self.assertTrue(bos["placements"][0]["alternatives"][0]["conservative"])
+        geometry = json.loads((output / "geometry.json").read_text())
+        self.assertTrue(any(source["inputConfig"] for source in geometry["coverage"]))
+        self.assertTrue(any(source["navigationObstacle"] for source in geometry["triangleProvenance"]))
+        direct = self.root / "bos-direct"
+        completed = subprocess.run([str(EXE), "--data", str(self.root), "--plugin", str(self.root / "Baseline.esm"),
+                                    "--cell", "Exterior1", "--output", str(direct),
+                                    "--asset-cache", str(self.root / "cache")],
+                                   capture_output=True, text=True, timeout=90)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(json.loads((direct / "geometry.json").read_text())["cell"], "00000101")
+
+    def test_bos_mo2_ini_only_mod_and_overwrite_priority(self):
+        self.bos_fixture()
+        instance = self.root / "Instance"
+        profile = instance / "profiles" / "Default"
+        mod = instance / "mods" / "Placement"
+        overwrite = instance / "overwrite"
+        for path in (profile, mod, overwrite):
+            path.mkdir(parents=True)
+        (profile / "modlist.txt").write_text("+Placement\n")
+        (profile / "plugins.txt").write_text("*Baseline.esm\n")
+        (profile / "loadorder.txt").write_text("Baseline.esm\n")
+        (instance / "ModOrganizer.ini").write_text(f"[General]\ngamePath={self.root.as_posix()}\n")
+        for path, x in ((self.root, 2000), (mod, 5000), (overwrite, 9000)):
+            (path / "Placement_SWAP.ini").write_text(f"[Transforms]\n0x801~Baseline.esm|posA({x},1000,0)\n")
+        output = self.root / "bos-mo2"
+        completed = subprocess.run([str(EXE), "--mo2", str(instance), "--profile", "Default",
+                                    "--rebuild-load-order", "--output", str(output),
+                                    "--asset-cache", str(self.root / "cache")],
+                                   capture_output=True, text=True, timeout=90)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        bos = json.loads((output / "bos-input.json").read_text())
+        self.assertEqual(Path(bos["configs"][0]["path"]), overwrite / "Placement_SWAP.ini")
+        self.assertEqual(bos["placements"][0]["alternatives"][0]["position"][0], 9000)
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual([cell["form_id"] for cell in report["cells"]], ["00000100", "00000102"])
+
+    def test_bos_vortex_deployed_configuration(self):
+        self.bos_fixture()
+        game, application = self.vortex_deployment()
+        (application / "plugins.txt").write_text("*Baseline.esm\n")
+        data = game / "Data"
+        (data / "meshes").mkdir()
+        (data / "meshes" / "Solid.nif").write_bytes((self.root / "meshes" / "Solid.nif").read_bytes())
+        (data / "Placement_SWAP.ini").write_text("[Transforms]\n0x801~Baseline.esm|flags(0x800)\n")
+        output = self.run_vortex(game, application, "--rebuild-load-order")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual([cell["form_id"] for cell in report["cells"]], ["00000100"])
+        bos = json.loads((output / "bos-input.json").read_text())
+        self.assertTrue(bos["placements"][0]["alternatives"][0]["disabled"])
+
     def test_terrain_change_rebuilds_only_its_owner(self):
         header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800)) + sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
         patch = group(0x400, 1, group(0x100, 6, group(0x100, 9, record("LAND", 0x300, land(0.001)))))

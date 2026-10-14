@@ -17,6 +17,7 @@
 #include "skyrim/mo2/mo2_importer.h"
 #include "skyrim/vortex/vortex_importer.h"
 #include "skyrim/parser/affected_cells.h"
+#include "skyrim/parser/base_object_swapper.h"
 #include "skyrim/parser/plugin_writer.h"
 #include "validation/validation.h"
 
@@ -97,6 +98,13 @@ namespace
         return left.size() == right.size() &&
                std::equal(left.begin(), left.end(), right.begin(),
                           [](unsigned char a, unsigned char b) { return std::tolower(a) == std::tolower(b); });
+    }
+
+    [[nodiscard]] bool ContainsIgnoreCase(const std::string &text, const std::string &fragment)
+    {
+        return std::search(text.begin(), text.end(), fragment.begin(), fragment.end(),
+                           [](unsigned char a, unsigned char b)
+                           { return std::tolower(a) == std::tolower(b); }) != text.end();
     }
 
     /// Validate run-mode combinations and normalize generation prerequisites before performing I/O.
@@ -301,6 +309,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     const auto inputStarted = std::chrono::steady_clock::now();
     // Resolve one coherent input snapshot shared by listing, single-cell, and batch processing.
     std::optional<navmesh::skyrim::ResolvedLoadOrder> resolved;
+    std::optional<navmesh::skyrim::BaseObjectSwapInput> bosInputs;
     std::optional<navmesh::skyrim::Mo2ProfileInput> mo2Input;
     std::optional<navmesh::skyrim::VortexInput> vortexInput;
     navmesh::skyrim::ModelAssetSources modelAssets;
@@ -447,7 +456,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             return 2;
         }
     }
-    else if ((options.generateCandidate || !options.cellSelection.empty()) && !options.plugin.empty())
+    else if (!options.listCells && !options.plugin.empty())
     {
         // Standalone previews need the same resolved CELL ownership, terrain
         // halo and neighboring NAVMs as the shared load-order generation path.
@@ -457,8 +466,12 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         try
         {
-            resolved = navmesh::skyrim::ResolveLoadOrder(
-                {.dataDirectory = options.data, .plugins = {std::filesystem::absolute(options.plugin)}});
+            bosInputs = navmesh::skyrim::DiscoverBaseObjectSwaps({options.data});
+            if (options.generateCandidate || !options.cellSelection.empty() || !bosInputs->configs.empty())
+            {
+                resolved = navmesh::skyrim::ResolveLoadOrder(
+                    {.dataDirectory = options.data, .plugins = {std::filesystem::absolute(options.plugin)}});
+            }
         }
         catch (const std::exception &error)
         {
@@ -530,6 +543,37 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     }
 
     std::filesystem::create_directories(options.output);
+    if (resolved)
+    {
+        try
+        {
+            // Effective Data roots include MO2's enabled providers and overwrite; deployed/direct inputs use Data itself.
+            const auto roots = modelAssets.looseRoots.empty() ? std::vector<std::filesystem::path>{options.data}
+                                                              : modelAssets.looseRoots;
+            if (!bosInputs)
+            {
+                bosInputs = navmesh::skyrim::DiscoverBaseObjectSwaps(roots);
+            }
+            const auto diagnostics = navmesh::skyrim::ApplyBaseObjectSwaps(*resolved, *bosInputs);
+            for (const auto &diagnostic : diagnostics)
+            {
+                std::cerr << diagnostic << '\n';
+            }
+            if (!navmesh::skyrim::WriteBaseObjectSwapReport(options.output / "bos-input.json", *bosInputs, *resolved,
+                                                            diagnostics))
+            {
+                std::cerr << "Cannot write bos-input.json.\n";
+                return 2;
+            }
+            std::cerr << std::format("BOS: {} configs, {} effective reference changes.\n", bosInputs->configs.size(),
+                                     resolved->runtimePlacements.size());
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << "BOS input resolution failed: " << error.what() << '\n';
+            return 2;
+        }
+    }
     if (resolved && (!UsesBatchGeneration(options) || options.batchOutput == "full"))
     {
         navmesh::cli::WriteLoadOrderJson(options.output / "load-order.json", *resolved);
@@ -563,7 +607,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         return detail::RunBatch(options, *resolved, (mo2Input || vortexInput) ? &modelAssets : nullptr, paths, progress,
                                 cancelled,
-                                std::chrono::duration<double>(std::chrono::steady_clock::now() - inputStarted).count());
+                                std::chrono::duration<double>(std::chrono::steady_clock::now() - inputStarted).count(),
+                                bosInputs ? &*bosInputs : nullptr);
     };
     if (UsesBatchGeneration(options) && (options.rebuildScope != RebuildScope::Cell || !options.cellSelection.empty()))
     {
@@ -596,11 +641,14 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             const auto formMatch = options.cellFormId && candidate.id == *options.cellFormId;
             const auto editorMatch =
                 !options.editorId.empty() && EqualsIgnoreCase(candidate.editorId, options.editorId);
+            const auto cellNameMatch = !options.cell.empty() && (ContainsIgnoreCase(candidate.editorId, options.cell) ||
+                                                                 ContainsIgnoreCase(candidate.name, options.cell));
             const auto coordinateMatch = candidate.exteriorCoordinates && options.cellX && options.cellY &&
                                          (*candidate.exteriorCoordinates)[0] == *options.cellX &&
                                          (*candidate.exteriorCoordinates)[1] == *options.cellY;
-            if ((!options.cellFormId && options.editorId.empty() && !options.cellX && !options.cellY) || formMatch ||
-                editorMatch || coordinateMatch)
+            if ((!options.cellFormId && options.editorId.empty() && options.cell.empty() && !options.cellX &&
+                 !options.cellY) ||
+                formMatch || editorMatch || cellNameMatch || coordinateMatch)
             {
                 cell = candidate;
                 break;
@@ -1113,6 +1161,11 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             std::filesystem::path pluginPath;
             std::string error;
             update(89, "Writing NAVM override plugin");
+            if (bosInputs && !navmesh::skyrim::BaseObjectSwapSnapshotMatches(*bosInputs))
+            {
+                std::cerr << "BOS configurations changed during generation; rerun with coherent inputs.\n";
+                return 2;
+            }
             if (!navmesh::skyrim::WriteNavmeshOverride(options.output, inputPaths, *resolved, *cell, *candidate,
                                                        pluginPath, error))
             {

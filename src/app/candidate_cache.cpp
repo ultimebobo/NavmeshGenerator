@@ -21,7 +21,7 @@ namespace navmesh::app::detail
         // This identity versions both storage and successful generation semantics.
         // Change its pipeline revision when successful output becomes incompatible;
         // executable rebuilds alone must not discard completed generation work.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-6/recast-pipeline-34";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-7/recast-pipeline-35";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)
@@ -51,7 +51,7 @@ namespace navmesh::app::detail
         template <class Archive> void Fields(Archive &a, core::GeometrySource &v)
         {
             a(v.modelPath, v.materialClass, v.sourceType, v.collisionType, v.confidence, v.reference, v.baseObject,
-              v.navigationObstacle);
+              v.navigationObstacle, v.inputConfig, v.solidBounds);
         }
         template <class Archive> void Fields(Archive &a, core::TerrainTriangleProvenance &v)
         {

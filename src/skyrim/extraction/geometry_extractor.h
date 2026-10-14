@@ -131,6 +131,10 @@ namespace navmesh::skyrim
     /// Transient effects, hazards and scripted activators supply no fire exclusion. Fitting preserves shared caches.
     /// Exclusions are distinct from Havok collision and render fallback.
     /// Fire exclusion decoding also runs in navigationOnly mode; decorative billboards do not define the footprint.
+    /// Placement envelopes enclose supported collision and fire exclusions across all possible transforms as filled,
+    /// obstacle-only world volumes; runtime input provenance is retained in scene sources.
+    /// Inventory and other BOS-only indexed base classes supply geometry only for effective
+    /// runtime placements; indexing them does not enable ordinary plugin clutter geometry.
     /// Operable DOOR models are excluded from permanent support and obstruction;
     /// exterior teleport thresholds with valid bounds and reciprocal arrival metadata supply obstacle-only
     /// placed OBND volumes, separating same-space floors without reading authored NAVM or the door model.

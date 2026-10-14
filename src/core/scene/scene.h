@@ -75,6 +75,10 @@ namespace navmesh::core
         /// Geometry that blocks navigation but cannot supply a walkable floor, such as furniture or a fire bed.
         /// Rasterization retains its volume and headroom effects even on upward-facing triangles.
         bool navigationObstacle{};
+        /// Runtime-input file and line provenance; empty for plugin-only geometry.
+        std::string inputConfig;
+        /// Filled Skyrim-world obstruction volume; rasterized solid, with no floor support.
+        std::optional<AABB> solidBounds;
     };
     /// Identifies the lower-left LAND grid sample of a triangle's terrain quad.
     struct TerrainTriangleProvenance

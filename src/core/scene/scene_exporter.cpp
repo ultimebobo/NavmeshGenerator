@@ -395,12 +395,12 @@ namespace navmesh::core
                                     source.modelPath.empty() ? source.reference.recordType : source.modelPath);
                     const auto provenanceJson = std::format(
                         "{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\",\"model\":\"{}\","
-                        "\"sourceType\":\"{}\",\"confidence\":{},\"navigationObstacle\":{}}}",
+                        "\"sourceType\":\"{}\",\"confidence\":{},\"navigationObstacle\":{},\"inputConfig\":\"{}\"}}",
                         Escape(source.reference.plugin), source.reference.formId, Escape(source.reference.recordType),
                         Escape(source.modelPath),
                         source.sourceType == GeometrySourceType::NavigationExclusion ? "navigation_exclusion"
                                                                                      : LayerName(layer),
-                        source.confidence, source.navigationObstacle ? "true" : "false");
+                        source.confidence, source.navigationObstacle ? "true" : "false", Escape(source.inputConfig));
                     objects.push_back({layer, name, provenanceJson});
                 }
                 auto &object = objects[where->second];

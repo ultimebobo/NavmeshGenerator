@@ -3,6 +3,7 @@
 #include "app/run.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/parser/plugin_parser.h"
+#include "skyrim/parser/base_object_swapper.h"
 
 namespace navmesh::app::detail
 {
@@ -23,6 +24,7 @@ namespace navmesh::app::detail
      * @param progress Optional synchronous progress sink.
      * @param cancelled Optional cancellation query between processing stages.
      * @param inputPreparationSeconds Elapsed input/report preparation time, in seconds, for checkpoint telemetry.
+     * @param bosInputs Optional runtime snapshot; revalidated before publishing a generated plugin.
      * Explicit identifiers must all resolve uniquely; aliases deduplicate by CELL Form ID.
      * @return Process-style status: success (including logged cell-generation skips),
      * input/export/global-linking failure, or cancellation. Skips preserve authored geometry.
@@ -31,5 +33,5 @@ namespace navmesh::app::detail
     int RunBatch(const Options &options, const skyrim::ResolvedLoadOrder &resolved,
                  const skyrim::ModelAssetSources *assets, const std::vector<std::filesystem::path> &paths,
                  const ProgressCallback &progress, const CancellationCallback &cancelled,
-                 double inputPreparationSeconds = 0);
+                 double inputPreparationSeconds = 0, const skyrim::BaseObjectSwapInput *bosInputs = nullptr);
 } // namespace navmesh::app::detail

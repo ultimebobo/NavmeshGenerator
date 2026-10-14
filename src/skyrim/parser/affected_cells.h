@@ -52,6 +52,8 @@ namespace navmesh::skyrim
          * @throws std::invalid_argument for an unknown plugin or negative radius.
          * Deleted/moved placements include historical and winning locations. Changes
          * to base records select their placed uses, even when the REFR is untouched.
+         * BOS overlays add original and effective footprints; uncertain exterior
+         * placements conservatively include their worldspace without decoded model bounds.
          */
         [[nodiscard]] std::vector<const core::Cell *> AffectedCells(
             const std::string &plugin, int radius, const std::set<std::string> &changedModels = {},

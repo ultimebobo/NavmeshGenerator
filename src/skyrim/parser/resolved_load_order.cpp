@@ -58,7 +58,10 @@ namespace
         // remain outside this bounded in-memory reader.
         return type == "WRLD" || type == "CELL" || type == "LAND" || type == "REFR" || type == "ACHR" ||
                type == "NAVM" || type == "STAT" || type == "MSTT" || type == "ACTI" || type == "DOOR" ||
-               type == "FURN" || type == "TREE" || type == "FLOR" || type == "CONT";
+               type == "FURN" || type == "TREE" || type == "FLOR" || type == "CONT" || type == "LVLI" ||
+               type == "MISC" || type == "WEAP" || type == "ARMO" || type == "AMMO" || type == "ALCH" ||
+               type == "BOOK" || type == "SLGM" || type == "KEYM" || type == "INGR" || type == "SCRL" ||
+               type == "LIGH" || type == "HAZD" || type == "IDLM";
     }
     bool DecodePayload(const std::vector<std::uint8_t> &fileBytes, std::size_t begin, std::size_t end, bool compressed,
                        std::vector<std::uint8_t> &decoded, std::string &error)
@@ -156,6 +159,10 @@ namespace
             else if (kind == "NAME" && (record.type == "REFR" || record.type == "ACHR") && size >= 4)
             {
                 record.referencedFormIds.push_back(U32(payload, data));
+            }
+            else if (kind == "LVLO" && record.type == "LVLI" && size >= 12)
+            {
+                record.leveledBaseIds.push_back(U32(payload, data + 4));
             }
             else if ((kind == "XLKR" || kind == "XESP" || kind == "XNDP" || kind == "XTEL") && size >= 4)
             {
@@ -701,6 +708,8 @@ namespace navmesh::skyrim
             {
                 full[i] = nextFull++;
             }
+            result.pluginFormPrefixes.emplace(Lower(sources[i].path.filename().string()),
+                                              sources[i].light ? 0xFE000000U | (light[i] << 12) : full[i] << 24);
         }
         const auto resolve = [&](std::size_t owner, std::uint32_t raw) -> std::optional<std::uint32_t>
         {
@@ -790,6 +799,10 @@ namespace navmesh::skyrim
                     }
                 }
                 record.winning.cellFormId = record.cellFormId;
+                for (auto &base : record.leveledBaseIds)
+                {
+                    base = resolve(i, base).value_or(0);
+                }
                 record.winning.worldspaceFormId = record.worldspaceFormId;
                 if (!record.referencedFormIds.empty())
                 {

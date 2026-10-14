@@ -187,6 +187,35 @@ namespace
                 assert(HasNavigationAt(candidate, {304, 256, 0}));
             }
         }
+        // Runtime sweeps retain furniture and fire policy while covering every possible position.
+        auto uncertain = cell;
+        for (auto &reference : uncertain.references)
+        {
+            if (reference.id == 1)
+            {
+                continue;
+            }
+            reference.inputConfig = "Synthetic_SWAP.ini:1";
+            reference.envelope = core::PlacementEnvelope{reference.position,
+                                                         reference.position + core::Vec3{1024, 0, 0}, reference.scale};
+        }
+        for (const bool navigationOnly : {false, true})
+        {
+            const auto geometry =
+                skyrim::ExtractGeometry(root, uncertain, root, {}, {}, nullptr, &cache, navigationOnly);
+            assert(geometry.modelsLoaded == 3 && geometry.modelsExcluded == 0);
+            for (const auto &source : geometry.scene.geometrySources)
+            {
+                if (source.reference.formId == 1)
+                {
+                    continue;
+                }
+                assert(source.navigationObstacle && source.solidBounds);
+                assert(source.solidBounds->max.x - source.solidBounds->min.x > 1024);
+                assert(source.inputConfig == "Synthetic_SWAP.ini:1");
+                assert(source.sourceType != core::GeometrySourceType::RenderFallback);
+            }
+        }
         for (const auto *type : {"FURN", "CONT", "STAT"})
         {
             cell.references.resize(2);

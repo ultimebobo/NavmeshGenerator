@@ -8,6 +8,21 @@
 
 namespace navmesh::core
 {
+    /** Continuous placement uncertainty, conservatively represented by a solid collision envelope.
+     * Positions are absolute Skyrim world units. Scale is a nonnegative maximum
+     * factor; arbitraryRotation requires a model-local bounding sphere about the origin.
+     * The envelope supplies obstruction only, never a walkable floor.
+     */
+    struct PlacementEnvelope
+    {
+        /// Inclusive component bounds on absolute reference positions, in world units.
+        Vec3 minimumPosition, maximumPosition;
+        /// Largest possible nonnegative model-to-world scale factor.
+        float maximumScale{1.0F};
+        /// Enclose all orientations about the model origin rather than the reference's fixed angles.
+        bool arbitraryRotation{};
+    };
+
     struct Reference
     {
         std::uint32_t id{};
@@ -34,6 +49,10 @@ namespace navmesh::core
         std::optional<Vec3> teleportArrival;
         /// Base-object OBND in model-local Skyrim units; absent when missing or degenerate.
         std::optional<AABB> localBounds;
+        /// Runtime-input file and line provenance; empty for plugin-only placements.
+        std::string inputConfig;
+        /// Possible collision occupancy; absence means the placement is deterministic.
+        std::optional<PlacementEnvelope> envelope;
     };
     struct Cell
     {

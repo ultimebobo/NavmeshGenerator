@@ -83,7 +83,9 @@ namespace navmesh::core
          * before evidence and connection assignment; exterior CELL seam samples remain pinned.
          * Folded partitions trigger shared contour refinement and watershed layer recovery.
          * Obstacle-only sources cannot supply
-         * walkable floors. Unsupported raster seams within the agent radius can join
+         * walkable floors. Sources with solidBounds fill their entire world volume as
+         * obstruction, including the interior between their enclosing faces.
+         * Unsupported raster seams within the agent radius can join
          * climb-compatible standing floors when intervening solids permit clearance.
          * Narrow slope-rejected risers below the crossing height permit step repair;
          * explicitly excluded obstacle collision cannot anchor or fill a crossing.

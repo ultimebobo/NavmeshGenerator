@@ -2738,6 +2738,8 @@ void TestTeleportEnclosure();
 void TestBatchGenerationFailurePolicy();
 void TestBatchRecoveryBorderNeighbors();
 void TestCollisionImpactSelection();
+void TestBaseObjectSwapper();
+void ExportBaseObjectSwapModel(const std::filesystem::path &path);
 void TestTriangleTagging();
 
 void TestDesktopOptionsAndRecastSettings();
@@ -2857,6 +2859,16 @@ int main(int argc, char **argv)
         TestCollisionImpactSelection();
         return 0;
     }
+    if (argc > 1 && std::string_view(argv[1]) == "--bos-only")
+    {
+        TestBaseObjectSwapper();
+        return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) == "--export-bos-model")
+    {
+        ExportBaseObjectSwapModel(argv[2]);
+        return 0;
+    }
     if (argc > 1 && std::string_view(argv[1]) == "--writer-only")
     {
         TestNavmeshOverrideWriter();
@@ -2881,6 +2893,7 @@ int main(int argc, char **argv)
     TestBatchRecoveryBorderNeighbors();
     TestCollisionImpactSelection();
     TestTriangleTagging();
+    TestBaseObjectSwapper();
     if (argc > 2 && std::string_view(argv[1]) == "--export-navigation-fixture")
     {
         ExportNavigationObstacleFixture(argv[2]);

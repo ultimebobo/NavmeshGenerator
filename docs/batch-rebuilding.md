@@ -12,6 +12,14 @@ Automatic batch output retains full inspection without writing, and reports plus
 the plugin when writing. **Batch output** / `--batch-output` selects full,
 compressed, or plugin-only artifacts explicitly.
 
+Loose BOS configurations are imported automatically in every geometry scope.
+Load order includes configuration-only changes even with a baseline-only plugin
+list; original and effective collision footprints select rebuild targets. Cell
+uses effective placements and conservative random volumes. Plugin attribution
+follows the reference or original base history; Load order includes all BOS
+impacts independently of that history. Inspect `bos-input.json` and retain the
+same configs with the generated patch. See [BOS inputs](base-object-swapper.md).
+
 In Cell scope, **Make scene** / `--make-scene` adds a combined `scene.glb` and its
 sidecars regardless of batch output policy. Geometry is deduplicated across
 overlapping neighborhoods; generated candidates are displayed after final seam

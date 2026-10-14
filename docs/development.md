@@ -56,6 +56,10 @@ xmake run navmesh-tests
 
 Run the CLI regressions against the desktop binary without opening its UI:
 
+BOS collision fixtures are exported by the assertion-enabled `navmesh-tests`
+executable from the C++ checks above. The CLI suite finds it beside the desktop
+binary or in the debug build directory; `NAVMESH_TEST_EXE` can select another path.
+
 ```powershell
 xmake f -m release
 xmake build NavmeshGenerator

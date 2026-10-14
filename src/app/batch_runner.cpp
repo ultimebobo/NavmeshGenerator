@@ -183,7 +183,7 @@ namespace navmesh::app::detail
     int RunBatch(const navmesh::app::Options &options, const navmesh::skyrim::ResolvedLoadOrder &resolved,
                  const navmesh::skyrim::ModelAssetSources *assets, const std::vector<std::filesystem::path> &paths,
                  const navmesh::app::ProgressCallback &progress, const navmesh::app::CancellationCallback &cancelled,
-                 double inputPreparationSeconds)
+                 double inputPreparationSeconds, const navmesh::skyrim::BaseObjectSwapInput *bosInputs)
     {
         using namespace navmesh;
         const auto stop = [&] { return cancelled && cancelled(); };
@@ -1074,6 +1074,10 @@ namespace navmesh::app::detail
             {
                 progress(92,
                          options.copyPlugin ? "Writing selected plugin copy" : "Writing batch NAVM override plugin");
+            }
+            if (bosInputs && !skyrim::BaseObjectSwapSnapshotMatches(*bosInputs))
+            {
+                return fail("BOS configurations changed during generation; rerun with coherent inputs");
             }
             if (!skyrim::WriteNavmeshOverrides(options.output, paths, resolved, replacements, written, error,
                                                options.copyPlugin ? copySource : ""))

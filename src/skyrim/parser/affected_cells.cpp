@@ -40,13 +40,15 @@ namespace navmesh::skyrim
             for (const auto &reference : cell.references)
             {
                 const auto *record = resolved.FindWinning(reference.id);
-                const auto *physical = record ? PhysicalCell(record->winning) : nullptr;
+                auto placement = record ? record->winning : RecordOrigin{};
+                placement.position = reference.position;
+                const auto *physical = record ? PhysicalCell(placement) : nullptr;
                 references_[physical ? physical->id : cell.id].push_back(&reference);
                 if (record && physical && physical->exteriorCoordinates && !reference.modelPath.empty() &&
                     !reference.deleted && !reference.initiallyDisabled)
                 {
                     const auto *base = resolved.FindWinning(reference.baseObjectId);
-                    const bool bounded = base && base->winning.modelRadius &&
+                    const bool bounded = !reference.envelope && base && base->winning.modelRadius &&
                                          std::isfinite(*base->winning.modelRadius) && *base->winning.modelRadius >= 0 &&
                                          std::isfinite(reference.scale) && base->modelPath &&
                                          Lower(*base->modelPath) == Lower(reference.modelPath);
@@ -146,10 +148,10 @@ namespace navmesh::skyrim
             for (const auto *reference : it->second)
             {
                 const auto *base = resolved_.FindWinning(reference->baseObjectId);
-                if (bounds && base && base->winning.modelRadius && std::isfinite(*base->winning.modelRadius) &&
-                    *base->winning.modelRadius >= 0 && std::isfinite(reference->scale) &&
-                    std::isfinite(reference->position.x) && std::isfinite(reference->position.y) &&
-                    std::isfinite(reference->position.z) && base->modelPath &&
+                if (bounds && !reference->envelope && base && base->winning.modelRadius &&
+                    std::isfinite(*base->winning.modelRadius) && *base->winning.modelRadius >= 0 &&
+                    std::isfinite(reference->scale) && std::isfinite(reference->position.x) &&
+                    std::isfinite(reference->position.y) && std::isfinite(reference->position.z) && base->modelPath &&
                     Lower(*base->modelPath) == Lower(reference->modelPath))
                 {
                     const float radius = *base->winning.modelRadius * std::abs(reference->scale);
@@ -419,6 +421,53 @@ namespace navmesh::skyrim
                         }
                     }
                 }
+            }
+        }
+        // Runtime overlays retain their encoded placement separately. Include both footprints;
+        // continuous uncertainty has no justified finite model radius in this metadata-only selector.
+        for (const auto &change : resolved_.runtimePlacements)
+        {
+            const auto contributed = [&](std::uint32_t id)
+            {
+                const auto *record = resolved_.FindWinning(id);
+                return record && std::any_of(record->origins.begin(), record->origins.end(), [&](const auto &origin)
+                                             { return selected.contains(Lower(origin.plugin)); });
+            };
+            if (!name.empty() && !contributed(change.original.id) && !contributed(change.original.baseObjectId))
+            {
+                continue;
+            }
+            ++counts.changedRecords["BOS"];
+            const auto include = [&](const core::Reference &reference)
+            {
+                auto origin = change.owner;
+                origin.position = reference.position;
+                origin.scale = reference.scale;
+                origin.baseFormId = reference.baseObjectId;
+                if (reference.envelope)
+                {
+                    const auto world = origin.worldspaceFormId;
+                    if (world)
+                    {
+                        for (const auto &[id, ownerWorld] : worlds_)
+                        {
+                            if (ownerWorld == *world)
+                            {
+                                affected.insert(id);
+                            }
+                        }
+                        return;
+                    }
+                }
+                for (const auto *target : Footprint(origin, std::max(1, radius)))
+                {
+                    affected.insert(target->id);
+                }
+            };
+            include(change.original);
+            for (const auto &alternative : change.alternatives)
+            {
+                include(alternative);
             }
         }
         std::vector<const core::Cell *> result;

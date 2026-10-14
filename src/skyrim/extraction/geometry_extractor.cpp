@@ -19,6 +19,7 @@
 #include <memory>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 
 namespace
 {
@@ -184,6 +185,49 @@ namespace
         bool nonSolidCollision{};
         std::string version;
     };
+
+    /** Enclose every possible model placement, including continuous translation and rotation ranges.
+     * Support vertices already include NIF/Havok transforms or exclusion bounds in model-local Skyrim units.
+     * Including the model origin covers all intermediate scales without sampling random outcomes.
+     */
+    TriangleGeometry CollisionEnvelope(const TriangleGeometry &collision, const navmesh::core::Reference &reference)
+    {
+        using namespace navmesh::core;
+        const auto &envelope = *reference.envelope;
+        AABB local{{0, 0, 0}, {0, 0, 0}};
+        const auto rotation = Transform::FromSkyrimReference({}, reference.rotation, envelope.maximumScale);
+        float radius{};
+        for (const auto &vertex : collision.vertices)
+        {
+            if (envelope.arbitraryRotation)
+            {
+                radius = std::max(radius, std::hypot(vertex.x, vertex.y, vertex.z) * envelope.maximumScale);
+            }
+            else
+            {
+                local.Expand(rotation.ApplyPoint(vertex));
+            }
+        }
+        if (envelope.arbitraryRotation)
+        {
+            local = {{-radius, -radius, -radius}, {radius, radius, radius}};
+        }
+        const auto low = local.min + envelope.minimumPosition;
+        const auto high = local.max + envelope.maximumPosition;
+        if (!std::isfinite(low.x) || !std::isfinite(low.y) || !std::isfinite(low.z) || !std::isfinite(high.x) ||
+            !std::isfinite(high.y) || !std::isfinite(high.z))
+        {
+            throw std::runtime_error("BOS collision envelope exceeds finite Skyrim world coordinates");
+        }
+        TriangleGeometry result;
+        result.vertices = {{low.x, low.y, low.z},    {high.x, low.y, low.z}, {high.x, high.y, low.z},
+                           {low.x, high.y, low.z},   {low.x, low.y, high.z}, {high.x, low.y, high.z},
+                           {high.x, high.y, high.z}, {low.x, high.y, high.z}};
+        result.triangles = {{{0, 2, 1}}, {{0, 3, 2}}, {{4, 5, 6}}, {{4, 6, 7}}, {{0, 1, 5}}, {{0, 5, 4}},
+                            {{1, 2, 6}}, {{1, 6, 5}}, {{2, 3, 7}}, {{2, 7, 6}}, {{3, 0, 4}}, {{3, 4, 7}}};
+        result.shapes = {"BOS conservative collision envelope"};
+        return result;
+    }
 
     [[nodiscard]] navmesh::core::Vec3 ApplyRigidBodyTransform(const nifly::bhkRigidBody &body,
                                                               const nifly::Vector3 &vertex)
@@ -806,6 +850,13 @@ namespace
             {
                 continue;
             }
+            const auto sourceIndex = geometry.scene.triangleProvenance[report.meshTriangleOffset].geometrySource;
+            auto &source = geometry.scene.geometrySources[sourceIndex];
+            // An uncertain fire occupies a world volume and cannot be fitted to a single hearth pose.
+            if (source.solidBounds)
+            {
+                continue;
+            }
             const HearthPlacement *matched = nullptr;
             navmesh::core::AABB matchedFireBounds;
             float closestDistance = std::numeric_limits<float>::max();
@@ -850,8 +901,6 @@ namespace
             }
             report.collisionType = fitted.shapes.front();
             report.shapes = fitted.shapes;
-            const auto sourceIndex = geometry.scene.triangleProvenance[report.meshTriangleOffset].geometrySource;
-            auto &source = geometry.scene.geometrySources[sourceIndex];
             source.collisionType = report.collisionType;
             for (auto &displaySource : geometry.scene.geometrySources)
             {
@@ -876,6 +925,16 @@ namespace
 
     [[nodiscard]] bool IsFilteredReference(const navmesh::core::Reference &reference)
     {
+        // Indexing a base for runtime rule resolution does not make every ordinary
+        // placement navigation input. Additional classes require an effective BOS
+        // placement; unclassified reference-local models remain eligible.
+        const auto &type = reference.baseRecordType;
+        const bool ordinaryBase = type.empty() || type == "STAT" || type == "MSTT" || type == "ACTI" ||
+                                  type == "TREE" || type == "FLOR" || type == "CONT" || type == "FURN";
+        if (reference.inputConfig.empty() && !ordinaryBase)
+        {
+            return true;
+        }
         // Actors and transient or decorative effects do not provide stable scene support.
         // Operable doors are traversable portals. Their closed model pose cannot
         // supply permanent obstruction or floor evidence; surrounding static
@@ -1182,7 +1241,9 @@ namespace navmesh::skyrim
                 .modelPath = reference.modelPath,
                 .reference = {reference.sourcePlugin, reference.id, reference.recordType},
                 .baseObject = {reference.basePlugin, reference.baseObjectId, reference.baseRecordType},
-                .navigationObstacle = IsLandscapeRock(reference.modelPath) || IsFurniture(reference) || fireEffect};
+                .navigationObstacle = IsLandscapeRock(reference.modelPath) || IsFurniture(reference) || fireEffect ||
+                                      reference.envelope.has_value(),
+                .inputConfig = reference.inputConfig};
             if (reference.deleted || reference.initiallyDisabled)
             {
                 report.failure = reference.deleted ? "winning reference record is deleted"
@@ -1206,8 +1267,9 @@ namespace navmesh::skyrim
             }
             if (IsFilteredReference(reference))
             {
-                report.failure =
-                    "excluded by navigation policy (transient/decorative effect, door, animated, or actor reference)";
+                report.failure = "excluded by navigation policy (base class without BOS placement, "
+                                 "transient/decorative effect, door, "
+                                 "animated, or actor reference)";
                 output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
                 ++output.modelsExcluded;
                 output.references.push_back(std::move(report));
@@ -1227,7 +1289,8 @@ namespace navmesh::skyrim
                                            : ModelKey(modelPath, includeRender) + (hearthAsset ? ":hearth" : "");
             const auto model = cache.impl_->Model(modelPath, includeRender, hearthAsset, modelIdentity);
             const auto &nifGeometry = *model;
-            if (hearthAsset && (reference.baseRecordType == "STAT" || reference.baseRecordType == "MSTT") &&
+            if (hearthAsset && !reference.envelope &&
+                (reference.baseRecordType == "STAT" || reference.baseRecordType == "MSTT") &&
                 nifGeometry.hearthBedBounds.IsValid() &&
                 nifGeometry.hearthBedBounds.min.x < nifGeometry.hearthBedBounds.max.x &&
                 nifGeometry.hearthBedBounds.min.y < nifGeometry.hearthBedBounds.max.y && reference.scale > 0 &&
@@ -1281,8 +1344,21 @@ namespace navmesh::skyrim
                 output.references.push_back(std::move(report));
                 continue;
             }
+            const bool hasEnvelope = (hasCollision || fireEffect) && reference.envelope.has_value();
+            const auto envelopeGeometry = hasEnvelope ? CollisionEnvelope(mesh, reference) : TriangleGeometry{};
             const auto transform =
-                core::Transform::FromSkyrimReference(reference.position, reference.rotation, reference.scale);
+                hasEnvelope
+                    ? core::Transform::Identity()
+                    : core::Transform::FromSkyrimReference(reference.position, reference.rotation, reference.scale);
+            if (hasEnvelope)
+            {
+                core::AABB bounds;
+                for (const auto &vertex : envelopeGeometry.vertices)
+                {
+                    bounds.Expand(vertex);
+                }
+                source.solidBounds = bounds;
+            }
             const auto appendSource = [&](const TriangleGeometry &sourceMesh, core::GeometrySource meshSource,
                                           core::Mesh &destination,
                                           std::vector<core::TriangleProvenance> &destinationProvenance)
@@ -1293,9 +1369,16 @@ namespace navmesh::skyrim
                     {.name = reference.editorId.empty() ? reference.modelPath : reference.editorId,
                      .localTransform = transform,
                      .geometrySource = sourceIndex});
+                auto placementIdentity = modelIdentity;
+                if (reference.envelope)
+                {
+                    // The envelope's world-space vertices vary independently of the identity transform.
+                    placementIdentity.append(reinterpret_cast<const char *>(sourceMesh.vertices.data()),
+                                             sourceMesh.vertices.size() * sizeof(core::Vec3));
+                }
                 const auto placed = cache.impl_->Placement(
                     sourceMesh, transform,
-                    modelIdentity + ":" + SourceTypeName(output.scene.geometrySources[sourceIndex].sourceType));
+                    placementIdentity + ":" + SourceTypeName(output.scene.geometrySources[sourceIndex].sourceType));
                 const auto vertexBase = static_cast<std::uint32_t>(destination.vertices.size());
                 destination.vertices.insert(destination.vertices.end(), placed->mesh.vertices.begin(),
                                             placed->mesh.vertices.end());
@@ -1343,7 +1426,7 @@ namespace navmesh::skyrim
                 source.collisionType += ")";
             }
             source.confidence = hasCollision ? 1.0F : 0.35F;
-            const auto &supportMesh = mesh;
+            const auto &supportMesh = hasEnvelope ? envelopeGeometry : mesh;
             const auto supportSourceIndex =
                 appendSource(supportMesh, source, output.scene.mesh, output.scene.triangleProvenance);
             report.meshVertexOffset = output.scene.mesh.vertices.size() - supportMesh.vertices.size();
@@ -1367,7 +1450,7 @@ namespace navmesh::skyrim
                     ++output.collisionModelsLoaded;
                     output.collisionTriangles += supportMesh.triangles.size();
                 }
-                if (!navigationOnly && !nifGeometry.render.triangles.empty())
+                if (!navigationOnly && !reference.envelope && !nifGeometry.render.triangles.empty())
                 {
                     auto renderSource = source;
                     renderSource.sourceType = core::GeometrySourceType::RenderFallback;
@@ -1478,11 +1561,12 @@ namespace navmesh::skyrim
             output << std::format("    "
                                   "{{\"status\":\"{}\",\"detail\":\"{}\",\"model\":\"{}\",\"reference\":{{\"plugin\":"
                                   "\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}},\"baseObject\":{{\"plugin\":\"{"
-                                  "}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}}}}{}\n",
+                                  "}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}},\"inputConfig\":\"{}\"}}{}\n",
                                   CoverageName(entry.status), EscapeJson(entry.detail), EscapeJson(source.modelPath),
                                   EscapeJson(source.reference.plugin), source.reference.formId,
                                   EscapeJson(source.reference.recordType), EscapeJson(source.baseObject.plugin),
                                   source.baseObject.formId, EscapeJson(source.baseObject.recordType),
+                                  EscapeJson(source.inputConfig),
                                   index + 1 == geometry.scene.coverage.size() ? "" : ",");
         }
         output << "  ],\n  \"triangleProvenance\": [\n";
@@ -1501,12 +1585,13 @@ namespace navmesh::skyrim
                 "{{\"triangle\":{},\"sourceTriangle\":{},\"sourceType\":\"{}\",\"collisionType\":\"{}\",\"confidence\":"
                 "{},\"model\":\"{}\",\"navigationObstacle\":{},\"reference\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\","
                 "\"recordType\":\"{}\"}},"
-                "\"baseObject\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}}{}}}{}\n",
+                "\"baseObject\":{{\"plugin\":\"{}\",\"formId\":\"{:08X}\",\"recordType\":\"{}\"}},\"inputConfig\":\"{}"
+                "\"{}}}{}\n",
                 index, provenance.sourceTriangle, SourceTypeName(source.sourceType), EscapeJson(source.collisionType),
                 source.confidence, EscapeJson(source.modelPath), source.navigationObstacle ? "true" : "false",
                 EscapeJson(source.reference.plugin), source.reference.formId, EscapeJson(source.reference.recordType),
                 EscapeJson(source.baseObject.plugin), source.baseObject.formId,
-                EscapeJson(source.baseObject.recordType), terrain,
+                EscapeJson(source.baseObject.recordType), EscapeJson(source.inputConfig), terrain,
                 index + 1 == geometry.scene.triangleProvenance.size() ? "" : ",");
         }
         output << "  ]\n}\n";

@@ -71,9 +71,22 @@ namespace navmesh::app::detail
                 continue;
             }
             const auto &source = scene.geometrySources[join.geometrySource];
-            SourceKey key{source.reference.plugin,  source.reference.formId, source.baseObject.plugin,
-                          source.baseObject.formId, source.modelPath,        source.sourceType,
-                          source.materialClass,     source.collisionType,    source.navigationObstacle};
+            const auto solidBounds =
+                source.solidBounds ? std::optional(std::array{source.solidBounds->min.x, source.solidBounds->min.y,
+                                                              source.solidBounds->min.z, source.solidBounds->max.x,
+                                                              source.solidBounds->max.y, source.solidBounds->max.z})
+                                   : std::nullopt;
+            SourceKey key{source.reference.plugin,
+                          source.reference.formId,
+                          source.baseObject.plugin,
+                          source.baseObject.formId,
+                          source.modelPath,
+                          source.sourceType,
+                          source.materialClass,
+                          source.collisionType,
+                          source.navigationObstacle,
+                          source.inputConfig,
+                          solidBounds};
             const auto [found, added] = sources_.try_emplace(std::move(key), scene_.geometrySources.size());
             if (added)
             {

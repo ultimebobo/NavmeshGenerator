@@ -222,6 +222,37 @@ namespace navmesh::skyrim
                     }
                 }
 
+                // Runtime INIs have no contributing ESP transition. Compare plugin winners with every effective outcome.
+                if (!input_.terrainOnly)
+                {
+                    for (const auto &change : resolved_.runtimePlacements)
+                    {
+                        CheckCancellation();
+                        if (!input_.plugin.empty())
+                        {
+                            const auto *record = resolved_.FindWinning(change.original.id);
+                            const auto *base = resolved_.FindWinning(change.original.baseObjectId);
+                            const auto contributes = [&](const ResolvedRecord *source)
+                            {
+                                return source && std::any_of(source->origins.begin(), source->origins.end(),
+                                                             [&](const auto &origin)
+                                                             { return selected_.contains(Rank(origin)); });
+                            };
+                            if (!contributes(record) && !contributes(base))
+                            {
+                                continue;
+                            }
+                        }
+                        ++statistics_.changedRecords["BOS"];
+                        const auto before = ExtractRuntime(change.original, change.owner);
+                        for (const auto &reference : change.alternatives)
+                        {
+                            const auto after = ExtractRuntime(reference, change.owner);
+                            AddDifference(before, after);
+                        }
+                    }
+                }
+
                 for (const auto cutoff : waterCutoffs)
                 {
                     for (const auto &cell : resolved_.cells)
@@ -456,6 +487,40 @@ namespace navmesh::skyrim
                         geometrySource.sourceType == core::GeometrySourceType::NavigationExclusion)
                     {
                         result.obstacle = geometrySource.navigationObstacle;
+                        result.triangles.push_back(
+                            CanonicalTriangle(geometry.scene.mesh, geometry.scene.mesh.triangles[triangle]));
+                    }
+                }
+                std::sort(result.triangles.begin(), result.triangles.end());
+                return result;
+            }
+
+            /// Use the same effective geometry policy as generation; original ownership supplies world/interior identity.
+            PlacedCollision ExtractRuntime(const core::Reference &reference, const RecordOrigin &owner)
+            {
+                auto geometry =
+                    ExtractGeometry(input_.dataDirectory, {.references = {reference}}, input_.cacheDirectory, {},
+                                    input_.cancelled, input_.assets, &cache_, true);
+                CheckCancellation();
+                if (geometry.modelsUnreadable || !geometry.archiveSearchComplete)
+                {
+                    throw std::runtime_error(std::format("Cannot determine BOS collision for REFR {:08X}: {}",
+                                                         reference.id, reference.modelPath));
+                }
+                if (geometry.modelsMissing)
+                {
+                    auto model = Normalize(reference.modelPath);
+                    statistics_.missingModels.insert(model.starts_with("meshes/") ? model : "meshes/" + model);
+                }
+                PlacedCollision result{.origin = &owner};
+                for (std::size_t triangle{}; triangle < geometry.scene.mesh.triangles.size(); ++triangle)
+                {
+                    const auto &source = geometry.scene.geometrySources.at(
+                        geometry.scene.triangleProvenance.at(triangle).geometrySource);
+                    if (source.sourceType == core::GeometrySourceType::Collision ||
+                        source.sourceType == core::GeometrySourceType::NavigationExclusion)
+                    {
+                        result.obstacle = source.navigationObstacle;
                         result.triangles.push_back(
                             CanonicalTriangle(geometry.scene.mesh, geometry.scene.mesh.triangles[triangle]));
                     }

@@ -748,7 +748,9 @@ namespace
             options.generatePlugin = writing;
         }
         ImGui::EndDisabled();
-        Help("Write a verified NAVM patch; light format is selected automatically when eligible.");
+        Help("Write a verified NAVM patch; light format is selected automatically when eligible. BOS _SWAP.ini "
+             "files are imported automatically. Random outcomes block their possible collision volumes and cannot "
+             "supply floors. Keep those configs installed with the generated patch.");
         if (copyAllowed)
         {
             ImGui::Checkbox("Copy selected plugin", &options.copyPlugin);

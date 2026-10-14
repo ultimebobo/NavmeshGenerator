@@ -1,0 +1,404 @@
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
+#include "app/candidate_cache.h"
+#include "app/geometry_pipeline.h"
+#include "core/navmesh/generator.h"
+#include "skyrim/extraction/collision_impact.h"
+#include "skyrim/parser/base_object_swapper.h"
+
+#include <NifFile.hpp>
+#include <bhk.hpp>
+#include <algorithm>
+#include <cassert>
+#include <chrono>
+#include <cmath>
+#include <fstream>
+#include <numbers>
+#include <set>
+
+namespace
+{
+    using namespace navmesh;
+
+    void WriteModel(const std::filesystem::path &path)
+    {
+        nifly::NifFile nif;
+        nif.Create({nifly::V20_2_0_7, 12, 130});
+        const std::vector<nifly::Vector3> vertices{{0, 0, 0}, {100, 0, 0}, {0, 100, 100}};
+        const std::vector<nifly::Triangle> triangles{{0, 1, 2}};
+        assert(nif.CreateShapeFromData("SyntheticSolid", &vertices, &triangles, nullptr));
+        constexpr auto units = 69.99125F;
+        auto data = std::make_unique<nifly::hkPackedNiTriStripsData>();
+        data->numVerts = 3;
+        data->compressedVertData = {{0, 0, 0}, {100 / units, 0, 0}, {0, 100 / units, 100 / units}};
+        data->keyCount = 1;
+        data->triData.resize(1);
+        data->triData.front().tri = {0, 1, 2};
+        auto shape = std::make_unique<nifly::bhkPackedNiTriStripsShape>();
+        shape->dataRef.index = nif.GetHeader().AddBlock(std::move(data));
+        auto body = std::make_unique<nifly::bhkRigidBody>();
+        body->shapeRef.index = nif.GetHeader().AddBlock(std::move(shape));
+        auto object = std::make_unique<nifly::bhkCollisionObject>();
+        object->bodyRef.index = nif.GetHeader().AddBlock(std::move(body));
+        object->targetRef.index = nif.GetBlockID(nif.GetRootNode());
+        nif.GetRootNode()->collisionRef.index = nif.GetHeader().AddBlock(std::move(object));
+        std::filesystem::create_directories(path.parent_path());
+        assert(nif.Save(path) == 0);
+    }
+
+    skyrim::ResolvedLoadOrder Fixture()
+    {
+        skyrim::ResolvedLoadOrder result;
+        result.plugins = {"Base.esm", "Light.esl", "Override.esp"};
+        result.pluginFormPrefixes = {{"base.esm", 0}, {"light.esl", 0xFE000000}, {"override.esp", 0x01000000}};
+        for (int x = 0; x < 3; ++x)
+        {
+            const auto id = static_cast<std::uint32_t>(0x100 + x);
+            result.cells.push_back({.id = id,
+                                    .editorId = "Cell" + std::to_string(x),
+                                    .exteriorCoordinates = std::array<std::int32_t, 2>{x, 0}});
+            skyrim::ResolvedRecord cell{
+                .type = "CELL", .formId = id, .editorId = "Cell" + std::to_string(x), .worldspaceFormId = 1};
+            cell.winning = {.plugin = "Base.esm", .formId = id, .worldspaceFormId = 1};
+            cell.origins = {cell.winning};
+            result.records.push_back(cell);
+        }
+        for (const auto id : {10U, 20U, 30U, 0xFE000801U})
+        {
+            skyrim::ResolvedRecord base{
+                .type = "STAT", .formId = id, .editorId = "Base" + std::to_string(id), .modelPath = "Solid.nif"};
+            base.winning = {.plugin = id == 0xFE000801 ? "Light.esl" : "Base.esm",
+                            .formId = id,
+                            .modelRadius = 200.0F,
+                            .hasModel = true,
+                            .modelPath = "Solid.nif"};
+            base.origins = {base.winning};
+            result.records.push_back(base);
+        }
+        core::Reference reference{.id = 0x200,
+                                  .baseObjectId = 10,
+                                  .recordType = "REFR",
+                                  .modelPath = "Solid.nif",
+                                  .position = {100, 100, 0},
+                                  .sourcePlugin = "Base.esm",
+                                  .basePlugin = "Base.esm",
+                                  .baseRecordType = "STAT"};
+        result.cells.front().references.push_back(reference);
+        skyrim::ResolvedRecord placed{.type = "REFR",
+                                      .formId = reference.id,
+                                      .cellFormId = 0x100,
+                                      .worldspaceFormId = 1,
+                                      .referencedFormIds = {10}};
+        placed.winning = {.plugin = "Base.esm",
+                          .formId = reference.id,
+                          .cellFormId = 0x100,
+                          .worldspaceFormId = 1,
+                          .baseFormId = 10,
+                          .position = reference.position,
+                          .modelRadius = 200.0F,
+                          .hasModel = true,
+                          .modelPath = "Solid.nif"};
+        placed.origins = {placed.winning};
+        result.records.push_back(placed);
+        return result;
+    }
+
+    skyrim::BaseObjectSwapInput Input(const std::string &text)
+    {
+        return {.configs = {{"test_swap.ini", {}, text}}};
+    }
+
+    const core::Reference &First(const skyrim::ResolvedLoadOrder &order)
+    {
+        return order.cells.front().references.front();
+    }
+
+    void TestPrecedenceAndUnits()
+    {
+        auto order = Fixture();
+        const auto diagnostics = skyrim::ApplyBaseObjectSwaps(
+            order, Input("[Forms]\nBase10|Base20|posA(9000,100,0)\n"
+                         "[References]\n0x200~Base.esm|0x801~Light.esl|rotA(0,0,90),scaleA(150)\n"
+                         "[Transforms]\n0x200~Base.esm|posA(5000,0,0)\n"));
+        assert(diagnostics.empty());
+        assert(First(order).baseObjectId == 0xFE000801);
+        assert(First(order).position.x == 100); // The winning swap's whole property bundle takes priority.
+        assert(std::abs(First(order).rotation.z - std::numbers::pi_v<float> / 2) < 0.0001F);
+        assert(First(order).scale == 1.5F);
+        assert(!First(order).envelope);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(
+            order, Input("[Transforms]\nBase10|posA(1000,100,0)\n[Properties]\nBase10|posA(2000,100,0)\n"
+                         "[Transforms]\nBase10|posA(3000,100,0)\n"));
+        assert(First(order).position.x == 2000); // Repeated sections are grouped before precedence resolution.
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(
+            order, Input("[Forms]\nBase10|Base20|none|none\n[Transforms]\nBase10|rotA(0,0,720)\n"));
+        assert(std::abs(First(order).rotation.z - std::numbers::pi_v<float> * 4) < 0.0001F);
+        assert(order.runtimePlacements.size() == 1);
+        assert(order.FindWinning(0x200)->winning.position->x == 100); // Encoded/plugin history is untouched.
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(
+            order, Input("[Forms]\nBase10|Base20\n[Transforms]\nBase10|posR(4000,0,0),scale(1.25)\n"
+                         "[Properties]\n0x200~Base.esm|posR(4100,0,0),scale(1.5)\n"));
+        assert(First(order).baseObjectId == 20);
+        assert(First(order).position.x == 4200);
+        assert(First(order).scale == 1.5F);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(
+            order, Input("[Forms]\nBase10|Base20\nBase10|Base30\n[Forms|Cell0]\nBase10|Base20\n"));
+        assert(First(order).baseObjectId == 20);
+        assert(!First(order).envelope);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms|-Cell0]\nBase10|Base30\n[Forms]\nBase10|Base20\n"));
+        assert(First(order).baseObjectId == 20);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Transforms]\n0x200~Base.esm|flags(0x800)\n"));
+        assert(First(order).initiallyDisabled);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(
+            order, Input("[Forms]\nBase10|Base20\nBase10|Base10|NONE\n[References|Cell0]\nBase10|posR(50,0,0)\n"));
+        assert(First(order).baseObjectId == 20);
+        assert(First(order).position.x == 150);
+
+        order = Fixture();
+        const auto invalidSet =
+            skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10,Base20,Base30|Base20,Base30\n"));
+        assert(!invalidSet.empty());
+        assert(order.runtimePlacements.empty());
+    }
+
+    void TestAdditionalBasesRequireRuntimePlacement(const std::filesystem::path &root)
+    {
+        auto order = Fixture();
+        auto &cell = order.cells.front();
+        const auto staticReference = cell.references.front();
+        for (const auto *type : {"LVLI", "MISC", "WEAP", "ARMO", "AMMO", "ALCH", "BOOK", "SLGM", "KEYM", "INGR", "SCRL",
+                                 "LIGH", "HAZD", "IDLM"})
+        {
+            auto reference = staticReference;
+            reference.id += static_cast<std::uint32_t>(cell.references.size());
+            reference.baseObjectId = reference.id + 0x1000;
+            reference.baseRecordType = type;
+            auto base = *order.FindWinning(10);
+            base.type = type;
+            base.formId = reference.baseObjectId;
+            base.winning.formId = base.formId;
+            base.origins = {base.winning};
+            order.records.push_back(base);
+            auto placed = *order.FindWinning(staticReference.id);
+            placed.formId = reference.id;
+            placed.referencedFormIds = {reference.baseObjectId};
+            placed.winning.formId = reference.id;
+            placed.winning.baseFormId = reference.baseObjectId;
+            placed.origins = {placed.winning};
+            order.records.push_back(placed);
+            cell.references.push_back(reference);
+        }
+        for (const bool navigationOnly : {false, true})
+        {
+            const auto geometry =
+                skyrim::ExtractGeometry(root, cell, root / "cache", {}, {}, nullptr, nullptr, navigationOnly);
+            assert(geometry.collisionTriangles == 1);
+            assert(geometry.modelsLoaded == 1);
+            assert(geometry.modelsExcluded == cell.references.size() - 1);
+            assert(geometry.scene.mesh.triangles.size() == 1);
+        }
+
+        // An unrelated configuration cannot enable the indexed inventory models.
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Transforms]\nBase20|scale(2)\n"));
+        assert(order.runtimePlacements.empty());
+        const auto untouched = skyrim::ExtractGeometry(root, cell, root / "cache");
+        assert(untouched.collisionTriangles == 1);
+
+        // A targeted transform admits its additional base without admitting other clutter.
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Transforms]\n0x202~Base.esm|posR(50,0,0)\n"));
+        assert(order.runtimePlacements.size() == 1);
+        const auto changed = skyrim::ExtractGeometry(root, cell, root / "cache");
+        assert(changed.collisionTriangles == 2);
+        assert(changed.modelsLoaded == 2);
+        assert(changed.modelsExcluded == cell.references.size() - 2);
+    }
+
+    void TestRandomOutcomes(const std::filesystem::path &root)
+    {
+        auto order = Fixture();
+        auto diagnostics =
+            skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20,Base30|NONE|chanceR(50)\n"));
+        assert(!diagnostics.empty());
+        assert(order.cells.front().references.size() == 3);
+        std::set<std::uint32_t> choices;
+        for (const auto &reference : order.cells.front().references)
+        {
+            assert(reference.envelope);
+            choices.insert(reference.baseObjectId);
+        }
+        assert(choices == std::set<std::uint32_t>({10, 20, 30}));
+
+        order = Fixture();
+        diagnostics = skyrim::ApplyBaseObjectSwaps(
+            order, Input("[Transforms]\n0x200~Base.esm|posA(100/8300,100,50),rotR(0,0,0/360),scaleA(100/200)\n"));
+        assert(!diagnostics.empty());
+        const auto geometry =
+            skyrim::ExtractGeometry(root, order.cells.front(), root / "cache", {}, {}, nullptr, nullptr, true);
+        assert(geometry.modelsLoaded == 1);
+        const auto &source = geometry.scene.geometrySources.front();
+        assert(source.navigationObstacle && source.solidBounds);
+        assert(source.solidBounds->min.x < 100);
+        assert(source.solidBounds->max.x > 8300);
+        assert(source.solidBounds->Contains({4000, 100, 50}));
+        const skyrim::CellImpactIndex index(order);
+        skyrim::ModelGeometryCache cache;
+        skyrim::ImpactSelectionStatistics statistics;
+        const auto affected = skyrim::SelectCollisionAffectedCells(
+            order, index, {.dataDirectory = root, .cacheDirectory = root / "cache"}, cache, statistics);
+        assert(affected.size() == 3);
+        assert(statistics.changedRecords.at("BOS") == 1);
+        assert(index.GeometryNeighbors(order.cells.back(), 0).size() >= 2);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms|RuntimeKeyword]\nBase10|Base20\n"));
+        assert(order.cells.front().references.size() == 2);
+        assert(First(order).envelope);
+
+        order = Fixture();
+        order.records.push_back({.type = "LVLI", .formId = 60, .editorId = "LeveledBase", .leveledBaseIds = {20, 30}});
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20\nBase10|LeveledBase|posR(100,0,0)\n"));
+        bool unchangedBaseWithProperties{};
+        for (const auto &reference : order.cells.front().references)
+        {
+            unchangedBaseWithProperties =
+                unchangedBaseWithProperties ||
+                (reference.baseObjectId == 10 && reference.position.x == 200 && reference.envelope);
+        }
+        assert(unchangedBaseWithProperties);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Transforms]\nBase10|scale(1/1000)\n"));
+        assert(First(order).envelope);
+        assert(First(order).envelope->maximumScale == UINT16_MAX / 100.0F);
+    }
+
+    void TestMovementAndRemoval(const std::filesystem::path &root)
+    {
+        auto order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Transforms]\n0x200~Base.esm|posA(5000,100,0)\n"));
+        const skyrim::CellImpactIndex index(order);
+        assert(index.GeometryCell(order.cells.front()).references.empty());
+        assert(index.GeometryCell(order.cells[1]).references.size() == 1);
+        skyrim::ModelGeometryCache cache;
+        skyrim::ImpactSelectionStatistics statistics;
+        const auto affected = skyrim::SelectCollisionAffectedCells(
+            order, index, {.dataDirectory = root, .cacheDirectory = root / "cache"}, cache, statistics);
+        assert(affected.size() == 2);
+        assert(affected[0]->id == 0x100 && affected[1]->id == 0x101);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Properties]\n0x200~Base.esm|flags(0x800)\n"));
+        const skyrim::CellImpactIndex disabledIndex(order);
+        const auto disabledAffected = skyrim::SelectCollisionAffectedCells(
+            order, disabledIndex, {.dataDirectory = root, .cacheDirectory = root / "cache"}, cache, statistics);
+        assert(disabledAffected.size() == 1);
+    }
+
+    void TestFilledVolumeAndCache(const std::filesystem::path &root)
+    {
+        auto order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Transforms]\n0x200~Base.esm|posA(200/500,200,50)\n"));
+        auto geometry =
+            skyrim::ExtractGeometry(root, order.cells.front(), root / "cache", {}, {}, nullptr, nullptr, true);
+        auto &scene = geometry.scene;
+        const core::NavMesh roof{.vertices = scene.mesh.vertices, .polygons = {{.vertices = {4, 5, 6}}}};
+        const auto roofAnalysis =
+            analysis::AnalyzeNavMeshPolygons(roof, scene.mesh, app::detail::BuildTriangleSources(geometry),
+                                             {.surfaceSearchRadius = 64, .maxSupportDistance = 2, .maxSlope = 45});
+        assert(roofAnalysis.summary.supportFound == 0);
+        const auto source = scene.geometrySources.size();
+        scene.geometrySources.push_back({.sourceType = core::GeometrySourceType::Terrain});
+        const auto vertex = static_cast<std::uint32_t>(scene.mesh.vertices.size());
+        scene.mesh.vertices.insert(scene.mesh.vertices.end(),
+                                   {{0, 0, 100}, {1000, 0, 100}, {1000, 1000, 100}, {0, 1000, 100}});
+        scene.mesh.triangles.push_back({{vertex, vertex + 1, vertex + 2}});
+        scene.mesh.triangles.push_back({{vertex, vertex + 2, vertex + 3}});
+        scene.triangleProvenance.push_back({source, 0});
+        scene.triangleProvenance.push_back({source, 1});
+        core::NavigationProfile profile;
+        profile.agentRadius = 8;
+        profile.agentHeight = 32;
+        profile.stepHeight = 8;
+        profile.minimumRegionArea = 1;
+        const core::RecastSettings settings{.cellSize = 4, .cellHeight = 2};
+        const auto candidate = core::RecastCandidateGenerator{}.Generate(
+            scene, profile, {}, {}, core::RegionPartitioningAlgorithm::Watershed, settings,
+            core::CandidateRetention::AllWalkable);
+        assert(!candidate.mesh.polygons.empty());
+        for (const auto &polygon : candidate.mesh.polygons)
+        {
+            const auto center =
+                (candidate.mesh.vertices[polygon.vertices[0]] + candidate.mesh.vertices[polygon.vertices[1]] +
+                 candidate.mesh.vertices[polygon.vertices[2]]) /
+                3.0F;
+            assert(!(center.x > 200 && center.x < 600 && center.y > 200 && center.y < 300));
+            assert(center.z < 120); // The uncertainty envelope roof cannot become a floor.
+        }
+        const auto fingerprint = app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", settings);
+        scene.geometrySources.front().solidBounds->max.x += 10;
+        assert(fingerprint != app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", settings));
+    }
+
+    void TestDiscovery(const std::filesystem::path &root)
+    {
+        const auto data = root / "Data";
+        const auto mod = root / "Mod";
+        const auto overwrite = root / "Overwrite";
+        for (const auto &directory : {data, mod, overwrite})
+        {
+            std::filesystem::create_directories(directory);
+        }
+        std::ofstream(data / "A_SWAP.ini") << "[Transforms]\nBase10|scale(2)\n";
+        std::ofstream(mod / "A_SWAP.ini") << "[Transforms]\nBase10|scale(3)\n";
+        std::ofstream(overwrite / "A_SWAP.ini") << "[Transforms]\nBase10|scale(4)\n";
+        std::ofstream(mod / "Z_SWAP.ini") << "[Transforms]\nBase10|scale(5)\n";
+        std::ofstream(mod / "ignored.ini") << "invalid";
+        const auto input = skyrim::DiscoverBaseObjectSwaps({data, mod, overwrite});
+        assert(input.configs.size() == 2);
+        assert(input.configs.front().path.parent_path() == overwrite);
+        auto order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, input);
+        assert(First(order).scale == 5);
+        assert(skyrim::BaseObjectSwapSnapshotMatches(input));
+        std::ofstream(mod / "Z_SWAP.ini") << "[Transforms]\nBase10|scale(6)\n";
+        assert(!skyrim::BaseObjectSwapSnapshotMatches(input));
+        assert(skyrim::WriteBaseObjectSwapReport(root / "bos-input.json", input, order, {}));
+    }
+} // namespace
+
+void ExportBaseObjectSwapModel(const std::filesystem::path &path)
+{
+    WriteModel(path);
+}
+
+void TestBaseObjectSwapper()
+{
+    const auto root =
+        std::filesystem::temp_directory_path() /
+        ("navmesh-bos-tests-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    WriteModel(root / "meshes" / "Solid.nif");
+    TestPrecedenceAndUnits();
+    TestAdditionalBasesRequireRuntimePlacement(root);
+    TestRandomOutcomes(root);
+    TestMovementAndRemoval(root);
+    TestFilledVolumeAndCache(root);
+    TestDiscovery(root);
+    std::filesystem::remove_all(root);
+}

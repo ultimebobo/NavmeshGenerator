@@ -49,6 +49,15 @@ Use `--list-cells` to discover available form IDs, editor IDs, and exterior coor
 
 ## Rebuild a plugin or load order
 
+BOS configurations are discovered automatically from effective Data, including
+MO2 configuration-only mods and overwrite or Vortex deployed files. Both base
+replacements and placement properties contribute to geometry. Load order scope
+includes their collision impacts, and Cell scope uses effective placements.
+Random outcomes use conservative filled obstruction volumes and cannot supply
+floors. `bos-input.json` records winners and alternatives; keep those configs
+installed with the output patch. See [BOS inputs](base-object-swapper.md) for
+precedence, units and offline limitations.
+
 Use the persisted **Rebuild scope** selector in the Windows UI, or add one of
 these options to an MO2/profile command:
 

@@ -769,7 +769,10 @@ namespace navmesh::analysis
                     {
                         obstruction = true;
                     }
-                    candidates.push_back({*candidate, source});
+                    if (!source.obstacleOnly)
+                    {
+                        candidates.push_back({*candidate, source});
+                    }
                 }
             }
             // Group only hits with the same source identity and compatible height.

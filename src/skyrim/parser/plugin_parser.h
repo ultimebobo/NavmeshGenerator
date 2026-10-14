@@ -151,8 +151,19 @@ namespace navmesh::skyrim
         std::optional<std::array<float, 6>> transform;
         std::optional<float> referenceScale;
         std::vector<std::uint32_t> linkedFormIds;
+        /// Resolved possible LVLI item bases; level/chance restrictions are conservatively ignored for runtime swaps.
+        std::vector<std::uint32_t> leveledBaseIds;
         std::optional<NavmLayout> navm;
     };
+    /// Original plugin placement and effective runtime alternatives used for collision-impact selection.
+    struct RuntimePlacementChange
+    {
+        /// Owning CELL and worldspace remain plugin identities; position is Skyrim world space.
+        RecordOrigin owner;
+        core::Reference original;
+        std::vector<core::Reference> alternatives;
+    };
+
     struct ResolvedLoadOrder
     {
         std::vector<std::string> plugins;
@@ -163,6 +174,10 @@ namespace navmesh::skyrim
         std::unordered_map<std::uint32_t, std::size_t> recordIndex;
         /// Ordered winning LAND record offsets by resolved CELL identity; records must retain their order.
         std::unordered_map<std::uint32_t, std::vector<std::size_t>> landIndex;
+        /// Lowercase active filename to global full/light FormID prefix, including empty plugins.
+        std::unordered_map<std::string, std::uint32_t> pluginFormPrefixes;
+        /// Runtime configuration changes kept separate from the real plugin override history.
+        std::vector<RuntimePlacementChange> runtimePlacements;
         /// Winning LAND records in source order, with a scan fallback for manually assembled fixtures.
         [[nodiscard]] std::vector<const ResolvedRecord *> LandRecords(std::uint32_t cellId) const;
         /// Look up a resolved FormID without copying payloads; returns nullptr when

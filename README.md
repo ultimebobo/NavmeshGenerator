@@ -51,6 +51,11 @@ per line; commas and semicolons also work.
 
 Hover over the `?` controls for help. Your settings are saved for the next session.
 
+Base Object Swapper files, are imported automatically. Use **Load order** to include
+configuration-only changes and keep the same BOS files installed with the generated
+patch. Random objects contribute conservative obstructions.
+See [BOS support](docs/base-object-swapper.md).
+
 ## Choose what to produce
 
 - **Inspect a cell:** select Cell scope and leave generation and plugin writing

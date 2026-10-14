@@ -41,7 +41,8 @@ namespace navmesh::app::detail
 
       private:
         using SourceKey = std::tuple<std::string, std::uint32_t, std::string, std::uint32_t, std::string,
-                                     core::GeometrySourceType, core::MaterialCollisionClass, std::string, bool>;
+                                     core::GeometrySourceType, core::MaterialCollisionClass, std::string, bool,
+                                     std::string, std::optional<std::array<float, 6>>>;
         using TriangleKey = std::tuple<std::size_t, std::size_t, std::uint32_t, std::array<std::uint32_t, 9>, bool>;
         /// Retained geometry and indices refer only to this owned scene.
         core::Scene scene_;

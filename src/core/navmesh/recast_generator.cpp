@@ -196,6 +196,8 @@ namespace
         std::vector<std::size_t> sources;
         /// One obstacle-only tag per raster triangle, parallel to sources after clipping.
         std::vector<bool> obstacles;
+        /// Filled world-space obstruction envelopes, independent of their display box triangles.
+        std::vector<AABB> solidVolumes;
         AABB bounds;
     };
 
@@ -215,6 +217,14 @@ namespace
         auto &triangles = input.triangles;
         auto &sources = input.sources;
         auto &bounds = input.bounds;
+        for (const auto &source : scene.geometrySources)
+        {
+            if (source.solidBounds && source.solidBounds->IsValid() &&
+                (!cellBounds || source.solidBounds->Intersects(*cellBounds)))
+            {
+                input.solidVolumes.push_back(*source.solidBounds);
+            }
+        }
         for (std::size_t i{}; i < scene.mesh.triangles.size(); ++i)
         {
             const auto &provenance = scene.triangleProvenance[i];
@@ -738,6 +748,40 @@ namespace
                                   areas.data(), static_cast<int>(sources.size()), *heightfield, config.walkableClimb))
         {
             throw std::runtime_error("Recast rasterization failed");
+        }
+        // Fill the entire uncertain occupancy volume, so floors inside a random collider's envelope remain blocked.
+        for (const auto &volume : input.solidVolumes)
+        {
+            if (volume.max.x < config.bmin[0] || volume.min.x > config.bmax[0] || volume.max.y < config.bmin[2] ||
+                volume.min.y > config.bmax[2] || volume.max.z < config.bmin[1] || volume.min.z > config.bmax[1])
+            {
+                continue;
+            }
+            const auto column = [](float value, float origin, float size, int count)
+            {
+                return static_cast<int>(std::clamp(std::floor((static_cast<double>(value) - origin) / size), 0.0,
+                                                   static_cast<double>(count - 1)));
+            };
+            const auto lowX = column(volume.min.x, config.bmin[0], config.cs, config.width);
+            const auto highX = column(volume.max.x, config.bmin[0], config.cs, config.width);
+            const auto lowY = column(volume.min.y, config.bmin[2], config.cs, config.height);
+            const auto highY = column(volume.max.y, config.bmin[2], config.cs, config.height);
+            const auto lowZ =
+                static_cast<unsigned short>(std::clamp(std::floor((volume.min.z - config.bmin[1]) / config.ch), 0.0F,
+                                                       static_cast<float>(RC_SPAN_MAX_HEIGHT - 1)));
+            const auto highZ = static_cast<unsigned short>(
+                std::clamp(std::ceil((volume.max.z - config.bmin[1]) / config.ch), static_cast<float>(lowZ + 1),
+                           static_cast<float>(RC_SPAN_MAX_HEIGHT)));
+            for (int y = lowY; y <= highY; ++y)
+            {
+                for (int x = lowX; x <= highX; ++x)
+                {
+                    if (!rcAddSpan(&context, *heightfield, x, y, lowZ, highZ, ObstacleArea, config.walkableClimb))
+                    {
+                        throw std::runtime_error("Recast conservative volume rasterization failed");
+                    }
+                }
+            }
         }
         // Remove spans that violate climb or vertical clearance before radius erosion.
         rcFilterLowHangingWalkableObstacles(&context, config.walkableClimb, *heightfield);
