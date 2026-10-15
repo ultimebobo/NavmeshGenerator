@@ -19,7 +19,7 @@
 | **Stitching / border alignment** | Reshaping and dividing the generated boundary to match existing neighboring edges, then recording connections. Only the candidate's geometry is changed. |
 | **Override** | A record in the output plugin that replaces an existing record when loaded after it. Source plugins are not edited on disk. A neighboring override can preserve its vertices and triangles while updating its connections. |
 | **Open / unmatched border** | An edge with no saved connection to the neighboring navmesh. It can reach the cell boundary without allowing an NPC to cross there. |
-| **NAVI / XNDP** | Other navigation information: NAVI is a navigation information map; XNDP stores a door reference's navigation association. The exporter does not rebuild these. NAVM border checks do not validate them. |
+| **NAVI / XNDP** | NAVI is the navigation information map rebuilt from exported meshes; see the [format contract](navm-format-study.md#navigation-information-map). XNDP stores a door reference's navigation association and is not rebuilt. |
 
 ## What the Creation Kit's green border bar means
 
@@ -68,7 +68,7 @@ Automated checks verify exact endpoint alignment for supported matches, valid
 triangles and indices, reciprocal links, and preserved neighboring geometry.
 The exporter reads its written NAVMs back before reporting success. These checks
 do not establish that the Creation Kit displays a green bar or that NPC
-pathfinding works in game. NAVI and door-reference information remain outside
+pathfinding works in game. Door-reference information remains outside
 the exporter's rebuild scope. See the [format study](navm-format-study.md) for
 limitations and the [candidate algorithm](candidate-surface-algorithm.md) for
 stitching details.

@@ -269,7 +269,7 @@ before the temporary plugin is finalized. Existing output plugins are refused.
 The patch is light-flagged only when its dependencies and allocated identities fit
 that format. Copy mode retains the selected source format and dependency limits.
 
-The existing writer limitations still apply: NAVI, teleport-door XNDP, cover and
+The existing writer limitations still apply: teleport-door XNDP, cover and
 unmatched authored links are not rebuilt.
 
 ## Performance and verification

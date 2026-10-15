@@ -1180,9 +1180,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             const bool eslFlagged = writtenPlugin && (pluginHeader[9] & 0x02U) != 0;
             std::cout << "Generated NAVM override plugin: " << pluginPath.string()
                       << (eslFlagged ? " (ESL-flagged ESP)\n" : " (regular ESP)\n");
-            std::cerr
-                << "Generated NAVM includes any matched border and door links; NAVI, teleport-door XNDP, cover, and "
-                   "other authored links still need independent validation.\n";
+            std::cerr << "Generated navigation includes rebuilt NAVI and matched border and door links; teleport-door "
+                         "XNDP, cover, and "
+                         "other authored links still need independent validation.\n";
         }
         update(90, "Navmesh support analyzed");
         if (wasCancelled())

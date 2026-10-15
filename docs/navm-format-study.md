@@ -108,7 +108,7 @@ uses the light flag only when those identities and its master table fit the
 light format. Existing unsupported NAVM records cannot be treated as uncovered.
 Additional authored
 NAVM subrecords are rejected because they may contain geometry references.
-Unmatched authored external and door connections, cover data, NAVI, and REFR
+Unmatched authored external and door connections, cover data, and REFR
 XNDP references are not rebuilt. They can still break navigation between NAVMs,
 doors, or cells. Independent-tool and disposable-profile game validation are
 required before an output plugin is used.
@@ -125,7 +125,24 @@ and ONAM registration change. Master-flagged copies register generated overrides
 in ONAM, retaining existing entries; an existing ONAM table is also extended in
 other copies. This follows [xEdit's ONAM description](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/whatsnew.md),
 which identifies the table as overridden records in temporary CELL child groups.
-Preserved NAVI, XNDP, and other authored data are not rebuilt.
+NAVI entries for emitted NAVMs are rebuilt; unrelated source NAVI entries are retained.
+XNDP and other unsupported authored data are not rebuilt.
+
+### Navigation information map
+
+Every export includes NAVI derived from the final serialized NAVMs, including
+changed authored neighbors and empty secondary overrides. The writer reuses the
+input NAVI identity through the output master table; master-free synthetic inputs
+allocate a navigation-map identity. NVMI contains area-weighted world-space
+locations, preferred-surface fractions, unique consumed edge destinations,
+preferred edge destinations, door CRC/reference pairs, and the NAVM's PathingCell
+location. Isolated nonempty meshes also carry bounds, triangles, and vertices.
+The layout follows [xEdit's Skyrim NAVI definition](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsTES5.pas).
+Source copies preserve unrelated NVMI entries and deleted-mesh registrations,
+removing registrations for regenerated meshes. The optional NVPP precomputed-path
+cache is emitted empty so it cannot retain stale routes. NAVI is read back and
+compared before the plugin is finalized. This does not validate in-game pathing
+or rebuild the unsupported connection data listed above.
 
 The generated trailing section layout follows
 [OpenMW's NAVM loader](https://gitlab.com/OpenMW/openmw/-/raw/master/components/esm4/loadnavm.cpp).
@@ -148,5 +165,5 @@ authored-neighbor portals. Single cells without authored navigation or doors can
 receive new NAVMs. Matched borders receive reciprocal authored-neighbor
 links without replacing that neighbor's geometry. Unmatched generated seams
 retract into the target CELL; single-cell candidates without surviving walkable
-floor are skipped. NAVI and the other connection
-limitations above apply to new identities as well.
+floor are skipped. The unsupported connection limitations above apply to new
+identities as well.

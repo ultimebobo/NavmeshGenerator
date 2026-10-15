@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <set>
 #include <span>
 
@@ -238,41 +239,51 @@ namespace
         return true;
     }
 
-    bool CollectNavigation(const std::vector<Node> &nodes, std::set<std::uint32_t> &ids)
+    bool CollectNavigation(const std::vector<Node> &nodes, std::map<std::uint32_t, std::string> &types,
+                           std::set<std::uint32_t> &navmeshIds)
     {
         for (const auto &node : nodes)
         {
             if (node.IsGroup())
             {
-                if (!CollectNavigation(node.children, ids))
+                if (!CollectNavigation(node.children, types, navmeshIds))
                 {
                     return false;
                 }
             }
-            else if (std::memcmp(node.bytes.data(), "NAVM", 4) != 0 || !ids.insert(Read32(node.bytes, 12)).second)
+            else
             {
-                return false;
+                const std::string type(node.bytes.begin(), node.bytes.begin() + 4);
+                const auto id = Read32(node.bytes, 12);
+                if ((type != "NAVM" && type != "NAVI") || !types.emplace(id, type).second)
+                {
+                    return false;
+                }
+                if (type == "NAVM")
+                {
+                    navmeshIds.insert(id);
+                }
             }
         }
         return true;
     }
 
-    /// Remove only replaced NAVMs globally, so relocated winning groups cannot leave duplicate identities.
-    bool RemoveNavigation(std::vector<Node> &nodes, const std::set<std::uint32_t> &ids)
+    /// Remove replaced navigation globally, so relocated winning groups cannot leave duplicate identities.
+    bool RemoveNavigation(std::vector<Node> &nodes, const std::map<std::uint32_t, std::string> &types)
     {
         for (auto it = nodes.begin(); it != nodes.end();)
         {
             if (it->IsGroup())
             {
-                if (!RemoveNavigation(it->children, ids))
+                if (!RemoveNavigation(it->children, types))
                 {
                     return false;
                 }
                 ++it;
             }
-            else if (ids.contains(Read32(it->bytes, 12)))
+            else if (const auto type = types.find(Read32(it->bytes, 12)); type != types.end())
             {
-                if (std::memcmp(it->bytes.data(), "NAVM", 4) != 0)
+                if (std::memcmp(it->bytes.data(), type->second.data(), 4) != 0)
                 {
                     return false;
                 }
@@ -364,9 +375,10 @@ bool navmesh::skyrim::detail::MergePluginCopy(const PluginCopy &copy, const std:
 {
     std::vector<Node> sourceNodes, generatedNodes;
     std::set<std::uint32_t> ids;
+    std::map<std::uint32_t, std::string> types;
     if (!ParseNodes(copy.bytes, 0, copy.bytes.size(), sourceNodes) ||
-        !ParseNodes(navigation, 0, navigation.size(), generatedNodes) || !CollectNavigation(generatedNodes, ids) ||
-        !RemoveNavigation(sourceNodes, ids))
+        !ParseNodes(navigation, 0, navigation.size(), generatedNodes) ||
+        !CollectNavigation(generatedNodes, types, ids) || !RemoveNavigation(sourceNodes, types))
     {
         error = "Cannot merge generated navigation into the source plugin structure.";
         return false;

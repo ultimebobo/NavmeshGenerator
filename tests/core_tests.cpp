@@ -2815,6 +2815,7 @@ namespace
 } // namespace
 
 void TestBorderCavityRegressions();
+void TestNavmeshInfoExport();
 
 int main(int argc, char **argv)
 {
@@ -2871,6 +2872,7 @@ int main(int argc, char **argv)
     }
     if (argc > 1 && std::string_view(argv[1]) == "--writer-only")
     {
+        TestNavmeshInfoExport();
         TestNavmeshOverrideWriter();
         TestNewNavmeshRecords();
         TestNewExteriorNavmeshRecord();
@@ -2956,6 +2958,7 @@ int main(int argc, char **argv)
     TestMo2ProfileImport();
     TestMo2UnicodeProfileImport();
     TestLossAwareRecordReader();
+    TestNavmeshInfoExport();
     TestNavmeshOverrideWriter();
     TestNewNavmeshRecords();
     TestNewExteriorNavmeshRecord();

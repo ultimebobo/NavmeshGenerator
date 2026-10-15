@@ -212,7 +212,9 @@ this reference. The showcase utilities and renderer are described in the
   water owners without supported geometry.
 - `navmesh::skyrim::WriteNavmeshOverrides`: combined batch serialization
   of existing overrides and new plugin-owned NAVMs, with generated-to-generated
-  and authored-neighbor reciprocal portal checks.
+  and authored-neighbor reciprocal portal checks and verified NAVI output.
+- `navmesh::skyrim::detail::BuildNavmeshInfo`: NAVI payload construction from final
+  output-local NVNM geometry, retaining unrelated source-copy navigation entries.
 - `navmesh::skyrim::detail::PluginCopy`, `PreparePluginCopy`, and
   `MergePluginCopy`: complete raw-envelope validation, identity allocation limits,
   and NAVM insertion into a byte-preserving source copy. `WriteNavmeshOverrides`

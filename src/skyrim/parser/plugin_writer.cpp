@@ -1,5 +1,6 @@
 #include "skyrim/parser/plugin_writer.h"
 #include "skyrim/parser/plugin_copy.h"
+#include "skyrim/parser/navmesh_info.h"
 
 #include <algorithm>
 #include <cctype>
@@ -487,13 +488,24 @@ namespace
         output.insert(output.end(), body.begin(), body.end());
         return output;
     }
+    /// TES4 HEDR counts both records and GRUP headers, excluding TES4 itself.
+    std::size_t CountGroups(const Group &group)
+    {
+        std::size_t count = group.children.size();
+        for (const auto &child : group.children)
+        {
+            count += CountGroups(child);
+        }
+        return count;
+    }
     bool ReadBack(
         const std::filesystem::path &path, const std::vector<std::string> &expectedMasters, bool expectedLight,
         const std::vector<std::pair<std::uint32_t, navmesh::core::NavMesh>> &expected,
         const std::map<std::uint32_t, std::vector<std::pair<std::uint16_t, std::uint32_t>>> &doorsByMesh,
         const std::vector<std::pair<std::uint32_t, std::uint32_t>> &expectedCells,
         const std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t>> &expectedLinks,
-        const std::set<std::uint32_t> &newNavmeshIds, bool copiedPlugin = false)
+        const std::set<std::uint32_t> &newNavmeshIds, std::uint32_t navigationId, const Bytes &navigationPayload,
+        bool copiedPlugin = false)
     {
         std::vector<ResolvedRecord> records;
         std::vector<std::string> masters;
@@ -507,6 +519,15 @@ namespace
             return false;
         }
         if (masters != expectedMasters || light != expectedLight)
+        {
+            return false;
+        }
+        const auto navigation =
+            std::find_if(records.begin(), records.end(), [](const auto &record) { return record.type == "NAVI"; });
+        if (navigation == records.end() || navigation->winning.formId != navigationId || !navigation->raw ||
+            navigation->raw->decodedPayload != navmesh::core::SharedBytes(navigationPayload) ||
+            std::count_if(records.begin(), records.end(), [](const auto &record) { return record.type == "NAVI"; }) !=
+                1)
         {
             return false;
         }
@@ -1055,6 +1076,22 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     }
     std::vector<SourceInfo> sources;
     std::vector<std::string> requiredSources = doorOwners;
+    const ResolvedRecord *navigationSource{};
+    for (const auto &record : resolved.records)
+    {
+        if (record.type == "NAVI")
+        {
+            if (navigationSource || record.origins.empty())
+            {
+                return fail("The input load order has ambiguous NAVI identities.");
+            }
+            navigationSource = &record;
+            if (copyPlugin.empty())
+            {
+                requiredSources.push_back(record.origins.front().plugin);
+            }
+        }
+    }
     if (!copyPlugin.empty())
     {
         requiredSources.push_back(copyPlugin);
@@ -1149,6 +1186,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
     }
     std::optional<detail::PluginCopy> copy;
+    std::optional<ResolvedRecord> copiedNavigation;
     std::string copiedName;
     if (!copyPlugin.empty())
     {
@@ -1184,6 +1222,25 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         masters = prepared.masters;
         masters.push_back(copiedName);
         copy = std::move(prepared);
+        std::vector<ResolvedRecord> copiedRecords;
+        std::vector<std::string> copiedMasters;
+        std::vector<Diagnostic> copiedDiagnostics;
+        bool copiedLight{};
+        if (!DirectPluginReader{}.Read(selected->path, copiedRecords, copiedMasters, copiedLight, copiedDiagnostics))
+        {
+            return fail("Cannot inspect the copied plugin's navigation map.");
+        }
+        for (auto &record : copiedRecords)
+        {
+            if (record.type == "NAVI")
+            {
+                if (copiedNavigation || !record.raw)
+                {
+                    return fail("The copied plugin has ambiguous NAVI records.");
+                }
+                copiedNavigation = std::move(record);
+            }
+        }
         // Record identities must remain meaningful when the copy replaces the source.
         // Winning overrides may come from other plugins, but their introducing owners
         // must be addressable through this unchanged table before serialization starts.
@@ -1224,13 +1281,33 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     }
     // New identities belong to the output's self slot. Copies keep their allocation
     // cursor and format; patches choose a full/light format based on their new records.
+    std::optional<std::uint32_t> navigationId;
+    if (copiedNavigation)
+    {
+        navigationId = copiedNavigation->winning.formId;
+    }
+    else if (navigationSource)
+    {
+        navigationId = RebaseResolvedFormId(resolved, masters, navigationSource->formId);
+        if (!navigationId)
+        {
+            return fail("Cannot encode the NAVI owner in the output master table.");
+        }
+    }
+    const auto skyrimMaster =
+        std::find_if(masters.begin(), masters.end(), [](const auto &name) { return SameName(name, "Skyrim.esm"); });
+    if (!navigationId && skyrimMaster != masters.end())
+    {
+        navigationId = static_cast<std::uint32_t>(std::distance(masters.begin(), skyrimMaster)) << 24 | 0x12FB4U;
+    }
+    const auto newRecordCount = newNavmeshCount + (navigationId ? 0U : 1U);
     const std::uint32_t firstNewObjectId = copy ? copy->nextObjectId : 0x800U;
     const bool light =
-        copy ? (copy->flags & 0x200U) != 0 : masters.size() <= 253 && newNavmeshCount <= 0x1000U - firstNewObjectId;
+        copy ? (copy->flags & 0x200U) != 0 : masters.size() <= 253 && newRecordCount <= 0x1000U - firstNewObjectId;
     const auto objectIdLimit = light ? 0x1000U : 0x1000000U;
-    if (newNavmeshCount && (firstNewObjectId >= objectIdLimit || newNavmeshCount > objectIdLimit - firstNewObjectId))
+    if (newRecordCount && (firstNewObjectId >= objectIdLimit || newRecordCount > objectIdLimit - firstNewObjectId))
     {
-        return fail("New NAVM identities do not fit the output plugin's full/light format.");
+        return fail("New navigation identities do not fit the output plugin's full/light format.");
     }
     const auto selfIndex = static_cast<std::uint32_t>(masters.size() - (copy ? 1 : 0));
     std::uint32_t nextObjectId = firstNewObjectId;
@@ -1265,6 +1342,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t>> expectedLinks;
     std::map<std::uint32_t, std::vector<std::pair<std::uint16_t, std::uint32_t>>> doorsByMesh;
     std::map<std::uint32_t, std::uint32_t> outputPrimaryByCell;
+    std::map<std::uint32_t, Bytes> navigationGeometry;
     std::set<std::uint32_t> newNavmeshIds;
     // Allocate every output identity before encoding any external table. A new
     // cell can link to another new cell regardless of serialization order.
@@ -1515,6 +1593,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                 return fail("Cannot rebase source NAVM FormID.");
             }
             Set32(bytes, 12, *rebasedId);
+            navigationGeometry.emplace(*rebasedId, std::move(nvnm));
             bytes.insert(bytes.end(), payload.begin(), payload.end());
             expected.emplace_back(Get32(bytes, 12), mesh);
             const auto cellId = RebaseResolvedFormId(resolved, masters, cell.id);
@@ -1773,6 +1852,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             return fail("Cannot rebase neighboring NAVM FormID.");
         }
         Set32(bytes, 12, *rebasedId);
+        navigationGeometry.emplace(*rebasedId, std::move(nvnm));
         bytes.insert(bytes.end(), payload.begin(), payload.end());
         expected.emplace_back(*rebasedId, mesh);
         const auto cellId = RebaseResolvedFormId(resolved, masters, *navm->cellFormId);
@@ -1807,6 +1887,30 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
         Add(root, placement, std::move(bytes));
     }
+    if (!navigationId)
+    {
+        navigationId = selfIndex << 24 | nextObjectId++;
+    }
+    Bytes navigationPayload;
+    if (!detail::BuildNavmeshInfo(navigationGeometry, copiedNavigation ? &*copiedNavigation->raw : nullptr,
+                                  navigationPayload, error))
+    {
+        return false;
+    }
+    Bytes navigationRecord{'N', 'A', 'V', 'I'};
+    U32(navigationRecord, static_cast<std::uint32_t>(navigationPayload.size()));
+    U32(navigationRecord, 0);
+    U32(navigationRecord, *navigationId);
+    U32(navigationRecord, 0);
+    U16(navigationRecord, 44);
+    U16(navigationRecord, 0);
+    navigationRecord.insert(navigationRecord.end(), navigationPayload.begin(), navigationPayload.end());
+    ResolvedRecord navigationPlacement;
+    std::array<std::uint8_t, 24> navigationGroup{};
+    std::copy_n("GRUP", 4, navigationGroup.begin());
+    std::copy_n("NAVI", 4, navigationGroup.begin() + 8);
+    navigationPlacement.groupHeaders.push_back(navigationGroup);
+    Add(root, navigationPlacement, std::move(navigationRecord));
     const auto &source = sources.front().bytes;
     Bytes hedr;
     if (source.size() >= 42 && std::memcmp(source.data() + 24, "HEDR", 4) == 0 && source[28] == 12 && source[29] == 0)
@@ -1819,11 +1923,8 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         U32(hedr, 0);
         U32(hedr, 0x800);
     }
-    Set32(hedr, 4, static_cast<std::uint32_t>(expected.size()));
-    if (newNavmeshCount)
-    {
-        Set32(hedr, 8, nextObjectId);
-    }
+    Set32(hedr, 4, static_cast<std::uint32_t>(expected.size() + 1 + CountGroups(root)));
+    Set32(hedr, 8, nextObjectId);
     Bytes headerPayload;
     PutSubrecord(headerPayload, "HEDR", hedr);
     for (const auto &master : masters)
@@ -1868,10 +1969,10 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
     }
     if (!ReadBack(temporary, emittedMasters, light, expected, doorsByMesh, expectedCells, expectedLinks, newNavmeshIds,
-                  copy.has_value()))
+                  *navigationId, navigationPayload, copy.has_value()))
     {
         std::filesystem::remove(temporary);
-        return fail("Generated plugin failed NAVM read-back verification.");
+        return fail("Generated plugin failed NAVM/NAVI read-back verification.");
     }
     std::error_code renameError;
     std::filesystem::rename(temporary, path, renameError);

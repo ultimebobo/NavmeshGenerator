@@ -40,7 +40,7 @@ def navm(x, y=0, flags=(0, 0)):
     return sub("NVNM", body)
 
 
-def read_records(path):
+def read_records(path, include_groups=False):
     """Inspect emitted record identities and payloads independently of the C++ reader."""
     data = path.read_bytes()
     records = []
@@ -50,6 +50,9 @@ def read_records(path):
             kind = data[start:start + 4].decode()
             size = struct.unpack_from("<I", data, start + 4)[0]
             if kind == "GRUP":
+                if include_groups:
+                    label, group_type = struct.unpack_from("<II", data, start + 8)
+                    records.append((kind, label, group_type, b""))
                 visit(start + 24, start + size)
                 start += size
             else:
@@ -74,6 +77,25 @@ def navm_geometry(payload):
     faces = [body[triangle_at + 4 + index * 16:triangle_at + 10 + index * 16]
              for index in range(triangles)]
     return positions, faces
+
+
+def read_subrecords(payload):
+    offset = 0
+    extended = None
+    while offset < len(payload):
+        kind, size = struct.unpack_from("<4sH", payload, offset)
+        offset += 6
+        if kind == b"XXXX":
+            assert size == 4 and extended is None
+            extended = struct.unpack_from("<I", payload, offset)[0]
+            offset += 4
+            continue
+        size = size if extended is None else extended
+        assert offset + size <= len(payload)
+        yield kind, payload[offset:offset + size]
+        offset += size
+        extended = None
+    assert offset == len(payload) and extended is None
 
 
 class BatchRebuild(unittest.TestCase):
@@ -1347,7 +1369,7 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(selected.read_bytes(), original)
         self.assertIn(opaque, copied.read_bytes())
         emitted = read_records(copied)
-        self.assertEqual([item for item in emitted if item[0] not in ("TES4", "NAVM")],
+        self.assertEqual([item for item in emitted if item[0] not in ("TES4", "NAVM", "NAVI")],
                          [item for item in read_records(selected) if item[0] != "TES4"])
         old_header = read_records(selected)[0]
         new_header = emitted[0]
@@ -1359,7 +1381,7 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(onam[:4], b"ONAM")
         self.assertEqual(set(struct.unpack(f"<{(len(onam) - 6) // 4}I", onam[6:])),
                          {form for kind, form, flags, payload in emitted if kind == "NAVM" and form >> 24 == 0})
-        self.assertEqual(struct.unpack_from("<I", new_header[3], 14)[0], 0x851)
+        self.assertEqual(struct.unpack_from("<I", new_header[3], 14)[0], 0x852)
         self.assertNotIn(sub("MAST", b"Patch.esp\0"), new_header[3])
         self.assertTrue(json.loads((output / "batch-report.json").read_text())["copy_plugin"])
         # Read the copy as a replacement under its original identity.
@@ -1379,7 +1401,7 @@ class BatchRebuild(unittest.TestCase):
         new_navm = next(payload for kind, form, _, payload in records if kind == "NAVM" and form == 0x01000851)
         self.assertEqual(struct.unpack_from("<I", new_navm, 10)[0], 0xA5E9A03C)
         self.assertIn(unknown, copied.read_bytes())
-        self.assertEqual(struct.unpack_from("<I", records[0][3], 14)[0], 0x852)
+        self.assertEqual(struct.unpack_from("<I", records[0][3], 14)[0], 0x853)
         self.assertEqual(selected.read_bytes(), original)
         self.assertFalse(records[0][2] & 0x200)
 
@@ -1602,7 +1624,43 @@ class BatchRebuild(unittest.TestCase):
             if kind == "NAVM":
                 self.assertEqual(struct.unpack_from("<I", payload, 10)[0], 0xA5E9A03C)
         header = next(payload for kind, form, flags, payload in emitted if kind == "TES4")
-        self.assertEqual(struct.unpack_from("<I", header, 14)[0], 0x800 + len(ids))
+        navi_ids = [form for kind, form, flags, payload in emitted if kind == "NAVI"]
+        self.assertEqual(navi_ids, [0x01000000 | (0x800 + len(ids))])
+        self.assertEqual(struct.unpack_from("<I", header, 14)[0], 0x800 + len(ids) + len(navi_ids))
+
+    def test_navigation_map_matches_final_meshes(self):
+        for scope, args, filename in [
+            ("patch", ["--rebuild-plugin", "Patch.esp", "--generate-plugin"], "generated-navmesh.esp"),
+            ("copy", ["--rebuild-plugin", "Patch.esp", "--copy-plugin"], "Patch.esp"),
+        ]:
+            with self.subTest(scope=scope):
+                output = self.run_cli(*args, output=scope)
+                records = read_records(output / filename)
+                header = next(payload for kind, _, _, payload in records if kind == "TES4")
+                self.assertEqual(struct.unpack_from("<I", header, 10)[0],
+                                 len(read_records(output / filename, include_groups=True)) - 1)
+                navigation = [payload for kind, _, _, payload in records if kind == "NAVI"]
+                self.assertEqual(len(navigation), 1)
+                fields = list(read_subrecords(navigation[0]))
+                self.assertEqual([data for kind, data in fields if kind == b"NVER"], [struct.pack("<I", 12)])
+                self.assertEqual([data for kind, data in fields if kind == b"NVPP"], [bytes(8)])
+                infos = {struct.unpack_from("<I", data)[0]: data for kind, data in fields if kind == b"NVMI"}
+                meshes = {form: dict(read_subrecords(payload))[b"NVNM"]
+                          for kind, form, _, payload in records if kind == "NAVM"}
+                self.assertEqual(set(infos), set(meshes))
+                for form, mesh in meshes.items():
+                    info = infos[form]
+                    self.assertEqual(info[-12:-8], struct.pack("<I", 0xA5E9A03C))
+                    self.assertEqual(info[-8:], mesh[8:16])
+                    vertex_count = struct.unpack_from("<I", mesh, 16)[0]
+                    triangles_at = 20 + vertex_count * 12
+                    triangle_count = struct.unpack_from("<I", mesh, triangles_at)[0]
+                    links_at = triangles_at + 4 + triangle_count * 16
+                    link_count = struct.unpack_from("<I", mesh, links_at)[0]
+                    destinations = {struct.unpack_from("<I", mesh, links_at + 8 + index * 10)[0]
+                                    for index in range(link_count)}
+                    count = struct.unpack_from("<I", info, 24)[0]
+                    self.assertEqual(set(struct.unpack_from(f"<{count}I", info, 28)), destinations)
 
     def test_empty_and_unsupported_navm_records_protect_cells(self):
         unsupported = bytearray(navm(0))

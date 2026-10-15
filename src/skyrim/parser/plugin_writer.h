@@ -36,14 +36,16 @@ namespace navmesh::skyrim
      * combined across replacements, and applied without renumbering triangles or vertices.
      * Conflicting edits, altered unrelated portals and unsupported spatial grid tails fail export.
      * Edited neighbors receive a rebuilt grid while retaining authored cover and door indices.
+     * NAVI entries are rebuilt from every emitted NAVM, including reciprocal neighbors and
+     * empty secondary meshes. Source copies retain unrelated navigation-map entries.
      * @param writtenPath Receives the finalized plugin path on success.
      * @param error Receives a failure reason; no final plugin is published on failure.
      * @param copyPlugin Optional active filename to copy with generated NAVMs. Preserves
-     * all other records, the filename, TES4 flags, and existing master indices. Generated
+     * unrelated records, the filename, TES4 flags, and existing master indices. Generated
      * references must belong to that plugin or its existing masters; new IDs must fit
      * its existing full/light format. The copy replaces the source when installed.
-     * @return True after every NAVM, door, and reciprocal border passes read-back.
-     * @warning NAVI, XNDP, cover and unmatched authored links are not rebuilt.
+     * @return True after NAVM, NAVI, doors, and reciprocal borders pass read-back.
+     * @warning XNDP, cover and unmatched authored links are not rebuilt.
      */
     [[nodiscard]] bool WriteNavmeshOverrides(const std::filesystem::path &outputDirectory,
                                              const std::vector<std::filesystem::path> &inputPlugins,
@@ -68,7 +70,8 @@ namespace navmesh::skyrim
      * false with an error when a required border portal cannot be serialized.
      * @note The ESP is ESL-flagged when its master table and new identities fit a light plugin.
      * @warning Matched door triangles and reciprocal border portals are serialized.
-     * Other authored links, cover data, NAVI, and REFR XNDP references are not rebuilt.
+     * NAVI is rebuilt from the emitted meshes. Other authored links, cover data,
+     * and REFR XNDP references are not rebuilt.
      */
     [[nodiscard]] bool WriteNavmeshOverride(const std::filesystem::path &outputDirectory,
                                             const std::vector<std::filesystem::path> &inputPlugins,

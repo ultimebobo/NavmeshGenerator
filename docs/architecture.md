@@ -270,8 +270,11 @@ including records without matched borders. Retained external indices are remappe
 then matched borders receive fresh reciprocal portals to generated triangles.
 Read-back checks every consuming portal and its emitted destination's triangle
 range. Adjacent geometry remains unchanged. Other authored links, cover
-data, NAVI, and REFR XNDP references remain outside this
+data and REFR XNDP references remain outside this
 writer's supported remapping.
+`skyrim/parser/navmesh_info` derives NAVI from the final serialized NVNM bodies,
+including changed neighbors, and the writer verifies its payload on read-back.
+See the [navigation information map contract](navm-format-study.md#navigation-information-map).
 
 Cell and Plugin scopes can instead copy the selected source with generated
 navigation. `skyrim/parser/plugin_copy` validates the complete raw record/group
@@ -283,8 +286,8 @@ the extraction reader's index. The writer rebases generated references through
 the unchanged source master order and implicit self slot. Dependencies outside
 that table are rejected, and source full/light flags constrain new identities.
 The resulting copy keeps its original filename and resources and replaces the
-source when installed. NAVI and other unsupported connection metadata remain
-subject to the writer's existing limitations.
+source when installed. Its NAVI retains unrelated entries while rebuilding
+entries for emitted meshes and invalidating the optional precomputed path cache.
 
 ## Design boundary
 
