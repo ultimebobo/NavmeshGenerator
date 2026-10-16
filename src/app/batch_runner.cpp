@@ -923,7 +923,7 @@ namespace navmesh::app::detail
             // Physical bucketing includes DOORs from persistent worldspace parents.
             for (const auto &reference : index.GeometryCell(cell).references)
             {
-                if (reference.baseRecordType == "DOOR" && !reference.deleted && !reference.initiallyDisabled)
+                if (reference.baseRecordType == "DOOR" && !reference.deleted)
                 {
                     exits.push_back({.referenceId = reference.id,
                                      .position = reference.teleportArrival.value_or(reference.position)});

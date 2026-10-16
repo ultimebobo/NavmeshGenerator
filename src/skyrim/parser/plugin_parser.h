@@ -129,6 +129,13 @@ namespace navmesh::skyrim
         ByteRange trailingData;
         bool supported{};
     };
+    /// A placed door's XNDP association; mesh identity uses the containing reader's FormID space.
+    struct NavmeshDoorAssociation
+    {
+        std::uint32_t navmeshId{};
+        /// Zero-based triangle index in the associated NAVM.
+        std::uint16_t triangle{};
+    };
     struct ResolvedRecord
     {
         std::string type;
@@ -154,6 +161,8 @@ namespace navmesh::skyrim
         /// Resolved possible LVLI item bases; level/chance restrictions are conservatively ignored for runtime swaps.
         std::vector<std::uint32_t> leveledBaseIds;
         std::optional<NavmLayout> navm;
+        /// Winning XNDP, with a resolved mesh identity after load-order assembly.
+        std::optional<NavmeshDoorAssociation> navmeshDoor;
     };
     /// Original plugin placement and effective runtime alternatives used for collision-impact selection.
     struct RuntimePlacementChange
@@ -164,12 +173,22 @@ namespace navmesh::skyrim
         std::vector<core::Reference> alternatives;
     };
 
+    /// File identity captured before plugin resolution, used to reject concurrent source edits during export.
+    struct PluginInputSnapshot
+    {
+        std::filesystem::path path;
+        /// Source byte length and filesystem modification time, without changing source metadata.
+        std::uintmax_t size{};
+        std::filesystem::file_time_type modified;
+    };
     struct ResolvedLoadOrder
     {
         std::vector<std::string> plugins;
         std::vector<ResolvedRecord> records;
         std::vector<core::Cell> cells;
         std::vector<Diagnostic> diagnostics;
+        /// Physical input states in load order; absent for synthetic readers without backing files.
+        std::vector<PluginInputSnapshot> inputSnapshots;
         /// FormID-to-record offsets built by ResolveLoadOrder; records must retain their order.
         std::unordered_map<std::uint32_t, std::size_t> recordIndex;
         /// Ordered winning LAND record offsets by resolved CELL identity; records must retain their order.
@@ -227,9 +246,16 @@ namespace navmesh::skyrim
     /// @param reader Plugin reader implementation; defaults to the direct reader.
     /// @return Winning records, cells, and explicit diagnostics for unsupported input.
     /// References include valid model-local base bounds and reciprocal teleport arrival positions;
-    /// missing, disabled or deleted return links supply no arrival anchor.
+    /// Missing or deleted return links supply no arrival anchor; initially disabled quest doors retain theirs.
     [[nodiscard]] ResolvedLoadOrder ResolveLoadOrder(const LoadOrderInput &input,
                                                      const IPluginReader &reader = DirectPluginReader{});
+
+    /** Check that resolved input plugins still have their captured file sizes and modification times.
+     * @param resolved Snapshot used for geometry extraction and record resolution.
+     * @param error Receives the changed or unavailable source filename on failure.
+     * @return True when all physical inputs still match; performs no writes.
+     */
+    [[nodiscard]] bool LoadOrderSnapshotMatches(const ResolvedLoadOrder &resolved, std::string &error);
 
     /** Identify cells with winning NAVM records without requiring decodable geometry.
      * @param resolved Snapshot indexed with references and navmeshes enabled.

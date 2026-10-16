@@ -198,8 +198,10 @@ as the effective constraints.
 After polygon construction and CELL clipping, single-cell generation retains all
 surviving walkable components until authored border matching finishes. It then
 uses the shared reachability filter. Contiguous exterior selections with matched
-doors retain only networks reachable from those entrances, so a larger disconnected
-scenery floor cannot survive through area ranking or authored border constraints.
+doors retain entrance-reachable networks and supported routes replacing required
+authored crossings to untouched neighbors. Required crossings remain access anchors
+even when their route reaches an entrance outside the selected area. Incidental
+boundary matches and area ranking cannot retain disconnected scenery in that area.
 Doorless selections and interiors retain the largest connected floor by horizontal
 area, plus components reaching a matched door or authored neighbor.
 Cells without authored navigation or doors can therefore receive generated floors,
@@ -271,7 +273,9 @@ existing portal survives; incompatible proposals leave the candidate unchanged.
 Extensions obey distance, step, slope,
 and welding constraints. Inward authored offsets trim generated fans; outward
 offsets add connectors. Matched endpoints preserve the exact authored edge,
-including bounded deviations from the nominal CELL border. Other generated
+including bounded deviations from the nominal CELL border. Explicit reciprocal
+authored crossings can retain endpoint drift within the movement profile's border halo; incidental geometric
+matches keep the general authored-border tolerance. Other generated
 vertices stay inside the CELL. Terminal seam endpoints extend through their
 complete incident fans when movement and topology permit, preserving shared
 interior vertices. Short corner edges select their nearest CELL side, and one
@@ -480,11 +484,12 @@ all of which appear in its `source_triangles` list. It does not assign a
 Bethesda FormID or serialize NVNM.
 The candidate is reproducible for identical scene geometry, source order, and
 fixed settings. Triangle order from the resolved load order is part of the input.
-Placed, enabled DOOR references are matched to nearby generated polygons at
+Live placed DOOR references, including doors enabled later by gameplay, are matched to nearby generated polygons at
 compatible heights. Every retained component must reach a matched entrance or a
 CELL boundary edge. For exterior targets with
 a resolved load order, `border_links` records neighboring NAVM targets for complete
-matched edges. The guarded writer serializes matched door and border portals.
+matched edges and marks required authored crossings for reachability filtering.
+The guarded writer serializes matched door and border portals.
 
 Only LAND and supported Havok collision are eligible by default. Render
 fallback remains diagnostic evidence and is never silently promoted to

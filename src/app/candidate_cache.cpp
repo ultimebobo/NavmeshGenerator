@@ -21,7 +21,7 @@ namespace navmesh::app::detail
         // This identity versions both storage and successful generation semantics.
         // Change its pipeline revision when successful output becomes incompatible;
         // executable rebuilds alone must not discard completed generation work.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-7/recast-pipeline-37";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-10/recast-pipeline-41";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)
@@ -38,11 +38,19 @@ namespace navmesh::app::detail
         }
         template <class Archive> void Fields(Archive &a, core::NavPolygon &v)
         {
-            a(v.vertices, v.neighbors, v.flags);
+            a(v.vertices, v.neighbors, v.flags, v.coverFlags);
+        }
+        template <class Archive> void Fields(Archive &a, core::NavmeshExternalLink &v)
+        {
+            a(v.polygon, v.edge, v.navmeshId, v.targetPolygon, v.type);
+        }
+        template <class Archive> void Fields(Archive &a, core::NavmeshDoorLink &v)
+        {
+            a(v.polygon, v.referenceId);
         }
         template <class Archive> void Fields(Archive &a, core::NavMesh &v)
         {
-            a(v.id, v.vertices, v.polygons);
+            a(v.id, v.vertices, v.polygons, v.externalLinks, v.doorLinks);
         }
         template <class Archive> void Fields(Archive &a, core::RecordProvenance &v)
         {
@@ -80,7 +88,12 @@ namespace navmesh::app::detail
         }
         template <class Archive> void Fields(Archive &a, core::CandidateBorderLink &v)
         {
-            a(v.polygon, v.edge, v.neighborNavmeshId, v.neighborPolygon, v.neighborEdge, v.generatedNeighborCell);
+            a(v.polygon, v.edge, v.neighborNavmeshId, v.neighborPolygon, v.neighborEdge, v.generatedNeighborCell,
+              v.requiredAuthoredCrossing);
+        }
+        template <class Archive> void Fields(Archive &a, core::ClosedAuthoredPortal &v)
+        {
+            a(v.sourceNavmeshId, v.sourcePolygon, v.sourceEdge, v.neighborNavmeshId, v.neighborPolygon, v.neighborEdge);
         }
         template <class Archive> void Fields(Archive &a, core::AuthoredBorderVertexEdit &v)
         {
@@ -104,7 +117,8 @@ namespace navmesh::app::detail
         {
             a(v.profile, v.recastSettings, v.partitioningAlgorithm, v.triangleTagging, v.mesh, v.polygonSourceTriangles,
               v.polygonContributingTriangles, v.regions, v.exits, v.borderLinks, v.contours, v.topology, v.statistics,
-              v.warnings, v.authoredBorderVertexEdits);
+              v.warnings, v.authoredBorderVertexEdits, v.coverGeometry.vertices, v.coverGeometry.triangles,
+              v.closedAuthoredPortals);
         }
 
         /// One field visitor supplies deterministic hashing and private binary storage without copying whole candidates.
@@ -350,6 +364,14 @@ namespace navmesh::app::detail
                 !std::isfinite(loaded.profile.weldTolerance) || loaded.profile.weldTolerance <= 0 ||
                 !std::isfinite(loaded.profile.stepHeight) || loaded.profile.stepHeight < 0 ||
                 !std::all_of(loaded.mesh.vertices.begin(), loaded.mesh.vertices.end(), finite) ||
+                !std::all_of(loaded.coverGeometry.vertices.begin(), loaded.coverGeometry.vertices.end(), finite) ||
+                std::any_of(
+                    loaded.coverGeometry.triangles.begin(), loaded.coverGeometry.triangles.end(),
+                    [&](const auto &face)
+                    {
+                        return std::any_of(face.vertices.begin(), face.vertices.end(),
+                                           [&](auto index) { return index >= loaded.coverGeometry.vertices.size(); });
+                    }) ||
                 !core::ValidateCandidateTopology(loaded).valid ||
                 loaded.mesh.polygons.size() != loaded.polygonSourceTriangles.size() ||
                 loaded.mesh.polygons.size() != loaded.polygonContributingTriangles.size())
@@ -414,6 +436,14 @@ namespace navmesh::app::detail
             for (const auto &link : loaded.borderLinks)
             {
                 if (link.polygon >= loaded.mesh.polygons.size() || link.edge >= 3 || link.neighborEdge >= 3)
+                {
+                    return false;
+                }
+            }
+            for (const auto &portal : loaded.closedAuthoredPortals)
+            {
+                if (!portal.sourceNavmeshId || !portal.neighborNavmeshId || portal.sourceEdge >= 3 ||
+                    portal.neighborEdge >= 3)
                 {
                     return false;
                 }

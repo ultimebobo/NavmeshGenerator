@@ -104,6 +104,7 @@ namespace
         const auto &payload = raw.decodedPayload;
         std::size_t p = 0;
         std::optional<std::uint32_t> extendedSize;
+        std::optional<std::size_t> extendedStart;
         while (p < payload.size())
         {
             if (!Has(payload, p, 6))
@@ -111,18 +112,19 @@ namespace
                 error = "truncated subrecord header at decoded offset " + std::to_string(p);
                 return false;
             }
-            const auto encodedStart = p;
+            const auto encodedStart = extendedStart.value_or(p);
             const auto kind = Text(payload, p, 4);
             const auto shortSize = U16(payload, p + 4);
             p += 6;
             if (kind == "XXXX")
             {
-                if (shortSize != 4 || !Has(payload, p, 4))
+                if (extendedSize || shortSize != 4 || !Has(payload, p, 4))
                 {
                     error = "malformed XXXX extended-size marker";
                     return false;
                 }
                 extendedSize = U32(payload, p);
+                extendedStart = encodedStart;
                 p += 4;
                 continue;
             }
@@ -164,7 +166,16 @@ namespace
             {
                 record.leveledBaseIds.push_back(U32(payload, data + 4));
             }
-            else if ((kind == "XLKR" || kind == "XESP" || kind == "XNDP" || kind == "XTEL") && size >= 4)
+            else if (kind == "XNDP" && record.type == "REFR")
+            {
+                if (size != 8 || record.navmeshDoor)
+                {
+                    error = "REFR has a malformed or duplicate XNDP association";
+                    return false;
+                }
+                record.navmeshDoor = NavmeshDoorAssociation{U32(payload, data), U16(payload, data + 4)};
+            }
+            else if ((kind == "XLKR" || kind == "XESP" || kind == "XTEL") && size >= 4)
             {
                 record.linkedFormIds.push_back(U32(payload, data));
             }
@@ -230,6 +241,7 @@ namespace
                     .supported = version == 12};
             }
             extendedSize.reset();
+            extendedStart.reset();
             p = data + size;
         }
         if (extendedSize)
@@ -326,6 +338,7 @@ namespace
                 polygon.neighbors[edge] = U16(payload, offset + 6 + edge * 2);
             }
             polygon.flags = U16(payload, offset + 12);
+            polygon.coverFlags = U16(payload, offset + 14);
             mesh.polygons.push_back(polygon);
         }
         const auto trailing = static_cast<std::size_t>(layout.trailingData.offset);
@@ -392,8 +405,8 @@ namespace navmesh::skyrim
                     return false;
                 }
                 const auto offset = 4 + static_cast<std::size_t>(polygon.neighbors[edge]) * 10;
-                externalLinks.push_back(
-                    {static_cast<std::uint32_t>(polygonIndex), edge, read32(offset + 4), read16(offset + 8)});
+                externalLinks.push_back({static_cast<std::uint32_t>(polygonIndex), edge, read32(offset + 4),
+                                         read16(offset + 8), read32(offset)});
             }
         }
         std::vector<core::NavmeshDoorLink> doorLinks;
@@ -568,7 +581,7 @@ namespace navmesh::skyrim
                         IndexedRecordType(kind) && (includeReferencesAndNavmeshes || kind == "CELL" || kind == "WRLD");
                     if (retain)
                     {
-                        if (kind == "CELL" || kind == "WRLD" || kind == "NAVM")
+                        if (kind == "CELL" || kind == "WRLD" || kind == "NAVM" || kind == "REFR")
                         {
                             r.groupHeaders = groups;
                         }
@@ -667,6 +680,16 @@ namespace navmesh::skyrim
                 continue;
             }
             Source source{.path = path};
+            std::error_code snapshotError;
+            const auto size = std::filesystem::file_size(path, snapshotError);
+            if (!snapshotError)
+            {
+                const auto modified = std::filesystem::last_write_time(path, snapshotError);
+                if (!snapshotError)
+                {
+                    result.inputSnapshots.push_back({path, size, modified});
+                }
+            }
             source.metadataValid = reader.ReadMetadata(path, source.masters, source.light, source.diagnostics);
             byName.emplace(name, sources.size());
             result.plugins.push_back(path.filename().string());
@@ -799,6 +822,16 @@ namespace navmesh::skyrim
                     }
                 }
                 record.winning.cellFormId = record.cellFormId;
+                if (record.navmeshDoor)
+                {
+                    const auto target = record.navmeshDoor->navmeshId;
+                    record.navmeshDoor->navmeshId = target ? resolve(i, target).value_or(0) : 0;
+                    if (target && !record.navmeshDoor->navmeshId)
+                    {
+                        result.diagnostics.push_back({DiagnosticKind::UnresolvedFormId, source.path.filename().string(),
+                                                      "Cannot resolve a door's XNDP NAVM identity."});
+                    }
+                }
                 for (auto &base : record.leveledBaseIds)
                 {
                     base = resolve(i, base).value_or(0);
@@ -1120,8 +1153,7 @@ namespace navmesh::skyrim
                 if (partner != winners.end())
                 {
                     const auto &arrival = result.records[partner->second].winning;
-                    if (!arrival.deleted && !arrival.initiallyDisabled &&
-                        arrival.teleportDestinationId == record.formId)
+                    if (!arrival.deleted && arrival.teleportDestinationId == record.formId)
                     {
                         reference.teleportArrival = arrival.teleportDestinationPosition;
                     }
@@ -1159,7 +1191,33 @@ namespace navmesh::skyrim
         }
         result.diagnostics.insert(result.diagnostics.begin(), std::make_move_iterator(inputDiagnostics.begin()),
                                   std::make_move_iterator(inputDiagnostics.end()));
+        std::string snapshotError;
+        if (!LoadOrderSnapshotMatches(result, snapshotError))
+        {
+            result.diagnostics.push_back({DiagnosticKind::InvalidPlugin, {}, snapshotError});
+        }
         return result;
+    }
+
+    bool LoadOrderSnapshotMatches(const ResolvedLoadOrder &resolved, std::string &error)
+    {
+        for (const auto &source : resolved.inputSnapshots)
+        {
+            std::error_code fileError;
+            const auto size = std::filesystem::file_size(source.path, fileError);
+            if (fileError || size != source.size)
+            {
+                error = "Input plugin changed or became unavailable: " + source.path.filename().string();
+                return false;
+            }
+            const auto modified = std::filesystem::last_write_time(source.path, fileError);
+            if (fileError || modified != source.modified)
+            {
+                error = "Input plugin changed during generation: " + source.path.filename().string();
+                return false;
+            }
+        }
+        return true;
     }
 
     std::vector<const ResolvedRecord *> ResolvedLoadOrder::LandRecords(std::uint32_t cellId) const

@@ -315,14 +315,16 @@ namespace navmesh::core
                 }
             }
         }
-        // Exterior entrance evidence identifies the playable networks independently of authored NAVM.
-        // A larger disconnected scenery floor and authored border constraints cannot override that evidence.
+        // A required authored crossing anchors a route through untouched navigation even
+        // when it cannot reach a door inside this selection. Incidental boundary matches
+        // alone do not establish access to disconnected scenery in an entrance-anchored area.
         for (std::size_t index{}; index < targets.size(); ++index)
         {
             const auto &candidate = *targets[index].candidate;
             for (const auto &link : candidate.borderLinks)
             {
-                if (!link.generatedNeighborCell && !entranceAnchored[areas.Root(index)])
+                if (!link.generatedNeighborCell &&
+                    (link.requiredAuthoredCrossing || !entranceAnchored[areas.Root(index)]))
                 {
                     retained[floors.Root(offsets[index] + link.polygon)] = true;
                 }

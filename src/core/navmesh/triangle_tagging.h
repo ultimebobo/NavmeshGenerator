@@ -19,4 +19,12 @@ namespace navmesh::core
      */
     void TagCandidateTriangles(CandidateNavMesh &candidate, std::span<const NavMesh> authored,
                                std::optional<float> waterHeight, bool enabled = true);
+
+    /** Retain authored large-creature exclusions on corresponding generated floors.
+     * @param mesh Generated Skyrim-world geometry; only its creature-restriction flag may be added.
+     * @param authored Original meshes; overlapping unmarked floors constrain stacked-floor matches.
+     * @param heightTolerance Finite nonnegative world-space separation allowed between matching floors.
+     * @throws std::invalid_argument If the height tolerance is invalid.
+     */
+    void PreserveAuthoredRestrictions(NavMesh &mesh, std::span<const NavMesh> authored, float heightTolerance);
 } // namespace navmesh::core

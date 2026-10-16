@@ -11,6 +11,7 @@
 #include "core/navmesh/generator.h"
 #include "core/navmesh/surface_simplification.h"
 #include "core/navmesh/triangle_tagging.h"
+#include "core/navmesh/cover.h"
 #include "core/scene/scene_exporter.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
@@ -932,8 +933,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             {
                 for (const auto &reference : sceneCell.references)
                 {
-                    if (reference.recordType == "REFR" && reference.baseRecordType == "DOOR" && !reference.deleted &&
-                        !reference.initiallyDisabled)
+                    if (reference.recordType == "REFR" && reference.baseRecordType == "DOOR" && !reference.deleted)
                     {
                         exits.push_back({.referenceId = reference.id,
                                          .position = reference.teleportArrival.value_or(reference.position)});
@@ -963,8 +963,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                     for (const auto &reference : worldCell.references)
                     {
                         if (reference.recordType == "REFR" && reference.baseRecordType == "DOOR" &&
-                            !reference.deleted && !reference.initiallyDisabled &&
-                            reference.position.x >= candidateBounds->min.x &&
+                            !reference.deleted && reference.position.x >= candidateBounds->min.x &&
                             reference.position.x <= candidateBounds->max.x &&
                             reference.position.y >= candidateBounds->min.y &&
                             reference.position.y <= candidateBounds->max.y)
@@ -1036,6 +1035,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                 }
                 navmesh::core::TagCandidateTriangles(*candidate, cell->navMeshes, cell->waterHeight,
                                                      options.tagTriangles);
+                navmesh::core::CaptureCoverGeometry(*candidate, geometry.scene);
             }
             catch (const std::exception &error)
             {
@@ -1180,9 +1180,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             const bool eslFlagged = writtenPlugin && (pluginHeader[9] & 0x02U) != 0;
             std::cout << "Generated NAVM override plugin: " << pluginPath.string()
                       << (eslFlagged ? " (ESL-flagged ESP)\n" : " (regular ESP)\n");
-            std::cerr << "Generated navigation includes rebuilt NAVI and matched border and door links; teleport-door "
-                         "XNDP, cover, and "
-                         "other authored links still need independent validation.\n";
+            std::cout << "Verified NAVM, NAVI, cover, reciprocal portals and door XNDP associations against the input "
+                         "load order.\n";
         }
         update(90, "Navmesh support analyzed");
         if (wasCancelled())

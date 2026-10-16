@@ -25,8 +25,10 @@ namespace navmesh::skyrim
      * when no walkable floor survives. Generated border links identify destination CELLs
      * and generated triangles; all primary NAVM identities are allocated before writing.
      * Each generated portal must have exact reversed endpoints and a unique return link.
+     * Authored crossings require a generated replacement or explicit excluded-obstacle evidence.
      * Matched authored portal endpoints may extend beyond nominal CELL bounds by
-     * core::AuthoredBorderTolerance; other candidate vertices must stay inside.
+     * core::AuthoredBorderTolerance, or the profile's border halo for explicit authored crossings;
+     * other candidate vertices must stay inside.
      * Cells without any winning NAVM receive a plugin-owned identity and temporary
      * CELL child placement with a serialized PathingCell type tag for Creation Kit loading;
      * unsupported existing records cannot be treated as uncovered.
@@ -38,14 +40,19 @@ namespace navmesh::skyrim
      * Edited neighbors receive a rebuilt grid while retaining authored cover and door indices.
      * NAVI entries are rebuilt from every emitted NAVM, including reciprocal neighbors and
      * empty secondary meshes. Source copies retain unrelated navigation-map entries.
+     * Cover is built from retained physical collision and coincident authored edges. Connector
+     * constraints and base-object arrays are remapped to the primary generated record.
+     * Winning door references receive reciprocal XNDP associations while preserving their
+     * other fields, scripts, locks, flags and group placement. Changed input snapshots fail export.
      * @param writtenPath Receives the finalized plugin path on success.
      * @param error Receives a failure reason; no final plugin is published on failure.
      * @param copyPlugin Optional active filename to copy with generated NAVMs. Preserves
      * unrelated records, the filename, TES4 flags, and existing master indices. Generated
      * references must belong to that plugin or its existing masters; new IDs must fit
      * its existing full/light format. The copy replaces the source when installed.
-     * @return True after NAVM, NAVI, doors, and reciprocal borders pass read-back.
-     * @warning XNDP, cover and unmatched authored links are not rebuilt.
+     * @return True after read-back and validation against the effective input navigation graph.
+     * @warning Unrepresentable connector constraints, localized reference resources, unknown
+     * reference fields and traversal portals without a safe replacement route reject export instead of being discarded.
      */
     [[nodiscard]] bool WriteNavmeshOverrides(const std::filesystem::path &outputDirectory,
                                              const std::vector<std::filesystem::path> &inputPlugins,
@@ -60,7 +67,7 @@ namespace navmesh::skyrim
      * @param cell Selected cell in Skyrim world coordinates.
      * @param candidate Valid generated mesh in Skyrim world coordinates.
      * Only matched authored portal endpoints may exceed nominal exterior CELL bounds,
-     * within core::AuthoredBorderTolerance. Neighbor geometry retains its identities;
+     * within the authored matching tolerance or bounded halo for required crossings. Neighbor geometry retains its identities;
      * bounded border fan edits recorded in the candidate are verified and serialized.
      * Incoming portals into replaced triangle spaces are cleared before matched
      * reciprocal portals are written; unmatched edges remain open boundaries.
@@ -69,9 +76,8 @@ namespace navmesh::skyrim
      * @return True only after a successful write and independent reader round trip;
      * false with an error when a required border portal cannot be serialized.
      * @note The ESP is ESL-flagged when its master table and new identities fit a light plugin.
-     * @warning Matched door triangles and reciprocal border portals are serialized.
-     * NAVI is rebuilt from the emitted meshes. Other authored links, cover data,
-     * and REFR XNDP references are not rebuilt.
+     * @note NAVI, cover, matched portals and reciprocal REFR XNDP associations are rebuilt automatically.
+     * Unsupported connection or reference remapping fails without publishing an output plugin.
      */
     [[nodiscard]] bool WriteNavmeshOverride(const std::filesystem::path &outputDirectory,
                                             const std::vector<std::filesystem::path> &inputPlugins,

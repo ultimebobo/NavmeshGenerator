@@ -10,6 +10,7 @@
 #include "core/scene/scene.h"
 #include "skyrim/parser/plugin_parser.h"
 #include "skyrim/parser/plugin_writer.h"
+#include "skyrim/parser/navigation_validation.h"
 #include "skyrim/parser/affected_cells.h"
 #include "skyrim/mo2/mo2_importer.h"
 #include "skyrim/extraction/geometry_extractor.h"
@@ -474,7 +475,9 @@ namespace
             const auto isolatedVertices =
                 std::array<Vec3, 3>{{{53400, -15872, 0}, {53400, -16000, 0}, {53528, -15936, 0}}};
             PutRecord(neighborNavm, "NAVM", 0x203, navm(isolatedVertices, 13, 0x202));
-            PutRecord(neighborNavm, "NAVM", 0x204, navm(isolatedVertices, 13));
+            const auto retainedVertices = std::array<Vec3, 3>{
+                neighborVertices[0] + Vec3{0, 0, 64}, neighborVertices[2] + Vec3{0, 0, 64}, Vec3{53376, -15808, 64}};
+            PutRecord(neighborNavm, "NAVM", 0x204, navm(retainedVertices, 13, 0x201));
         }
         std::vector<std::uint8_t> selectedRefPayload, doorBase;
         PutU32(doorBase, 0x310);
@@ -530,8 +533,13 @@ namespace
         candidate.exits.push_back({.referenceId = 0x300, .position = {53180, -15936, 0}, .region = 0, .polygon = 0});
         std::filesystem::path output;
         std::string error;
-        Require(navmesh::skyrim::WriteNavmeshOverride(root / "door-only", {source}, resolved, *selected, candidate,
-                                                      output, error));
+        const auto doorWritten = navmesh::skyrim::WriteNavmeshOverride(root / "door-only", {source}, resolved,
+                                                                       *selected, candidate, output, error);
+        if (!doorWritten)
+        {
+            std::fprintf(stderr, "Door writer rejected fixture: %s\n", error.c_str());
+        }
+        Require(doorWritten);
         const auto doorOnly = navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source, output}});
         const auto *doorOnlyNavm = doorOnly.FindWinning(0x200);
         Require(doorOnlyNavm && doorOnlyNavm->navm && doorOnlyNavm->navm->triangleCount == 1);
@@ -595,6 +603,32 @@ namespace
             Require((face.flags & 7U) == 5U && face.neighbors[0] == 1 && face.neighbors[1] == 0xffffU &&
                     face.neighbors[2] == 0);
             Require(read32(neighborData, neighborTail + 8) == 0x204);
+            // Existing authored endpoint offsets survive unchanged. An edit to
+            // either endpoint must still fail validation of that same portal.
+            std::vector<navmesh::skyrim::ResolvedRecord> altered;
+            std::vector<std::string> outputMasters;
+            std::vector<navmesh::skyrim::Diagnostic> diagnostics;
+            bool light{};
+            Require(navmesh::skyrim::DirectPluginReader{}.Read(output, altered, outputMasters, light, diagnostics));
+            const auto changedNeighbor = std::find_if(altered.begin(), altered.end(), [](const auto &record)
+                                                      { return record.winning.formId == 0x201; });
+            Require(changedNeighbor != altered.end() && changedNeighbor->raw && changedNeighbor->navm);
+            auto payload = std::vector<std::uint8_t>(changedNeighbor->raw->decodedPayload.begin(),
+                                                     changedNeighbor->raw->decodedPayload.end());
+            const auto changedHeight = 1.0F;
+            std::memcpy(payload.data() + changedNeighbor->navm->vertices.offset + 2 * 12 + 8, &changedHeight, 4);
+            changedNeighbor->raw->decodedPayload = std::move(payload);
+            std::set<std::uint32_t> modifiedMeshes;
+            for (const auto &record : altered)
+            {
+                if (record.type == "NAVM")
+                {
+                    modifiedMeshes.insert(record.winning.formId);
+                }
+            }
+            Require(!navmesh::skyrim::detail::ValidateNavigationGraph(
+                altered, outputMasters, output.filename().string(), resolved, modifiedMeshes, {}, error));
+            Require(error.find("endpoints disagree") != std::string::npos);
             const auto *isolated = patched.FindWinning(0x203);
             Require(isolated && isolated->winning.plugin == output.filename().string());
             const auto &isolatedData = isolated->raw->decodedPayload;
@@ -646,6 +680,15 @@ namespace
         adjacentCandidate.mesh.polygons.front().neighbors.fill(std::numeric_limits<std::uint32_t>::max());
         adjacentCandidate.mesh.polygons.front().flags &= static_cast<std::uint16_t>(~7U);
         adjacentCandidate.borderLinks.push_back({0, 0, 0x200, 2, 1});
+        if (linkSecondary)
+        {
+            auto missingCrossing = adjacentCandidate;
+            missingCrossing.borderLinks.clear();
+            Require(!navmesh::skyrim::WriteNavmeshOverride(root / "missing-crossing", {source}, resolved, *adjacent,
+                                                           missingCrossing, output, error));
+            Require(error.find("crossing is missing") != std::string::npos);
+            Require(!std::filesystem::exists(root / "missing-crossing" / "generated-navmesh.esp"));
+        }
         const bool batchWritten = navmesh::skyrim::WriteNavmeshOverrides(
             root / "batch", {source}, resolved, {{&*selected, &candidate}, {&*adjacent, &adjacentCandidate}}, output,
             error);
@@ -795,6 +838,17 @@ namespace
                 }
                 generated.exits.front().position = rotate(generated.exits.front().position);
             }
+            auto knownDrift = generated;
+            auto driftedNeighbor = neighbor;
+            Vec3 driftedPoint{280, -AuthoredBorderTolerance * 1.5F, 0};
+            for (int turn{}; turn < rotation; ++turn)
+            {
+                driftedPoint = rotate(driftedPoint);
+            }
+            driftedNeighbor.vertices[0] = driftedPoint;
+            Require(StitchCandidateBorders(knownDrift, bounds, {driftedNeighbor}, {authored}) == 1);
+            RequireCompleteBorderStitch(knownDrift, bounds, {driftedNeighbor});
+            Require(knownDrift.borderLinks.front().requiredAuthoredCrossing);
             auto unconstrained = generated;
             Require(StitchCandidateBorders(unconstrained, bounds, {neighbor}) == 1);
             RequireCompleteBorderStitch(unconstrained, bounds, {neighbor});
@@ -803,7 +857,8 @@ namespace
             Require(generated.exits.front().polygon.has_value());
             Require(generated.borderLinks.front().neighborNavmeshId == neighbor.id &&
                     generated.borderLinks.front().neighborPolygon == 0 &&
-                    generated.borderLinks.front().neighborEdge == 0);
+                    generated.borderLinks.front().neighborEdge == 0 &&
+                    generated.borderLinks.front().requiredAuthoredCrossing);
             const auto portal = generated.borderLinks.front().polygon;
             Require(generated.mesh.polygons[portal].flags == WaterFlag);
             Require(generated.polygonContributingTriangles[portal] == std::vector<std::size_t>({0, 1, 2}));
@@ -1919,7 +1974,7 @@ namespace
         };
         std::vector<std::uint8_t> references;
         PutRecord(references, "REFR", 0x300, placement(0x301, {400, 500, 0}));
-        PutRecord(references, "REFR", 0x301, placement(0x300, {50, 75, 0}));
+        PutRecord(references, "REFR", 0x301, placement(0x300, {50, 75, 0}), 1U << 11);
         std::vector<std::uint8_t> cells;
         PutRecord(cells, "CELL", 0x100, CellPayload("ThresholdExterior", true));
         PutGroup(cells, 0x100, 6, references);
@@ -1946,7 +2001,7 @@ namespace
             {
                 const auto geometry =
                     skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
-                Require(geometry.scene.mesh.triangles.size() == 24 && geometry.modelsMissing == 0);
+                Require(geometry.scene.mesh.triangles.size() == 12 && geometry.modelsMissing == 0);
                 Require(geometry.scene.HasCompleteTriangleProvenance());
                 Require(geometry.scene.geometrySources.front().navigationObstacle);
                 Require(geometry.scene.geometrySources.front().sourceType ==
@@ -2816,6 +2871,7 @@ namespace
 
 void TestBorderCavityRegressions();
 void TestNavmeshInfoExport();
+void TestNavmeshCover();
 
 int main(int argc, char **argv)
 {
@@ -2872,6 +2928,7 @@ int main(int argc, char **argv)
     }
     if (argc > 1 && std::string_view(argv[1]) == "--writer-only")
     {
+        TestNavmeshCover();
         TestNavmeshInfoExport();
         TestNavmeshOverrideWriter();
         TestNewNavmeshRecords();
@@ -2958,6 +3015,7 @@ int main(int argc, char **argv)
     TestMo2ProfileImport();
     TestMo2UnicodeProfileImport();
     TestLossAwareRecordReader();
+    TestNavmeshCover();
     TestNavmeshInfoExport();
     TestNavmeshOverrideWriter();
     TestNewNavmeshRecords();

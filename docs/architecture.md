@@ -269,9 +269,13 @@ portals into replaced triangle spaces are removed from every incoming NAVM,
 including records without matched borders. Retained external indices are remapped,
 then matched borders receive fresh reciprocal portals to generated triangles.
 Read-back checks every consuming portal and its emitted destination's triangle
-range. Adjacent geometry remains unchanged. Other authored links, cover
-data and REFR XNDP references remain outside this
-writer's supported remapping.
+range. Adjacent geometry retains its identities. `core/navmesh/cover` retains
+physical wall evidence through seam refinement and classifies final boundary
+edges. `parser/navmesh_metadata` remaps auxiliary arrays;
+`parser/reference_navigation` preserves and rebases whole winning door references
+while rebuilding XNDP. `parser/navigation_validation` checks the effective graph
+against unchanged input destinations before publication. Unsupported remapping
+and stale input snapshots reject export.
 `skyrim/parser/navmesh_info` derives NAVI from the final serialized NVNM bodies,
 including changed neighbors, and the writer verifies its payload on read-back.
 See the [navigation information map contract](navm-format-study.md#navigation-information-map).

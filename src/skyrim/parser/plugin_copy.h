@@ -27,12 +27,12 @@ namespace navmesh::skyrim::detail
      */
     [[nodiscard]] bool PreparePluginCopy(std::vector<std::uint8_t> bytes, PluginCopy &copy, std::string &error);
 
-    /** Merge serialized NAVMs and their NAVI into a source copy without rebasing unrelated records.
+    /** Merge serialized NAVMs, NAVI and affected door references without rebasing unrelated records.
      * @param copy Validated source snapshot; its master table and self index stay unchanged.
      * @param navigation Complete generated groups with source-table-local FormIDs.
      * @param nextObjectId Next available source-owned ID after NAVM allocation.
      * @param output Receives the merged plugin, including updated group sizes, HEDR
-     * counts, and ONAM override entries when required by the source header.
+     * counts, and ONAM temporary-child override entries when required by the source header.
      * @param error Receives a structural or identity failure reason.
      * @return True when generated navigation records occur exactly once and unrelated records are retained.
      * @warning Navigation may refer only to the source plugin and its existing masters.

@@ -53,8 +53,8 @@ this reference. The showcase utilities and renderer are described in the
   coordinate-matched parent LAND, with actual source provenance and cycle checks.
 
 - `navmesh::core::RemoveCandidateIslands`: complete-set floor reachability after
-  authored border matching or generated seam linking. Retains matched-door/authored-neighbor access and the
-  largest network in each contiguous exterior selection or interior; removes
+  authored border matching or generated seam linking. Retains matched doors and required crossings into
+  untouched navigation; doorless selections and interiors also retain a primary floor. Removes
   isolated floor networks even across CELL seams. Compacts source, geometry,
   region, door and reciprocal portal indices, then rebuilds contours and topology.
   `CandidateReachabilityTarget` supplies borrowed candidates and neutral ownership keys.
@@ -163,8 +163,8 @@ this reference. The showcase utilities and renderer are described in the
   checks exact reversed endpoint equality, unique portals and complete seam coverage.
   Deferred batch mode preserves unlinked borders and unanchored components while
   matching only untouched authored neighbors.
-- `navmesh::core::AuthoredBorderTolerance`: shared world-unit bound for authored
-  portal drift from exterior CELL borders, used by stitching and the guarded writer.
+- `navmesh::core::AuthoredBorderTolerance`: shared world-unit bound for incidental authored
+  portal drift. Explicit reciprocal crossings may use the profile's bounded border halo.
 - `navmesh::skyrim`: plugin/load-order reading, guarded NAVM override
   writing, Mod Organizer 2 and Vortex input, and terrain/model extraction.
 - `navmesh::skyrim::ImportVortexDeployment`, `VortexInput`, `VortexSnapshotMatches`:
@@ -212,12 +212,19 @@ this reference. The showcase utilities and renderer are described in the
   water owners without supported geometry.
 - `navmesh::skyrim::WriteNavmeshOverrides`: combined batch serialization
   of existing overrides and new plugin-owned NAVMs, with generated-to-generated
-  and authored-neighbor reciprocal portal checks and verified NAVI output.
+  and authored-neighbor reciprocal portal checks, cover, NAVI and reciprocal XNDP.
+- `navmesh::core::CaptureCoverGeometry`, `BuildNavmeshCover`: physical wall evidence
+  retained through seam refinement and final cover-slot encoding without triangle renumbering.
+- `navmesh::skyrim::detail::RebuildNavmeshMetadata`, `RewriteReferenceNavigation`:
+  auxiliary constraint remapping and complete winning-reference preservation with FormID rebasing.
+- `navmesh::skyrim::detail::ValidateNavigationGraph`: exported grid, cover and connection
+  checks against the effective load order, including unchanged destinations.
+- `navmesh::skyrim::LoadOrderSnapshotMatches`: read-only rejection of changed plugin inputs.
 - `navmesh::skyrim::detail::BuildNavmeshInfo`: NAVI payload construction from final
   output-local NVNM geometry, retaining unrelated source-copy navigation entries.
 - `navmesh::skyrim::detail::PluginCopy`, `PreparePluginCopy`, and
   `MergePluginCopy`: complete raw-envelope validation, identity allocation limits,
-  and NAVM insertion into a byte-preserving source copy. `WriteNavmeshOverrides`
+  and navigation-record insertion into a byte-preserving source copy. `WriteNavmeshOverrides`
   accepts an optional active filename for this authoring export and verifies
   modified NAVMs against the source's unchanged master table and full/light flags.
 - `navmesh::skyrim::CellsWithExistingNavmesh`: winning NAVM ownership for

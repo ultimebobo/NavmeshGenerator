@@ -1,6 +1,11 @@
 #include "skyrim/parser/plugin_writer.h"
 #include "skyrim/parser/plugin_copy.h"
 #include "skyrim/parser/navmesh_info.h"
+#include "skyrim/parser/reference_navigation.h"
+#include "skyrim/parser/navmesh_metadata.h"
+#include "skyrim/parser/navigation_validation.h"
+#include "core/navmesh/cover.h"
+#include "core/navmesh/generator.h"
 
 #include <algorithm>
 #include <cctype>
@@ -17,10 +22,71 @@
 namespace
 {
     using Bytes = std::vector<std::uint8_t>;
+    using navmesh::skyrim::NavmeshDoorAssociation;
     using navmesh::skyrim::ResolvedRecord;
     /// Skyrim's serialized PathingCell type tag; zero denotes a null object to the CK stream reader.
     constexpr std::uint32_t PathingCellCrc = 0xA5E9A03CU;
     constexpr std::uint32_t PathingDoorCrc = 0xE48B73F3U;
+
+    bool SupportedNavmeshSubrecord(const std::string &type)
+    {
+        return type == "NVNM" || type == "EDID" || type == "ONAM" || type == "PNAM" || type == "NNAM";
+    }
+
+    /// Explicit authored crossings may use the same bounded halo as the border repair algorithm.
+    float BorderPortalTolerance(const navmesh::core::CandidateNavMesh &candidate,
+                                const navmesh::core::CandidateBorderLink &link)
+    {
+        return link.requiredAuthoredCrossing
+                   ? std::max(navmesh::core::AuthoredBorderTolerance, candidate.profile.agentRadius * 2 + 16)
+                   : navmesh::core::AuthoredBorderTolerance;
+    }
+
+    /// A reciprocal intra-cell ledge is redundant only when generated floor replaces its traversal route.
+    bool ReplacedLedgeRoute(const navmesh::core::CandidateNavMesh &candidate, const navmesh::core::Cell &cell,
+                            const navmesh::core::NavMesh &source, const navmesh::core::NavmeshExternalLink &portal)
+    {
+        if ((portal.type != 1 && portal.type != 2) || portal.polygon >= source.polygons.size() || portal.edge >= 3)
+        {
+            return false;
+        }
+        const auto target = std::find_if(cell.navMeshes.begin(), cell.navMeshes.end(),
+                                         [&](const auto &mesh) { return mesh.id == portal.navmeshId; });
+        if (target == cell.navMeshes.end() || portal.targetPolygon >= target->polygons.size())
+        {
+            return false;
+        }
+        const auto matchesReverse = [&](const auto &link)
+        {
+            return link.polygon == portal.targetPolygon && link.navmeshId == source.id &&
+                   link.targetPolygon == portal.polygon && link.type == 3 - portal.type;
+        };
+        if (std::count_if(target->externalLinks.begin(), target->externalLinks.end(), matchesReverse) != 1)
+        {
+            return false;
+        }
+        const auto reverse = std::find_if(target->externalLinks.begin(), target->externalLinks.end(), matchesReverse);
+        if (reverse->edge >= 3)
+        {
+            return false;
+        }
+        const auto &departure = source.polygons[portal.polygon];
+        const auto &arrival = target->polygons[portal.targetPolygon];
+        if (std::any_of(departure.vertices.begin(), departure.vertices.end(),
+                        [&](auto vertex) { return vertex >= source.vertices.size(); }) ||
+            std::any_of(arrival.vertices.begin(), arrival.vertices.end(),
+                        [&](auto vertex) { return vertex >= target->vertices.size(); }))
+        {
+            return false;
+        }
+        return navmesh::core::HasCandidateFloorRoute(candidate,
+                                                     (source.vertices.at(departure.vertices[portal.edge]) +
+                                                      source.vertices.at(departure.vertices[(portal.edge + 1) % 3])) *
+                                                         0.5F,
+                                                     (target->vertices.at(arrival.vertices[reverse->edge]) +
+                                                      target->vertices.at(arrival.vertices[(reverse->edge + 1) % 3])) *
+                                                         0.5F);
+    }
 
     void U16(Bytes &b, std::uint16_t n)
     {
@@ -202,13 +268,14 @@ namespace
         Bytes bytes(static_cast<std::size_t>(size));
         stream.seekg(static_cast<std::streamoff>(start));
         stream.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-        return stream ? std::move(bytes) : Bytes{};
+        if (!stream || Get32(bytes, 8) != record.raw->flags ||
+            !std::equal(bytes.begin() + 24, bytes.end(), record.raw->filePayload.begin(),
+                        record.raw->filePayload.end()))
+        {
+            return {};
+        }
+        return bytes;
     }
-    /** Collect every authored NAVM with an incoming link to replaced geometry.
-     * Source-local targets are compared through each plugin's own master table,
-     * including its implicit self slot. Unmatched incoming edges also need overrides
-     * because their destination triangle indices cannot survive regeneration.
-     */
     /** Rebuild spatial lookup after authored vertex edits, retaining cover triangle identities.
      * Version-specific opaque tails cannot be safely relocated and reject the edit.
      * A single bucket conservatively contains every unchanged authored triangle index.
@@ -284,6 +351,11 @@ namespace
         return true;
     }
 
+    /** Collect every authored NAVM with an incoming link to replaced geometry.
+     * Source-local targets are compared through each plugin's own master table,
+     * including its implicit self slot. Unmatched incoming edges also need overrides
+     * because their destination triangle indices cannot survive regeneration.
+     */
     bool CollectIncomingNeighbors(const navmesh::skyrim::ResolvedLoadOrder &resolved,
                                   const std::vector<std::filesystem::path> &inputPlugins,
                                   const std::vector<const ResolvedRecord *> &replacedRecords,
@@ -370,7 +442,7 @@ namespace
             }
             if (!record.cellFormId || record.groupHeaders.empty() ||
                 std::any_of(record.raw->subrecords.begin(), record.raw->subrecords.end(),
-                            [](const auto &sub) { return sub.type != "NVNM" && sub.type != "EDID"; }))
+                            [](const auto &sub) { return !SupportedNavmeshSubrecord(sub.type); }))
             {
                 return false;
             }
@@ -448,6 +520,100 @@ namespace
         Set32(nvnm, trailing, static_cast<std::uint32_t>(retained.size() / 10));
         return true;
     }
+    /// Collect the complete door dependency closure before choosing the output master table.
+    bool CollectDoorNavigation(
+        const navmesh::skyrim::ResolvedLoadOrder &resolved, const std::vector<const ResolvedRecord *> &records,
+        const std::map<std::uint32_t, std::pair<std::uint32_t, std::uint16_t>> &doorAssignments,
+        std::map<std::uint32_t, const ResolvedRecord *> &neighborRecords,
+        std::map<std::uint32_t, navmesh::core::NavMesh> &neighborMeshes,
+        std::map<std::uint32_t, const ResolvedRecord *> &doorReferences,
+        std::map<std::uint32_t, navmesh::skyrim::NavmeshDoorAssociation> &authoredDoorAssignments, std::string &error)
+    {
+        const auto fail = [&](const char *reason)
+        {
+            error = reason;
+            return false;
+        };
+        std::set<std::uint32_t> replacedMeshes;
+        for (const auto *record : records)
+        {
+            replacedMeshes.insert(record->formId);
+        }
+        // Every live authored door connection must acquire a generated triangle. Replacing
+        // a mesh cannot leave a quest door pointing into its obsolete triangle numbering.
+        for (const auto &record : resolved.records)
+        {
+            if (record.type == "REFR" && record.navmeshDoor && replacedMeshes.contains(record.navmeshDoor->navmeshId))
+            {
+                if (!record.raw || (!(record.raw->flags & 0x20U) && !doorAssignments.contains(record.formId)))
+                {
+                    return fail("A door linked to replaced navigation has no reachable generated triangle.");
+                }
+                doorReferences.emplace(record.formId, &record);
+            }
+        }
+        for (const auto &cell : resolved.cells)
+        {
+            for (const auto &mesh : cell.navMeshes)
+            {
+                for (const auto &door : mesh.doorLinks)
+                {
+                    const auto *reference = resolved.FindWinning(door.referenceId);
+                    if (replacedMeshes.contains(mesh.id) && reference && reference->raw &&
+                        !(reference->raw->flags & 0x20U) && !doorAssignments.contains(door.referenceId))
+                    {
+                        return fail("An authored door portal has no reachable generated triangle.");
+                    }
+                    if (!replacedMeshes.contains(mesh.id) && doorAssignments.contains(door.referenceId))
+                    {
+                        const auto *navm = resolved.FindWinning(mesh.id);
+                        if (!navm || !navm->raw || !navm->navm || !navm->navm->supported || navm->groupHeaders.empty())
+                        {
+                            return fail("Cannot update the NAVM containing a moved door association.");
+                        }
+                        neighborRecords.emplace(mesh.id, navm);
+                        neighborMeshes.emplace(mesh.id, mesh);
+                    }
+                }
+            }
+        }
+        for (auto &[id, mesh] : neighborMeshes)
+        {
+            for (const auto &door : mesh.doorLinks)
+            {
+                if (doorAssignments.contains(door.referenceId))
+                {
+                    continue;
+                }
+                const auto *reference = resolved.FindWinning(door.referenceId);
+                if (!reference || !reference->raw || reference->type != "REFR" || door.polygon >= mesh.polygons.size())
+                {
+                    return fail("A neighboring NAVM has an unresolved authored door portal.");
+                }
+                if (reference->raw->flags & 0x20U)
+                {
+                    doorReferences.emplace(door.referenceId, reference);
+                    continue;
+                }
+                const NavmeshDoorAssociation association{id, static_cast<std::uint16_t>(door.polygon)};
+                if (const auto previous = authoredDoorAssignments.find(door.referenceId);
+                    previous != authoredDoorAssignments.end() &&
+                    (previous->second.navmeshId != id || previous->second.triangle != door.polygon))
+                {
+                    return fail("An authored door belongs to multiple neighboring NAVM portals.");
+                }
+                authoredDoorAssignments.emplace(door.referenceId, association);
+                mesh.polygons[door.polygon].flags |= 1U << 10;
+                if (!reference->navmeshDoor || reference->navmeshDoor->navmeshId != id ||
+                    reference->navmeshDoor->triangle != door.polygon)
+                {
+                    doorReferences.emplace(door.referenceId, reference);
+                }
+            }
+        }
+        return true;
+    }
+
     struct Group
     {
         std::array<std::uint8_t, 24> header{};
@@ -498,6 +664,73 @@ namespace
         }
         return count;
     }
+    /// Serialize whole winning references so XNDP updates cannot discard unrelated authored fields.
+    bool SerializeDoorReferences(
+        const std::vector<SourceInfo> &sources, const std::vector<std::string> &masters,
+        const navmesh::skyrim::ResolvedLoadOrder &resolved,
+        const std::map<std::uint32_t, const ResolvedRecord *> &doorReferences,
+        const std::map<std::uint32_t, std::optional<navmesh::skyrim::NavmeshDoorAssociation>> &outputAssociations,
+        const std::string &copiedName, Group &root, std::map<std::uint32_t, Bytes> &expectedReferences,
+        std::string &error)
+    {
+        const auto fail = [&](const char *reason)
+        {
+            error = reason;
+            return false;
+        };
+        // Copy complete winning references, changing only their navigation association and
+        // the FormID encoding required by the output master table. Opaque fields fail closed.
+        for (const auto &[id, reference] : doorReferences)
+        {
+            const auto source = std::find_if(sources.begin(), sources.end(), [&](const auto &item)
+                                             { return SameName(item.name, reference->winning.plugin); });
+            const auto outputId = RebaseResolvedFormId(resolved, masters, id);
+            if (source == sources.end() || !outputId || !reference->raw)
+            {
+                return fail("Cannot resolve a door reference's source snapshot.");
+            }
+            Bytes payload;
+            const auto rebase = [&](std::uint32_t raw) { return RebaseFormId(*source, masters, raw); };
+            const bool retainsStrings = !copiedName.empty() && SameName(copiedName, source->name);
+            if (!navmesh::skyrim::detail::RewriteReferenceNavigation(
+                    *reference->raw, rebase, outputAssociations.at(*outputId), retainsStrings,
+                    (Get32(source->bytes, 8) & 0x80U) != 0, payload, error))
+            {
+                return false;
+            }
+            auto bytes = SourceRecord(*source, *reference);
+            if (bytes.size() < 24)
+            {
+                return fail("Door reference source changed or has an invalid record range.");
+            }
+            bytes.resize(24);
+            Set32(bytes, 4, static_cast<std::uint32_t>(payload.size()));
+            Set32(bytes, 8, Get32(bytes, 8) & ~0x40000U);
+            Set32(bytes, 12, *outputId);
+            bytes.insert(bytes.end(), payload.begin(), payload.end());
+            ResolvedRecord placement;
+            placement.groupHeaders = reference->groupHeaders;
+            for (auto &header : placement.groupHeaders)
+            {
+                Bytes group(header.begin(), header.end());
+                const auto type = Get32(group, 12);
+                if (type == 1 || type == 6 || type == 8 || type == 9 || type == 10)
+                {
+                    const auto label = RebaseFormId(*source, masters, Get32(group, 8));
+                    if (!label)
+                    {
+                        return fail("Cannot rebase a door reference's group placement.");
+                    }
+                    Set32(group, 8, *label);
+                    std::copy(group.begin(), group.end(), header.begin());
+                }
+            }
+            expectedReferences.emplace(*outputId, std::move(payload));
+            Add(root, placement, std::move(bytes));
+        }
+        return true;
+    }
+
     bool ReadBack(
         const std::filesystem::path &path, const std::vector<std::string> &expectedMasters, bool expectedLight,
         const std::vector<std::pair<std::uint32_t, navmesh::core::NavMesh>> &expected,
@@ -505,7 +738,8 @@ namespace
         const std::vector<std::pair<std::uint32_t, std::uint32_t>> &expectedCells,
         const std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t>> &expectedLinks,
         const std::set<std::uint32_t> &newNavmeshIds, std::uint32_t navigationId, const Bytes &navigationPayload,
-        bool copiedPlugin = false)
+        const std::map<std::uint32_t, Bytes> &expectedReferences, const navmesh::skyrim::ResolvedLoadOrder &input,
+        const std::map<std::uint32_t, float> &generatedStepHeights, std::string &error, bool copiedPlugin = false)
     {
         std::vector<ResolvedRecord> records;
         std::vector<std::string> masters;
@@ -536,6 +770,16 @@ namespace
                                                    { return record.type == "NAVM"; })) != expected.size())
         {
             return false;
+        }
+        for (const auto &[id, payload] : expectedReferences)
+        {
+            const auto reference = std::find_if(records.begin(), records.end(),
+                                                [&](const auto &item) { return item.winning.formId == id; });
+            if (reference == records.end() || reference->type != "REFR" || !reference->raw ||
+                reference->raw->decodedPayload != navmesh::core::SharedBytes(payload))
+            {
+                return false;
+            }
         }
         // Index emitted identities once; whole-plugin rebuilds may allocate a
         // NAVM for every live CELL, including cells without source navigation.
@@ -611,7 +855,9 @@ namespace
             for (std::size_t i{}; i < mesh.polygons.size(); ++i)
             {
                 const auto offset = static_cast<std::size_t>(it->navm->triangles.offset) + i * 16;
-                if (static_cast<std::uint16_t>(data[offset + 12] | data[offset + 13] << 8) != mesh.polygons[i].flags)
+                if (static_cast<std::uint16_t>(data[offset + 12] | data[offset + 13] << 8) != mesh.polygons[i].flags ||
+                    static_cast<std::uint16_t>(data[offset + 14] | data[offset + 15] << 8) !=
+                        mesh.polygons[i].coverFlags)
                 {
                     return false;
                 }
@@ -678,6 +924,17 @@ namespace
                 {
                     return false;
                 }
+                if (expectedReferences.contains(expectedDoors[i].second))
+                {
+                    const auto reference = std::find_if(records.begin(), records.end(), [&](const auto &item)
+                                                        { return item.winning.formId == expectedDoors[i].second; });
+                    if (reference == records.end() || !reference->navmeshDoor ||
+                        reference->navmeshDoor->navmeshId != originalId ||
+                        reference->navmeshDoor->triangle != triangle || !(mesh.polygons[triangle].flags & (1U << 10)))
+                    {
+                        return false;
+                    }
+                }
             }
             const auto [firstLink, lastLink] = linksByMesh.equal_range(originalId);
             for (auto link = firstLink; link != lastLink; ++link)
@@ -695,7 +952,18 @@ namespace
                 }
             }
         }
-        return true;
+        std::set<std::uint32_t> modifiedMeshes, modifiedReferences;
+        for (const auto &[id, mesh] : expected)
+        {
+            modifiedMeshes.insert(id);
+        }
+        for (const auto &[id, payload] : expectedReferences)
+        {
+            modifiedReferences.insert(id);
+        }
+        return navmesh::skyrim::detail::ValidateNavigationGraph(records, masters, path.stem().string(), input,
+                                                                modifiedMeshes, modifiedReferences, error,
+                                                                generatedStepHeights);
     }
 } // namespace
 
@@ -706,6 +974,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                                             std::filesystem::path &writtenPath, std::string &error,
                                             const std::string &copyPlugin)
 {
+    error.clear();
     const auto fail = [&](const char *reason)
     {
         error = reason;
@@ -714,6 +983,16 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     if (replacements.empty())
     {
         return fail("No NAVM replacements were supplied.");
+    }
+    if (!LoadOrderSnapshotMatches(resolved, error))
+    {
+        return false;
+    }
+    if (std::any_of(resolved.diagnostics.begin(), resolved.diagnostics.end(),
+                    [](const auto &diagnostic) { return diagnostic.kind != DiagnosticKind::UnsupportedVersion; }))
+    {
+        return fail(
+            "Input load order contains malformed records or unresolved dependencies; resolve them before export.");
     }
     std::map<std::uint32_t, const NavmeshReplacement *> byCell;
     std::map<std::uint32_t, core::NavMesh> generatedMeshes;
@@ -748,12 +1027,44 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     std::vector<const ResolvedRecord *> records;
     std::map<std::uint32_t, const ResolvedRecord *> neighborRecords;
     std::map<std::uint32_t, core::NavMesh> neighborMeshes;
+    std::map<std::uint32_t, const ResolvedRecord *> doorReferences;
+    std::map<std::uint32_t, std::pair<std::uint32_t, std::uint16_t>> doorAssignments;
+    std::map<std::uint32_t, NavmeshDoorAssociation> authoredDoorAssignments;
     std::vector<std::string> doorOwners;
     std::map<std::uint32_t, std::vector<std::pair<std::uint16_t, std::uint32_t>>> doorsByCell;
     for (const auto &replacement : replacements)
     {
         const auto &cell = *replacement.cell;
         const auto &candidate = *replacement.candidate;
+        try
+        {
+            core::ValidateRecastSettings(candidate.profile, candidate.recastSettings);
+        }
+        catch (const std::invalid_argument &invalid)
+        {
+            error = invalid.what();
+            return false;
+        }
+        if (std::any_of(candidate.coverGeometry.vertices.begin(), candidate.coverGeometry.vertices.end(),
+                        [](const auto &vertex)
+                        { return !std::isfinite(vertex.x) || !std::isfinite(vertex.y) || !std::isfinite(vertex.z); }) ||
+            std::any_of(candidate.coverGeometry.triangles.begin(), candidate.coverGeometry.triangles.end(),
+                        [&](const auto &face)
+                        {
+                            return std::any_of(face.vertices.begin(), face.vertices.end(), [&](auto vertex)
+                                               { return vertex >= candidate.coverGeometry.vertices.size(); });
+                        }) ||
+            std::any_of(candidate.mesh.vertices.begin(), candidate.mesh.vertices.end(), [](const auto &vertex)
+                        { return !std::isfinite(vertex.x) || !std::isfinite(vertex.y) || !std::isfinite(vertex.z); }) ||
+            std::any_of(candidate.mesh.polygons.begin(), candidate.mesh.polygons.end(),
+                        [&](const auto &face)
+                        {
+                            return std::any_of(face.vertices.begin(), face.vertices.end(),
+                                               [&](auto vertex) { return vertex >= candidate.mesh.vertices.size(); });
+                        }))
+        {
+            return fail("Generated NAVM has non-finite coordinates or invalid vertex indices.");
+        }
         if (!candidate.topology.valid || (candidate.mesh.vertices.empty() != candidate.mesh.polygons.empty()))
         {
             return fail("Generated NAVM has inconsistent geometry or invalid topology.");
@@ -783,7 +1094,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             }
             const auto *reference = resolved.FindWinning(exit.referenceId);
             if (!reference || reference->type != "REFR" || reference->origins.empty() || !reference->raw ||
-                (reference->raw->flags & ((1U << 5) | (1U << 11))) != 0 || reference->referencedFormIds.empty())
+                (reference->raw->flags & (1U << 5)) != 0 || reference->referencedFormIds.empty())
             {
                 return fail("A matched entrance is not an enabled placed door.");
             }
@@ -793,7 +1104,15 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                 return fail("A matched entrance does not reference a DOOR base.");
             }
             doorEntries.emplace_back(static_cast<std::uint16_t>(*exit.polygon), exit.referenceId);
-            const auto &owner = reference->origins.front().plugin;
+            const auto assignment = std::pair{cell.id, static_cast<std::uint16_t>(*exit.polygon)};
+            if (const auto existing = doorAssignments.find(exit.referenceId);
+                existing != doorAssignments.end() && existing->second != assignment)
+            {
+                return fail("A door has conflicting generated navigation destinations.");
+            }
+            doorAssignments[exit.referenceId] = assignment;
+            doorReferences[exit.referenceId] = reference;
+            const auto &owner = reference->winning.plugin;
             if (std::none_of(doorOwners.begin(), doorOwners.end(),
                              [&](const auto &name) { return SameName(name, owner); }))
             {
@@ -806,22 +1125,26 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         {
             // Authored portals may lie just beyond the nominal CELL boundary.
             // Preserve their exact endpoints, but never relax bounds for other vertices.
-            std::set<std::uint32_t> portalVertices;
+            std::map<std::uint32_t, float> portalVertices;
             for (const auto &link : candidate.borderLinks)
             {
                 if (link.polygon < candidate.mesh.polygons.size() && link.edge < 3)
                 {
                     const auto &polygon = candidate.mesh.polygons[link.polygon];
-                    portalVertices.insert(polygon.vertices[link.edge]);
-                    portalVertices.insert(polygon.vertices[(link.edge + 1) % 3]);
+                    const auto tolerance = BorderPortalTolerance(candidate, link);
+                    for (const auto vertex : {polygon.vertices[link.edge], polygon.vertices[(link.edge + 1) % 3]})
+                    {
+                        portalVertices[vertex] = std::max(portalVertices[vertex], tolerance);
+                    }
                 }
             }
             for (std::size_t index{}; index < candidate.mesh.vertices.size(); ++index)
             {
                 const auto &vertex = candidate.mesh.vertices[index];
                 const auto [x, y] = *cell.exteriorCoordinates;
-                const auto tolerance =
-                    portalVertices.contains(static_cast<std::uint32_t>(index)) ? core::AuthoredBorderTolerance : 0.0F;
+                const auto tolerance = portalVertices.contains(static_cast<std::uint32_t>(index))
+                                           ? portalVertices.at(static_cast<std::uint32_t>(index))
+                                           : 0.0F;
                 if (vertex.x < static_cast<float>(x) * 4096.0F - tolerance ||
                     vertex.x > (static_cast<float>(x) + 1.0F) * 4096.0F + tolerance ||
                     vertex.y < static_cast<float>(y) * 4096.0F - tolerance ||
@@ -833,10 +1156,72 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
         for (const auto &mesh : cell.navMeshes)
         {
+            if (std::any_of(mesh.externalLinks.begin(), mesh.externalLinks.end(), [&](const auto &link)
+                            { return link.type != 0 && !ReplacedLedgeRoute(candidate, cell, mesh, link); }))
+            {
+                return fail(
+                    "An authored ledge or enable/disable portal cannot be safely remapped to generated geometry.");
+            }
             const auto *navm = resolved.FindWinning(mesh.id);
             if (!navm || navm->type != "NAVM" || !navm->raw || !navm->navm || !navm->navm->supported)
             {
                 return fail("A selected NAVM has an unsupported format.");
+            }
+            auto inspected = mesh;
+            const auto &layout = *navm->navm;
+            const auto &data = navm->raw->decodedPayload;
+            if (!DecodeNavmeshConnections(
+                    {data.data() + layout.trailingData.offset, static_cast<std::size_t>(layout.trailingData.size)},
+                    inspected) ||
+                inspected.externalLinks.size() != mesh.externalLinks.size() ||
+                inspected.doorLinks.size() != mesh.doorLinks.size())
+            {
+                return fail("A selected NAVM has malformed or unresolved navigation connections.");
+            }
+            for (const auto &portal : mesh.externalLinks)
+            {
+                if (portal.type != 0)
+                {
+                    continue;
+                }
+                const auto *destination = resolved.FindWinning(portal.navmeshId);
+                if (!destination || !destination->cellFormId)
+                {
+                    return fail("An authored navigation crossing has no resolved destination CELL.");
+                }
+                if (*destination->cellFormId == cell.id)
+                {
+                    continue;
+                }
+                const auto matched =
+                    std::any_of(candidate.borderLinks.begin(), candidate.borderLinks.end(),
+                                [&](const auto &link)
+                                {
+                                    if (byCell.contains(*destination->cellFormId))
+                                    {
+                                        const auto *target = resolved.FindWinning(link.neighborNavmeshId);
+                                        return link.generatedNeighborCell == destination->cellFormId ||
+                                               (target && target->cellFormId == destination->cellFormId);
+                                    }
+                                    return link.neighborNavmeshId == portal.navmeshId &&
+                                           link.neighborPolygon == portal.targetPolygon;
+                                });
+                const auto closed = std::any_of(
+                    candidate.closedAuthoredPortals.begin(), candidate.closedAuthoredPortals.end(),
+                    [&](const auto &closure)
+                    {
+                        return closure.sourceNavmeshId == mesh.id && closure.sourcePolygon == portal.polygon &&
+                               closure.sourceEdge == portal.edge && closure.neighborNavmeshId == portal.navmeshId &&
+                               closure.neighborPolygon == portal.targetPolygon;
+                    });
+                if (!matched && !closed)
+                {
+                    error = std::format("An authored navigation crossing is missing without verified obstacle-floor "
+                                        "closure: CELL {:08X}, NAVM {:08X}:{}:{} -> CELL {:08X}, NAVM {:08X}:{}.",
+                                        cell.id, mesh.id, portal.polygon, portal.edge, *destination->cellFormId,
+                                        portal.navmeshId, portal.targetPolygon);
+                    return false;
+                }
             }
             if (navm->groupHeaders.empty() || navm->cellFormId != cell.id)
             {
@@ -844,7 +1229,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             }
             for (const auto &sub : navm->raw->subrecords)
             {
-                if (sub.type != "NVNM" && sub.type != "EDID")
+                if (!SupportedNavmeshSubrecord(sub.type))
                 {
                     return fail("An existing NAVM has additional authored subrecords that cannot be remapped.");
                 }
@@ -905,7 +1290,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             }
             for (const auto &sub : record->raw->subrecords)
             {
-                if (sub.type != "NVNM" && sub.type != "EDID")
+                if (!SupportedNavmeshSubrecord(sub.type))
                 {
                     return fail("A neighboring NAVM has additional authored subrecords that cannot be remapped.");
                 }
@@ -1019,11 +1404,9 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             const auto borderXMax = ((*cell.exteriorCoordinates)[0] + 1) * 4096.0F;
             const auto borderY = (*cell.exteriorCoordinates)[1] * 4096.0F;
             const auto borderYMax = ((*cell.exteriorCoordinates)[1] + 1) * 4096.0F;
-            const auto onBorder = [](float first, float second, float boundary)
-            {
-                return std::abs(first - boundary) <= core::AuthoredBorderTolerance &&
-                       std::abs(second - boundary) <= core::AuthoredBorderTolerance;
-            };
+            const auto tolerance = BorderPortalTolerance(candidate, link);
+            const auto onBorder = [tolerance](float first, float second, float boundary)
+            { return std::abs(first - boundary) <= tolerance && std::abs(second - boundary) <= tolerance; };
             if (!(onBorder(a.x, b.x, borderX) || onBorder(a.x, b.x, borderXMax) || onBorder(a.y, b.y, borderY) ||
                   onBorder(a.y, b.y, borderYMax)))
             {
@@ -1074,8 +1457,21 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     {
         return fail("Cannot safely collect authored portals targeting replaced NAVMs.");
     }
+    if (!CollectDoorNavigation(resolved, records, doorAssignments, neighborRecords, neighborMeshes, doorReferences,
+                               authoredDoorAssignments, error))
+    {
+        return false;
+    }
     std::vector<SourceInfo> sources;
     std::vector<std::string> requiredSources = doorOwners;
+    for (const auto &[id, reference] : doorReferences)
+    {
+        if (reference->groupHeaders.empty())
+        {
+            return fail("A door reference has no supported CELL group placement.");
+        }
+        requiredSources.push_back(reference->winning.plugin);
+    }
     const ResolvedRecord *navigationSource{};
     for (const auto &record : resolved.records)
     {
@@ -1251,7 +1647,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             if (!representable(record->formId))
             {
                 return fail("Copy export requires NAVM owners in the selected plugin's existing master table. "
-                            "Use the NAVM-only patch export for additional dependencies.");
+                            "Use the navigation patch export for additional dependencies.");
             }
         }
         for (const auto &[id, record] : neighborRecords)
@@ -1259,7 +1655,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             if (!representable(id))
             {
                 return fail("Copy export requires neighboring NAVM owners in the selected plugin's existing master "
-                            "table. Use the NAVM-only patch export for additional dependencies.");
+                            "table. Use the navigation patch export for additional dependencies.");
             }
         }
     }
@@ -1343,6 +1739,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     std::map<std::uint32_t, std::vector<std::pair<std::uint16_t, std::uint32_t>>> doorsByMesh;
     std::map<std::uint32_t, std::uint32_t> outputPrimaryByCell;
     std::map<std::uint32_t, Bytes> navigationGeometry;
+    std::map<std::uint32_t, Bytes> expectedReferences;
     std::set<std::uint32_t> newNavmeshIds;
     // Allocate every output identity before encoding any external table. A new
     // cell can link to another new cell regardless of serialization order.
@@ -1367,6 +1764,31 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             }
             outputPrimaryByCell.emplace(cell.id, *identity);
         }
+    }
+    std::map<std::uint32_t, std::optional<NavmeshDoorAssociation>> outputAssociations;
+    for (const auto &[id, reference] : doorReferences)
+    {
+        const auto outputId = RebaseResolvedFormId(resolved, masters, id);
+        if (!outputId)
+        {
+            return fail("Cannot encode a door reference in the output master table.");
+        }
+        std::optional<NavmeshDoorAssociation> association;
+        if (const auto assignment = doorAssignments.find(id); assignment != doorAssignments.end())
+        {
+            association =
+                NavmeshDoorAssociation{outputPrimaryByCell.at(assignment->second.first), assignment->second.second};
+        }
+        else if (const auto authored = authoredDoorAssignments.find(id); authored != authoredDoorAssignments.end())
+        {
+            const auto target = RebaseResolvedFormId(resolved, masters, authored->second.navmeshId);
+            if (!target)
+            {
+                return fail("Cannot rebase a neighboring door's NAVM association.");
+            }
+            association = NavmeshDoorAssociation{*target, authored->second.triangle};
+        }
+        outputAssociations.emplace(*outputId, association);
     }
     for (const auto &replacement : replacements)
     {
@@ -1396,6 +1818,29 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             face.neighbors[link.edge] = static_cast<std::uint32_t>(outgoing.size());
             face.flags |= static_cast<std::uint16_t>(1U << link.edge);
             outgoing.emplace_back(*target, static_cast<std::uint16_t>(link.neighborPolygon));
+        }
+        for (const auto &[triangle, reference] : doorEntries)
+        {
+            linkedMesh.polygons[triangle].flags |= 1U << 10;
+        }
+        core::BuildNavmeshCover(linkedMesh, candidate, cell.navMeshes);
+        std::vector<detail::NavmeshMetadataSource> metadataSources;
+        for (const auto &authored : cell.navMeshes)
+        {
+            const auto *record = resolved.FindWinning(authored.id);
+            const auto source = std::find_if(sources.begin(), sources.end(), [&](const auto &item)
+                                             { return SameName(item.name, record->winning.plugin); });
+            metadataSources.push_back({&*record->raw, &authored,
+                                       [&, source](std::uint32_t raw) { return RebaseFormId(*source, masters, raw); }});
+        }
+        Bytes auxiliary;
+        if (!detail::RebuildNavmeshMetadata(
+                metadataSources, linkedMesh,
+                std::max(candidate.profile.weldTolerance,
+                         candidate.profile.agentRadius + 2 * candidate.recastSettings.cellSize),
+                auxiliary, error))
+        {
+            return false;
         }
         // A candidate uses one triangle-index space; keeping it in one NAVM avoids invalid cross-record indices.
         std::optional<std::uint32_t> outputCellGroup;
@@ -1504,7 +1949,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                                   : static_cast<std::uint16_t>(neighbor));
                 }
                 U16(nvnm, polygon.flags);
-                U16(nvnm, 0);
+                U16(nvnm, polygon.coverFlags);
             }
             U32(nvnm, index == primary ? static_cast<std::uint32_t>(outgoing.size()) : 0U);
             if (index == primary)
@@ -1526,7 +1971,16 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                     U32(nvnm, doorId);
                 }
             }
-            U32(nvnm, 0);
+            const auto coverCount = std::count_if(mesh.polygons.begin(), mesh.polygons.end(),
+                                                  [](const auto &face) { return (face.coverFlags & 0xfffU) != 0; });
+            U32(nvnm, static_cast<std::uint32_t>(coverCount));
+            for (std::size_t triangle{}; triangle < mesh.polygons.size(); ++triangle)
+            {
+                if (mesh.polygons[triangle].coverFlags & 0xfffU)
+                {
+                    U16(nvnm, static_cast<std::uint16_t>(triangle));
+                }
+            }
             float minX{}, minY{}, minZ{}, maxX{}, maxY{}, maxZ{};
             if (!mesh.vertices.empty())
             {
@@ -1567,11 +2021,15 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                     {
                         PutSubrecord(payload, "NVNM", nvnm);
                     }
-                    else
+                    else if (sub.type == "EDID")
                     {
                         payload.insert(payload.end(), sub.encodedBytes.begin(), sub.encodedBytes.end());
                     }
                 }
+            }
+            if (index == primary)
+            {
+                payload.insert(payload.end(), auxiliary.begin(), auxiliary.end());
             }
             Bytes bytes = SourceRecord(source, *navm);
             if (bytes.size() < 24)
@@ -1708,6 +2166,12 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         {
             std::memcpy(nvnm.data() + vertexOffset + i * 12, &mesh.vertices[i], 12);
         }
+        for (std::size_t triangle{}; triangle < mesh.polygons.size(); ++triangle)
+        {
+            const auto offset =
+                static_cast<std::size_t>(layout.triangles.offset - layout.header.offset) + triangle * 16;
+            Set16(nvnm, offset + 12, mesh.polygons[triangle].flags);
+        }
         const auto trailing = static_cast<std::size_t>(layout.trailingData.offset - layout.header.offset);
         if (nvnm.size() - trailing < 8)
         {
@@ -1748,6 +2212,48 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             }
             Set32(nvnm, offset, *rebased);
         }
+        const auto outputNeighborId = RebaseResolvedFormId(resolved, masters, neighborId);
+        if (!outputNeighborId)
+        {
+            return fail("Cannot rebase a door's authored NAVM.");
+        }
+        Bytes retainedDoors;
+        std::set<std::uint16_t> removedDoorTriangles, retainedDoorTriangles;
+        std::vector<std::pair<std::uint16_t, std::uint32_t>> neighborDoors;
+        for (std::uint32_t index{}; index < oldDoorCount; ++index)
+        {
+            const auto offset = insertion + 4 + index * 10;
+            const auto triangle = static_cast<std::uint16_t>(nvnm[offset] | nvnm[offset + 1] << 8);
+            const auto reference = Get32(nvnm, offset + 6);
+            if (triangle >= mesh.polygons.size())
+            {
+                return fail("An authored door portal has an invalid triangle.");
+            }
+            const auto assigned = outputAssociations.find(reference);
+            if (assigned != outputAssociations.end() &&
+                (!assigned->second || assigned->second->navmeshId != *outputNeighborId))
+            {
+                removedDoorTriangles.insert(triangle);
+                continue;
+            }
+            retainedDoors.insert(retainedDoors.end(), nvnm.begin() + offset, nvnm.begin() + offset + 10);
+            retainedDoorTriangles.insert(triangle);
+            neighborDoors.emplace_back(triangle, reference);
+        }
+        for (const auto triangle : removedDoorTriangles)
+        {
+            if (!retainedDoorTriangles.contains(triangle))
+            {
+                mesh.polygons[triangle].flags &= static_cast<std::uint16_t>(~(1U << 10));
+                const auto offset =
+                    static_cast<std::size_t>(layout.triangles.offset - layout.header.offset) + triangle * 16 + 12;
+                Set16(nvnm, offset, mesh.polygons[triangle].flags);
+            }
+        }
+        nvnm.erase(nvnm.begin() + insertion + 4, nvnm.begin() + insertion + 4 + oldDoorCount * 10);
+        nvnm.insert(nvnm.begin() + insertion + 4, retainedDoors.begin(), retainedDoors.end());
+        Set32(nvnm, insertion, static_cast<std::uint32_t>(neighborDoors.size()));
+        doorsByMesh.emplace(*outputNeighborId, std::move(neighborDoors));
         if (Get32(nvnm, 8))
         {
             const auto world = RebaseFormId(source, masters, Get32(nvnm, 8));
@@ -1814,6 +2320,25 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
         Set32(nvnm, trailing, oldExternalCount + static_cast<std::uint32_t>(appended.size() / 10));
         nvnm.insert(nvnm.begin() + insertion, appended.begin(), appended.end());
+        const auto doorAt = trailing + 4 + Get32(nvnm, trailing) * 10;
+        const auto coverAt = doorAt + 4 + Get32(nvnm, doorAt) * 10;
+        if (coverAt > nvnm.size() || nvnm.size() - coverAt < 4 ||
+            Get32(nvnm, coverAt) > (nvnm.size() - coverAt - 4) / 2)
+        {
+            return fail("A neighboring NAVM has a malformed cover-triangle table.");
+        }
+        const auto oldCoverCount = Get32(nvnm, coverAt);
+        Bytes coverTriangles;
+        for (std::size_t triangle{}; triangle < mesh.polygons.size(); ++triangle)
+        {
+            if (mesh.polygons[triangle].coverFlags & 0xfffU)
+            {
+                U16(coverTriangles, static_cast<std::uint16_t>(triangle));
+            }
+        }
+        nvnm.erase(nvnm.begin() + coverAt + 4, nvnm.begin() + coverAt + 4 + oldCoverCount * 2);
+        nvnm.insert(nvnm.begin() + coverAt + 4, coverTriangles.begin(), coverTriangles.end());
+        Set32(nvnm, coverAt, static_cast<std::uint32_t>(coverTriangles.size() / 2));
         const auto geometryChanged =
             std::any_of(replacements.begin(), replacements.end(),
                         [&](const auto &replacement)
@@ -1832,6 +2357,25 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             if (sub.type == "NVNM")
             {
                 PutSubrecord(payload, "NVNM", nvnm);
+            }
+            else if (sub.type == "ONAM")
+            {
+                if (sub.data.size() % 4 != 0)
+                {
+                    return fail("A neighboring NAVM has a malformed base-object array.");
+                }
+                Bytes objects;
+                for (std::size_t offset{}; offset < sub.data.size(); offset += 4)
+                {
+                    const auto raw = Get32(sub.data, offset);
+                    const auto form = raw ? RebaseFormId(source, masters, raw) : std::optional<std::uint32_t>{0};
+                    if (!form)
+                    {
+                        return fail("Cannot rebase a neighboring NAVM base-object dependency.");
+                    }
+                    U32(objects, *form);
+                }
+                PutSubrecord(payload, "ONAM", objects);
             }
             else
             {
@@ -1887,6 +2431,11 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
         Add(root, placement, std::move(bytes));
     }
+    if (!SerializeDoorReferences(sources, masters, resolved, doorReferences, outputAssociations, copiedName, root,
+                                 expectedReferences, error))
+    {
+        return false;
+    }
     if (!navigationId)
     {
         navigationId = selfIndex << 24 | nextObjectId++;
@@ -1923,7 +2472,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         U32(hedr, 0);
         U32(hedr, 0x800);
     }
-    Set32(hedr, 4, static_cast<std::uint32_t>(expected.size() + 1 + CountGroups(root)));
+    Set32(hedr, 4, static_cast<std::uint32_t>(expected.size() + expectedReferences.size() + 1 + CountGroups(root)));
     Set32(hedr, 8, nextObjectId);
     Bytes headerPayload;
     PutSubrecord(headerPayload, "HEDR", hedr);
@@ -1968,13 +2517,30 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             return fail("Cannot write generated plugin.");
         }
     }
+    std::map<std::uint32_t, float> generatedStepHeights;
+    for (const auto &replacement : replacements)
+    {
+        const auto &profile = replacement.candidate->profile;
+        generatedStepHeights.emplace(outputPrimaryByCell.at(replacement.cell->id),
+                                     profile.stepHeight + profile.weldTolerance);
+    }
     if (!ReadBack(temporary, emittedMasters, light, expected, doorsByMesh, expectedCells, expectedLinks, newNavmeshIds,
-                  *navigationId, navigationPayload, copy.has_value()))
+                  *navigationId, navigationPayload, expectedReferences, resolved, generatedStepHeights, error,
+                  copy.has_value()))
     {
         std::filesystem::remove(temporary);
-        return fail("Generated plugin failed NAVM/NAVI read-back verification.");
+        if (error.empty())
+        {
+            error = "Generated plugin failed navigation read-back verification.";
+        }
+        return false;
     }
     std::error_code renameError;
+    if (!LoadOrderSnapshotMatches(resolved, error))
+    {
+        std::filesystem::remove(temporary);
+        return false;
+    }
     std::filesystem::rename(temporary, path, renameError);
     if (renameError)
     {

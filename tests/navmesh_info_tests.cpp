@@ -4,6 +4,9 @@
 
 #include "skyrim/parser/navmesh_info.h"
 #include "skyrim/parser/plugin_writer.h"
+#include "skyrim/parser/navmesh_metadata.h"
+#include "skyrim/parser/reference_navigation.h"
+#include "skyrim/parser/navigation_validation.h"
 
 #include <algorithm>
 #include <cassert>
@@ -199,8 +202,187 @@ namespace
         assert(!detail::BuildNavmeshInfo({}, &unsupported, payload, error));
     }
 
-    void TestSourceCopy(const std::filesystem::path &root)
+    void TestAuxiliaryMetadata()
     {
+        PluginRecord source;
+        Bytes objects, preferred, excluded;
+        Put32(objects, 0x600);
+        Put16(preferred, 0);
+        Put16(excluded, 1);
+        source.subrecords = {
+            {.type = "ONAM", .data = objects}, {.type = "PNAM", .data = preferred}, {.type = "NNAM", .data = excluded}};
+        navmesh::core::NavMesh authored, generated;
+        authored.vertices = {{0, 0, 0}, {10, 0, 0}, {0, 10, 0}};
+        generated.vertices = {authored.vertices[1], authored.vertices[2], authored.vertices[0]};
+        const auto rebase = [](std::uint32_t id) -> std::optional<std::uint32_t> { return id | 0x01000000; };
+        std::array sources{detail::NavmeshMetadataSource{&source, &authored, rebase}};
+        Bytes output;
+        std::string error;
+        assert(detail::RebuildNavmeshMetadata(sources, generated, 0, output, error));
+        assert(output.size() == 26 && Get32(output, 6) == 0x01000600);
+        assert(output[16] == 2 && output[17] == 0 && output[24] == 0 && output[25] == 0);
+        source.subrecords.back().data = preferred;
+        assert(!detail::RebuildNavmeshMetadata(sources, generated, 0, output, error));
+        assert(error.find("same generated vertex") != std::string::npos);
+        source.subrecords.back().data = Bytes{4, 0};
+        assert(!detail::RebuildNavmeshMetadata(sources, generated, 0, output, error));
+    }
+
+    void TestReferenceSafety(const std::filesystem::path &root)
+    {
+        Bytes reference, name, vmad;
+        Put32(name, 0x600);
+        Sub(reference, "NAME", name);
+        Put16(vmad, 5);
+        Put16(vmad, 1);
+        Put16(vmad, 1);
+        Put16(vmad, 1);
+        vmad.push_back('S');
+        vmad.push_back(0);
+        Put16(vmad, 2);
+        Put16(vmad, 1);
+        vmad.push_back('O');
+        vmad.push_back(11);
+        vmad.push_back(1);
+        Put32(vmad, 2);
+        Put32(vmad, 0x00000200);
+        Put32(vmad, 0x0000FFFF);
+        Put32(vmad, 0x01000201);
+        Put32(vmad, 0x0000FFFF);
+        Put16(vmad, 1);
+        vmad.push_back('B');
+        vmad.push_back(15);
+        vmad.push_back(1);
+        Put32(vmad, 70000);
+        vmad.insert(vmad.end(), 70000, 1);
+        reference.insert(reference.end(), {'X', 'X', 'X', 'X', 4, 0});
+        Put32(reference, static_cast<std::uint32_t>(vmad.size()));
+        reference.insert(reference.end(), {'V', 'M', 'A', 'D', 0, 0});
+        reference.insert(reference.end(), vmad.begin(), vmad.end());
+        Bytes topic;
+        Put32(topic, 0);
+        Put32(topic, 0x01000800);
+        Sub(reference, "PDTO", topic);
+        Bytes subtype;
+        Put32(subtype, 1);
+        subtype.insert(subtype.end(), {'H', 'E', 'L', 'O'});
+        Sub(reference, "PDTO", subtype);
+        Bytes source;
+        Record(source, "TES4", 0, {});
+        Record(source, "REFR", 0x200, reference);
+        Write(root / "reference-source.esp", source);
+        const auto original = Read(root / "reference-source.esp");
+        assert(original.size() == 1 && original[0].raw);
+        const auto &raw = *original[0].raw;
+        assert(raw.subrecords[1].extendedSize && raw.subrecords[1].encodedBytes.size() == vmad.size() + 16);
+        const auto rebase = [](std::uint32_t id) -> std::optional<std::uint32_t> { return id + 0x01000000; };
+        Bytes rewritten;
+        std::string error;
+        assert(detail::RewriteReferenceNavigation(raw, rebase, NavmeshDoorAssociation{0x02000900, 7}, false, false,
+                                                  rewritten, error));
+        Bytes output;
+        Record(output, "TES4", 0, {});
+        Record(output, "REFR", 0x01000200, rewritten);
+        Write(root / "reference-output.esp", output);
+        const auto copied = Read(root / "reference-output.esp");
+        assert(copied[0].navmeshDoor && copied[0].navmeshDoor->navmeshId == 0x02000900 &&
+               copied[0].navmeshDoor->triangle == 7);
+        const auto &script = copied[0].raw->subrecords[1];
+        assert(script.extendedSize && script.data.size() == vmad.size());
+        assert(Get32(script.data, 21) == 0x01000200 && Get32(script.data, 29) == 0x02000201);
+        assert(script.data[script.data.size() - 1] == 1);
+        assert(Get32(copied[0].raw->subrecords[2].data, 4) == 0x02000800);
+        assert(copied[0].raw->subrecords[3].data == subtype);
+        auto unknown = raw;
+        unknown.subrecords.push_back({.type = "ZZZZ", .data = Bytes{1}});
+        assert(!detail::RewriteReferenceNavigation(unknown, rebase, std::nullopt, false, false, rewritten, error));
+        assert(error.find("ZZZZ") != std::string::npos);
+        auto localized = raw;
+        localized.subrecords.push_back({.type = "FULL", .data = Bytes(4)});
+        assert(!detail::RewriteReferenceNavigation(localized, rebase, std::nullopt, false, true, rewritten, error));
+    }
+
+    void TestReplacedLedge(const std::filesystem::path &root)
+    {
+        std::filesystem::create_directories(root);
+        Bytes geometry;
+        for (const auto value : {12U, 0xA5E9A03CU, 0U, 0x100U, 6U})
+        {
+            Put32(geometry, value);
+        }
+        navmesh::core::NavMesh authored;
+        authored.vertices = {{0, 0, 0}, {100, 0, 0}, {0, 100, 0}, {100, 0, 40}, {100, 100, 40}, {0, 100, 40}};
+        const auto *points = reinterpret_cast<const std::uint8_t *>(authored.vertices.data());
+        geometry.insert(geometry.end(), points, points + authored.vertices.size() * 12);
+        Put32(geometry, 2);
+        for (const auto value : {0U, 1U, 2U, 65535U, 0U, 65535U, 2U, 0U, 3U, 4U, 5U, 65535U, 65535U, 1U, 4U, 0U})
+        {
+            Put16(geometry, static_cast<std::uint16_t>(value));
+        }
+        Put32(geometry, 2);
+        for (const auto type : {1U, 2U})
+        {
+            Put32(geometry, type);
+            Put32(geometry, 0x200);
+            Put16(geometry, static_cast<std::uint16_t>(2 - type));
+        }
+        Put32(geometry, 0);
+        Put32(geometry, 0);
+        Put32(geometry, 1);
+        geometry.resize(geometry.size() + 32);
+        Put32(geometry, 2);
+        Put16(geometry, 0);
+        Put16(geometry, 1);
+        Bytes navm, child, children, cells, plugin;
+        Sub(navm, "NVNM", geometry);
+        Record(child, "NAVM", 0x200, navm);
+        Group(children, 0x100, 9, child);
+        Record(cells, "CELL", 0x100, {});
+        Group(cells, 0x100, 6, children);
+        Record(plugin, "TES4", 0, {});
+        Group(plugin, 0x4C4C4543, 0, cells);
+        const auto source = root / "Traversal.esm";
+        Write(source, plugin);
+        const auto resolved = ResolveLoadOrder({.dataDirectory = root, .plugins = {source}});
+        assert(resolved.diagnostics.empty() && resolved.cells.size() == 1);
+        navmesh::core::CandidateNavMesh candidate;
+        candidate.mesh.vertices = {{0, 0, 0}, {100, 0, 0}, {100, 100, 40}, {0, 100, 40}};
+        candidate.mesh.polygons = {{.vertices = {0, 1, 3}, .neighbors = {0xffffffffU, 1, 0xffffffffU}},
+                                   {.vertices = {1, 2, 3}, .neighbors = {0xffffffffU, 0xffffffffU, 0}}};
+        std::filesystem::path output;
+        std::string error;
+        assert(WriteNavmeshOverride(root / "connected", {source}, resolved, resolved.cells.front(), candidate, output,
+                                    error));
+        const auto written = Read(output);
+        const auto mesh = std::find_if(written.begin(), written.end(), [](const auto &r) { return r.type == "NAVM"; });
+        assert(mesh != written.end() && mesh->navm->triangleCount == 2);
+        assert(Get32(mesh->raw->decodedPayload, mesh->navm->trailingData.offset) == 0);
+        candidate.mesh.vertices = {{0, 0, 0}, {100, 0, 0}, {0, 100, 0}, {100, 0, 20}, {100, 100, 20}, {0, 100, 20}};
+        candidate.mesh.polygons = {{.vertices = {0, 1, 2}, .neighbors = {0xffffffffU, 1, 0xffffffffU}},
+                                   {.vertices = {3, 4, 5}, .neighbors = {0xffffffffU, 0xffffffffU, 0}}};
+        assert(
+            WriteNavmeshOverride(root / "step", {source}, resolved, resolved.cells.front(), candidate, output, error));
+        candidate.profile.stepHeight = 10;
+        assert(!WriteNavmeshOverride(root / "excessive-step", {source}, resolved, resolved.cells.front(), candidate,
+                                     output, error));
+        assert(error.find("adjacency") != std::string::npos);
+        assert(!std::filesystem::exists(root / "excessive-step" / "generated-navmesh.esp"));
+        candidate.profile = {};
+        candidate.mesh = resolved.cells.front().navMeshes.front();
+        for (auto &face : candidate.mesh.polygons)
+        {
+            face.flags &= static_cast<std::uint16_t>(~7U);
+            face.neighbors.fill(0xffffffffU);
+        }
+        assert(!WriteNavmeshOverride(root / "disconnected", {source}, resolved, resolved.cells.front(), candidate,
+                                     output, error));
+        assert(error.find("ledge") != std::string::npos);
+        assert(!std::filesystem::exists(root / "disconnected" / "generated-navmesh.esp"));
+    }
+
+    void TestSourceCopy(const std::filesystem::path &root, bool light = false)
+    {
+        std::filesystem::create_directories(root);
         // The extra full plugin shifts global FormIDs relative to the output master table.
         Bytes padding;
         Record(padding, "TES4", 0, {});
@@ -213,6 +395,8 @@ namespace
         Bytes base;
         Record(base, "TES4", 0, {});
         Record(base, "NAVI", 0x12FB4, baseInfo);
+        Record(base, "DOOR", 0x600, {});
+        Record(base, "KEYM", 0x700, {});
         Write(root / "Base.esm", base);
 
         Bytes sourceInfo;
@@ -254,18 +438,68 @@ namespace
                 Record(navm, "NAVM", 0x01000902, mesh);
             }
             Bytes temporary;
+            if (index == 0)
+            {
+                Bytes reference, baseId, association;
+                Put32(baseId, 0x600);
+                Sub(reference, "NAME", baseId);
+                Put32(association, 0x01000902);
+                Put32(association, 0);
+                Sub(reference, "XNDP", association);
+                Record(navm, "REFR", 0x01000200, reference);
+            }
             Group(temporary, 0x01000100 + index, 9, navm);
             Group(cells, 0x01000100 + index, 6, temporary);
         }
         Bytes source;
-        Record(source, "TES4", 0, header);
+        Record(source, "TES4", 0, header, light ? 0x200U : 0U);
         Group(source, 0x4C4C4543, 0, cells);
         Bytes navi;
         Record(navi, "NAVI", 0x12FB4, compressed, 0x40000);
         Group(source, 0x4956414E, 0, navi);
         const auto sourcePath = root / "Source.esp";
         Write(sourcePath, source);
-        const std::vector<std::filesystem::path> inputs = {root / "Padding.esm", root / "Base.esm", sourcePath};
+        // A later winner uses a different master order. Its non-navigation data must
+        // survive both patch rebasing and replacement of the earlier source file.
+        Bytes winnerHeader, winnerPayload, baseId, lock, enableParent, scripts;
+        Sub(winnerHeader, "MAST", {'S', 'o', 'u', 'r', 'c', 'e', '.', 'e', 's', 'p', 0});
+        Sub(winnerHeader, "MAST", {'B', 'a', 's', 'e', '.', 'e', 's', 'm', 0});
+        Put32(baseId, 0x01000600);
+        Sub(winnerPayload, "NAME", baseId);
+        Sub(winnerPayload, "EDID", {'W', 'i', 'n', 'n', 'i', 'n', 'g', 'D', 'o', 'o', 'r', 0});
+        lock.resize(20);
+        const std::uint32_t keyId = 0x01000700;
+        std::memcpy(lock.data() + 4, &keyId, 4);
+        lock[0] = 37;
+        lock[8] = 4;
+        Sub(winnerPayload, "XLOC", lock);
+        Put32(enableParent, 0x00000200);
+        Put32(enableParent, 1);
+        Sub(winnerPayload, "XESP", enableParent);
+        Put16(scripts, 5);
+        Put16(scripts, 2);
+        Put16(scripts, 1);
+        Put16(scripts, 1);
+        scripts.push_back('S');
+        scripts.push_back(0);
+        Put16(scripts, 1);
+        Put16(scripts, 1);
+        scripts.push_back('P');
+        scripts.push_back(1);
+        scripts.push_back(1);
+        Put32(scripts, 0xFFFF0000);
+        Put32(scripts, 0x00000200);
+        Sub(winnerPayload, "VMAD", scripts);
+        Bytes winnerRecord, winnerTemporary, winnerCell, winner;
+        Record(winnerRecord, "REFR", 0x00000200, winnerPayload, 1U << 11);
+        Group(winnerTemporary, 0x00000100, 9, winnerRecord);
+        Group(winnerCell, 0x00000100, 6, winnerTemporary);
+        Record(winner, "TES4", 0, winnerHeader);
+        Group(winner, 0x4C4C4543, 0, winnerCell);
+        const auto winnerPath = root / "Winner.esp";
+        Write(winnerPath, winner);
+        const std::vector<std::filesystem::path> inputs = {root / "Padding.esm", root / "Base.esm", sourcePath,
+                                                           winnerPath};
         const auto resolved = ResolveLoadOrder({.dataDirectory = root, .plugins = inputs});
         assert(resolved.diagnostics.empty() && resolved.cells.size() == 3);
         navmesh::core::CandidateNavMesh candidate;
@@ -274,22 +508,67 @@ namespace
         triangle.vertices = {0, 1, 2};
         triangle.neighbors.fill(std::numeric_limits<std::uint32_t>::max());
         candidate.mesh.polygons.push_back(triangle);
-        const std::vector<NavmeshReplacement> replacements = {{&resolved.cells[0], &candidate},
+        auto doorCandidate = candidate;
+        const auto winningDoor = std::find_if(resolved.records.begin(), resolved.records.end(),
+                                              [](const auto &record) { return record.editorId == "WinningDoor"; });
+        assert(winningDoor != resolved.records.end());
+        doorCandidate.exits.push_back(
+            {.referenceId = winningDoor->formId, .position = {8, 8, 6}, .region = 0, .polygon = 0});
+        doorCandidate.coverGeometry.vertices = {{0, -4, 6}, {24, -4, 6}, {24, -4, 134}, {0, -4, 134}};
+        doorCandidate.coverGeometry.triangles = {{{0, 1, 2}}, {{0, 2, 3}}};
+        const std::vector<NavmeshReplacement> replacements = {{&resolved.cells[0], &doorCandidate},
                                                               {&resolved.cells[2], &candidate}};
         std::filesystem::path target;
         assert(WriteNavmeshOverrides(root / "patch", inputs, resolved, replacements, target, error));
         const auto patch = Read(target);
         const auto &patchInfo = Navigation(patch);
-        assert(Info(patchInfo, 0x01000900).data.size() == 123);
-        assert(Get32(Info(patchInfo, 0x01000900).data, 4) == 0x20);
+        assert(Info(patchInfo, 0x01000900).data.size() == 57);
+        assert(Get32(Info(patchInfo, 0x01000900).data, 4) == 0);
         assert(GetFloat(Info(patchInfo, 0x01000900).data, 8) == 8);
         assert(Info(patchInfo, 0x01000902).data.size() == 49);
         assert(Get32(Info(patchInfo, 0x01000902).data, 4) == 0);
-        assert(Info(patchInfo, 0x02000800).data.size() == 123);
+        assert(Info(patchInfo, 0x03000800).data.size() == 123);
+        const auto reference =
+            std::find_if(patch.begin(), patch.end(), [](const auto &record) { return record.type == "REFR"; });
+        assert(reference != patch.end() && reference->navmeshDoor && reference->raw);
+        assert(reference->winning.formId == 0x01000200 && reference->navmeshDoor->navmeshId == 0x01000900);
+        assert(reference->navmeshDoor->triangle == 0 && reference->editorId == "WinningDoor");
+        assert(reference->raw->flags & (1U << 11));
+        for (const auto &sub : reference->raw->subrecords)
+        {
+            if (sub.type == "XLOC")
+            {
+                assert(Get32(sub.data, 4) == 0x700 && sub.data[0] == 37 && sub.data[8] == 4);
+            }
+            if (sub.type == "XESP")
+            {
+                assert(Get32(sub.data, 0) == 0x01000200 && Get32(sub.data, 4) == 1);
+            }
+            if (sub.type == "VMAD")
+            {
+                assert(Get32(sub.data, sub.data.size() - 4) == 0x01000200);
+            }
+        }
+        const auto generated = std::find_if(patch.begin(), patch.end(),
+                                            [](const auto &record) { return record.winning.formId == 0x01000900; });
+        assert(generated != patch.end() && generated->navm && generated->raw);
+        const auto triangleAt = static_cast<std::size_t>(generated->navm->triangles.offset);
+        assert(Get32(generated->raw->decodedPayload, triangleAt + 12) == (0x4008U << 16 | 0x400U));
+        auto broken = patch;
+        const auto brokenReference =
+            std::find_if(broken.begin(), broken.end(), [](const auto &record) { return record.type == "REFR"; });
+        brokenReference->navmeshDoor->triangle = 1;
+        assert(!detail::ValidateNavigationGraph(broken, {"Base.esm", "Source.esp", "Winner.esp"},
+                                                "generated-navmesh.esp", resolved, {0x01000900, 0x01000902, 0x03000800},
+                                                {0x01000200}, error));
+        assert(error.find("door") != std::string::npos);
 
         assert(WriteNavmeshOverrides(root / "copy", inputs, resolved, replacements, target, error, "Source.esp"));
         const auto copy = Read(target);
         const auto &copyInfo = Navigation(copy);
+        const auto copiedReference =
+            std::find_if(copy.begin(), copy.end(), [](const auto &record) { return record.type == "REFR"; });
+        assert(copiedReference != copy.end() && copiedReference->raw->decodedPayload == reference->raw->decodedPayload);
         assert(Info(copyInfo, 0x01000900).data == Info(patchInfo, 0x01000900).data);
         assert(Info(copyInfo, 0x01000A00).data.size() == 123);
         const auto originalRecords = Read(sourcePath);
@@ -303,6 +582,13 @@ namespace
         assert(cache != copyInfo.subrecords.end() && cache->data == Bytes(8));
         std::ifstream unchanged(sourcePath, std::ios::binary);
         assert(Bytes(std::istreambuf_iterator<char>(unchanged), {}) == source);
+        unchanged.close();
+        auto changed = source;
+        changed.push_back(0);
+        Write(sourcePath, changed);
+        assert(!WriteNavmeshOverrides(root / "stale", inputs, resolved, replacements, target, error));
+        assert(error.find("changed") != std::string::npos);
+        assert(!std::filesystem::exists(root / "stale" / "generated-navmesh.esp"));
     }
 } // namespace
 
@@ -312,5 +598,9 @@ void TestNavmeshInfoExport()
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root);
     TestInfoEntries(root);
+    TestAuxiliaryMetadata();
+    TestReferenceSafety(root);
+    TestReplacedLedge(root / "traversal");
     TestSourceCopy(root);
+    TestSourceCopy(root / "light-source", true);
 }

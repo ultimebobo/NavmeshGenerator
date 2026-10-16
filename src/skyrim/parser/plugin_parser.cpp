@@ -249,6 +249,7 @@ namespace
                 polygon.neighbors[vertex] = ReadU16LE(payload, triangleOffset + 6 + vertex * 2);
             }
             polygon.flags = ReadU16LE(payload, triangleOffset + 12);
+            polygon.coverFlags = ReadU16LE(payload, triangleOffset + 14);
             mesh.polygons.push_back(polygon);
         }
         if (ReadU32LE(payload, bodyStart) == 12)
@@ -487,7 +488,7 @@ namespace navmesh::skyrim
                 const auto partner = teleportReferences.find(parsed.teleportDestinationId);
                 if (partner != teleportReferences.end() &&
                     partner->second->teleportDestinationId == parsed.reference.id &&
-                    !partner->second->reference.deleted && !partner->second->reference.initiallyDisabled)
+                    !partner->second->reference.deleted)
                 {
                     parsed.reference.teleportArrival = partner->second->teleportDestinationPosition;
                 }

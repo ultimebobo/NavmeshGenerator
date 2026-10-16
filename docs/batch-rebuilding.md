@@ -48,7 +48,7 @@ format. The copy retains its extension and flags rather than selecting a patch
 format. Source plugins and existing output files are never overwritten. Every
 generated or modified NAVM is read back before the copy is finalized.
 
-NAVM-only patches use a filename distinct from every active input. A numeric
+Navigation patches use a filename distinct from every active input. A numeric
 suffix is added when the default generated filename is already active, allowing
 the patch to depend on earlier generated navigation without a self dependency.
 
@@ -243,8 +243,8 @@ receive exact reversed endpoints and unique reciprocal generated triangle target
 After linking, `core/navmesh/candidate_reachability` floods shared-edge adjacency
 and reciprocal generated portals across the complete successful set. It retains
 floor networks under the [candidate reachability policy](candidate-surface-algorithm.md).
-Exterior selections with matched entrances do not use authored NAVM to identify
-playable networks. Separate selections and worldspaces are evaluated independently.
+Required authored crossings to untouched neighbors remain access anchors alongside
+matched entrances. Separate selections and worldspaces are evaluated independently.
 Generated portals and open CELL borders alone do not provide access: an isolated
 roof spanning multiple CELLs is removed as one component. Vertex-only contact does
 not connect floors. Filtering compacts geometry, source joins, regions, doors and
@@ -269,8 +269,9 @@ before the temporary plugin is finalized. Existing output plugins are refused.
 The patch is light-flagged only when its dependencies and allocated identities fit
 that format. Copy mode retains the selected source format and dependency limits.
 
-The existing writer limitations still apply: teleport-door XNDP, cover and
-unmatched authored links are not rebuilt.
+Navigation finalization includes cover, NAVI and reciprocal door XNDP. Unsupported
+reference fields, connector constraints or traversal portals reject export; see
+the [format contract](navm-format-study.md#cover-and-door-finalization).
 
 ## Performance and verification
 

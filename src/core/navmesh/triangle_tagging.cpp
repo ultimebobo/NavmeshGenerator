@@ -133,4 +133,28 @@ namespace navmesh::core
             }
         }
     }
+    void PreserveAuthoredRestrictions(NavMesh &mesh, std::span<const NavMesh> authored, float heightTolerance)
+    {
+        if (!std::isfinite(heightTolerance) || heightTolerance < 0)
+        {
+            throw std::invalid_argument("Authored restriction matching requires a finite nonnegative height tolerance");
+        }
+        if (std::none_of(authored.begin(), authored.end(),
+                         [](const auto &source)
+                         {
+                             return std::any_of(source.polygons.begin(), source.polygons.end(),
+                                                [](const auto &face) { return (face.flags & (1U << 4)) != 0; });
+                         }))
+        {
+            return;
+        }
+        const auto surfaces = CollectSurfaces(authored);
+        for (auto &face : mesh.polygons)
+        {
+            const auto center = (mesh.vertices.at(face.vertices[0]) + mesh.vertices.at(face.vertices[1]) +
+                                 mesh.vertices.at(face.vertices[2])) /
+                                3.0F;
+            face.flags |= MatchedFlags(center, surfaces, heightTolerance) & (1U << 4);
+        }
+    }
 } // namespace navmesh::core

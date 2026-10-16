@@ -70,7 +70,7 @@ namespace navmesh::core
         /// Placed DOOR reference IDs whose world positions reach this region.
         std::vector<std::uint32_t> exitFormIds;
     };
-    /// A placed, enabled DOOR reference that can anchor navigation at its world position.
+    /// A live placed DOOR reference that can anchor navigation, including doors enabled later by gameplay.
     struct CandidateExit
     {
         std::uint32_t referenceId{};
@@ -93,12 +93,23 @@ namespace navmesh::core
         /// Resolved destination CELL for a generated neighbor, including cells without an authored NAVM.
         /// When set, the writer allocates/resolves that cell's output primary NAVM instead of neighborNavmeshId.
         std::optional<std::uint32_t> generatedNeighborCell;
+        /// Replaces a live selected-cell authored crossing; its connected floor must survive island filtering.
+        bool requiredAuthoredCrossing{};
     };
     struct CandidateContour
     {
         std::uint32_t region{};
         bool closed{};
         std::vector<std::uint32_t> vertices;
+    };
+    /// An authored crossing whose floor is positively classified as excluded obstacle collision.
+    struct ClosedAuthoredPortal
+    {
+        /// Original mesh and triangle-edge identities, unchanged by generated triangle compaction.
+        std::uint32_t sourceNavmeshId{}, sourcePolygon{};
+        std::uint8_t sourceEdge{};
+        std::uint32_t neighborNavmeshId{}, neighborPolygon{};
+        std::uint8_t neighborEdge{};
     };
     struct CandidateTopology
     {
@@ -129,6 +140,8 @@ namespace navmesh::core
         /// Whether water/preferred-route detection was applied to this generated candidate.
         bool triangleTagging{};
         NavMesh mesh;
+        /// Filtered world-space collision walls retained for cover queries after final batch seam refinement.
+        Mesh coverGeometry;
         /// Primary input triangle for each output polygon, retained for simple source joins.
         std::vector<std::size_t> polygonSourceTriangles;
         /// All input triangles covered by each polygon after interior simplification.
@@ -138,6 +151,8 @@ namespace navmesh::core
         std::vector<CandidateExit> exits;
         /// Candidate boundary edges with reciprocal targets in adjacent NAVMs.
         std::vector<CandidateBorderLink> borderLinks;
+        /// Explicit obstacle evidence permitting closure of an authored crossing during export.
+        std::vector<ClosedAuthoredPortal> closedAuthoredPortals;
         /// Bounded adjacent authored geometry changes required by these reciprocal portals.
         std::vector<AuthoredBorderVertexEdit> authoredBorderVertexEdits;
         std::vector<CandidateContour> contours;
@@ -146,11 +161,21 @@ namespace navmesh::core
         std::vector<std::string> warnings;
     };
 
+    /** Check whether generated shared-edge navigation connects two authored traversal thresholds.
+     * @param candidate Valid finite world-space geometry and agent/voxel settings.
+     * @param departure Authored departure edge midpoint in Skyrim world units.
+     * @param arrival Authored arrival edge midpoint in the same coordinate space.
+     * Thresholds must lie near generated floor within the agent footprint and voxel-height tolerance.
+     * @return True only when the closest supported triangles share a local adjacency component.
+     * External portals and vertex-only contact do not establish this replacement route.
+     */
+    [[nodiscard]] bool HasCandidateFloorRoute(const CandidateNavMesh &candidate, Vec3 departure, Vec3 arrival);
+
     /// Build a candidate from supported terrain and collision triangles in a scene.
     /// @param scene Geometry and source evidence to inspect.
     /// @param profile Agent movement and surface constraints in Skyrim world units.
     /// @param cellBounds Optional generated exterior area's world-space bounds for border handling.
-    /// @param exits Enabled placed DOOR references in Skyrim world coordinates. A door
+    /// @param exits Live placed DOOR references in Skyrim world coordinates, including initially disabled doors. A door
     /// anchors only a nearby polygon on the same vertical level.
     /// @return Candidate geometry, source evidence, statistics, and topology findings.
     [[nodiscard]] CandidateNavMesh GenerateCandidate(const Scene &scene, const NavigationProfile &profile,
@@ -183,6 +208,8 @@ namespace navmesh::core
      * edges may be subdivided and compatible collinear generated subdivisions coalesced.
      * Inward offsets trim boundary fans; outward extensions obey distance, step, slope, and welding limits. Authored
      * border drift within AuthoredBorderTolerance is preserved at matched portal endpoints.
+     * Explicit reciprocal authored crossings may retain larger drift within the movement profile's border halo;
+     * incidental geometric matches cannot use that extension.
      * With immediate linking, unmatched CELL seam wedges and unpaired vertices retract into the cell.
      * Fan subdivisions require a strictly interior point in stored float coordinates.
      * Thin triangles without such a point retain their floor and retract through exact

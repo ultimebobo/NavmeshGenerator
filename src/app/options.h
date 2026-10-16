@@ -60,7 +60,7 @@ namespace navmesh::app
         bool generatePlugin{};
         /// Detect generated water and preferred-route triangles; disable to export unclassified geometry.
         bool tagTriangles{true};
-        /// Copy the named source plugin with generated NAVMs instead of writing a NAVM-only patch.
+        /// Copy the named source plugin with finalized navigation instead of writing a separate navigation patch.
         /// Requires Cell or Plugin scope, its copy source filename and generatePlugin;
         /// keeps the source filename and master indices.
         bool copyPlugin{};

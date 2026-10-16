@@ -240,13 +240,15 @@ namespace
     }
 
     bool CollectNavigation(const std::vector<Node> &nodes, std::map<std::uint32_t, std::string> &types,
-                           std::set<std::uint32_t> &navmeshIds)
+                           std::set<std::uint32_t> &temporaryOverrides, bool temporary = false)
     {
         for (const auto &node : nodes)
         {
             if (node.IsGroup())
             {
-                if (!CollectNavigation(node.children, types, navmeshIds))
+                const auto type = Read32(node.bytes, 12);
+                const bool childTemporary = type == 9 ? true : type == 8 ? false : temporary;
+                if (!CollectNavigation(node.children, types, temporaryOverrides, childTemporary))
                 {
                     return false;
                 }
@@ -255,13 +257,13 @@ namespace
             {
                 const std::string type(node.bytes.begin(), node.bytes.begin() + 4);
                 const auto id = Read32(node.bytes, 12);
-                if ((type != "NAVM" && type != "NAVI") || !types.emplace(id, type).second)
+                if ((type != "NAVM" && type != "NAVI" && type != "REFR") || !types.emplace(id, type).second)
                 {
                     return false;
                 }
-                if (type == "NAVM")
+                if (type == "NAVM" || (type == "REFR" && temporary))
                 {
-                    navmeshIds.insert(id);
+                    temporaryOverrides.insert(id);
                 }
             }
         }

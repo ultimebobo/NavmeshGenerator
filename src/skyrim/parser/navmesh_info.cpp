@@ -200,6 +200,11 @@ namespace
                 }
             }
         }
+        if (!std::isfinite(area) || !std::isfinite(preferredArea) || !std::isfinite(centerX) ||
+            !std::isfinite(centerY) || !std::isfinite(centerZ))
+        {
+            return false;
+        }
         for (std::size_t door{}; door < doors.size(); door += 10)
         {
             if (Read16(doors, door) >= triangles.size() / 16 || !Read32(doors, door + 6))

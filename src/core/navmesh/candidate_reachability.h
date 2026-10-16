@@ -23,8 +23,9 @@ namespace navmesh::core
     /** Remove disconnected floor islands after all generated portals have been reconciled.
      * @param targets Complete successful generated set, with unique CELL keys and mesh pointers. Shared edges
      * and reciprocal generated portals define connectivity; touching vertices do not.
-     * Exterior selections with matched doors retain only door-reachable components, independently
-     * of authored NAVM. Doorless selections and interiors also retain untouched authored destinations
+     * Exterior selections with matched doors retain door-reachable components and routes replacing
+     * required authored crossings to untouched neighbors. Incidental boundary matches do not anchor
+     * disconnected scenery. Doorless selections and interiors also retain untouched authored destinations
      * and the largest component by horizontal area.
      * Exterior selections are grouped by shared CELL sides within the same worldspace,
      * independently of floor heights. Open CELL borders and generated portals alone are not anchors.

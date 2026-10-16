@@ -146,7 +146,7 @@ namespace
         }
 
         // Entrance-reachable exterior floors take precedence over larger disconnected scenery.
-        // Authored portals cannot turn that unused scenery into a playable component.
+        // Incidental boundary matches cannot turn that unused scenery into a playable component.
         for (const bool authoredPortal : {false, true})
         {
             auto enclosed = Floor(0, 0, 400);
@@ -176,6 +176,20 @@ namespace
                 assert(actual.x == expected.x && actual.y == expected.y && actual.z == expected.z);
             }
         }
+
+        // A separate floor can lead to an exterior route through an untouched cell,
+        // even when a door anchors another network inside this selected area.
+        auto crossing = Floor(0, 0, 400);
+        AppendFloor(crossing, Floor(0, 0, 0));
+        crossing.exits = {{200, {100, 100, 0}, 1, 2}};
+        crossing.borderLinks = {{.polygon = 0, .edge = 0, .neighborNavmeshId = 300, .requiredAuthoredCrossing = true}};
+        CandidateReachabilityTarget crossingTarget{1, 1, singleBounds, &crossing};
+        assert(RemoveCandidateIslands(std::span(&crossingTarget, 1)) == 0);
+        assert(crossing.mesh.polygons.size() == 4 && crossing.borderLinks.size() == 1);
+        assert(crossing.borderLinks.front().requiredAuthoredCrossing && crossing.exits.front().polygon == 2);
+        assert(HasCandidateFloorRoute(crossing, {100, 100, 400}, {200, 200, 400}));
+        assert(!HasCandidateFloorRoute(crossing, {100, 100, 400}, {100, 100, 0}));
+        assert(!HasCandidateFloorRoute(crossing, {100, 100, 400}, {100, 100, 800}));
 
         // This roof spans a CELL seam and acquires reciprocal portals, but has no
         // route to the larger ground network. Put it first so retained identities move.

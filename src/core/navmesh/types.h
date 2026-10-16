@@ -14,6 +14,8 @@ namespace navmesh::core
         std::array<std::uint32_t, 3> vertices{};
         std::array<std::uint32_t, 3> neighbors{};
         std::uint16_t flags{};
+        /// Skyrim traversal/cover bits for the triangle's first two directed edges.
+        std::uint16_t coverFlags{};
     };
     /// Authored portal consumed by an edge of the owning mesh; indices start at zero.
     struct NavmeshExternalLink
@@ -23,6 +25,8 @@ namespace navmesh::core
         /// Destination NAVM identity in the same FormID space as the owning mesh.
         std::uint32_t navmeshId{};
         std::uint32_t targetPolygon{};
+        /// Skyrim edge-extra-info type: ordinary portal, ledge up/down, or enable/disable portal.
+        std::uint32_t type{};
     };
     /// Authored triangle associated with a placed exit reference, including cave entrances.
     struct NavmeshDoorLink

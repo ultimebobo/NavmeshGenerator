@@ -7,6 +7,7 @@
 #include "core/navmesh/generator.h"
 #include "core/navmesh/surface_simplification.h"
 #include "core/navmesh/triangle_tagging.h"
+#include "core/navmesh/cover.h"
 #include "core/reproducibility/export_metadata.h"
 
 #include <algorithm>
@@ -215,6 +216,7 @@ namespace navmesh::app::detail
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             if (!result.reused)
             {
+                core::CaptureCoverGeometry(result.candidate, input.geometry.scene);
                 evidence = CompactEvidence(result.candidate, input.geometry.scene);
                 if (!StoreCandidate(result.auditPath, result.candidate, evidence))
                 {

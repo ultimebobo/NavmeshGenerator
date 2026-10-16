@@ -2420,6 +2420,10 @@ namespace
         {
             for (const auto &link : source.externalLinks)
             {
+                if (link.type != 0)
+                {
+                    continue;
+                }
                 const auto neighbor = std::find_if(neighbors.begin(), neighbors.end(),
                                                    [&](const auto &mesh) { return mesh.id == link.navmeshId; });
                 if (neighbor == neighbors.end() || link.targetPolygon >= neighbor->polygons.size() ||
@@ -2489,6 +2493,8 @@ namespace
                     if (!HasPortalBoundarySupport(candidate.mesh, c, d, border, maximumGap, heights) &&
                         HasExcludedFloorAnchor(obstacles, opposite, (a + b) * 0.5F, profile, heights))
                     {
+                        candidate.closedAuthoredPortals.push_back(
+                            {source.id, link.polygon, link.edge, neighbor->id, link.targetPolygon, *targetEdge});
                         candidate.warnings.push_back(std::format(
                             "Closed authored border portal {:08X}:{}:{}: its floor is excluded obstacle collision.",
                             neighbor->id, link.targetPolygon, *targetEdge));
@@ -4448,6 +4454,66 @@ namespace
 
 namespace navmesh::core
 {
+    bool HasCandidateFloorRoute(const CandidateNavMesh &candidate, Vec3 departure, Vec3 arrival)
+    {
+        const auto &mesh = candidate.mesh;
+        const auto tolerance = std::hypot(candidate.profile.agentRadius + 2 * candidate.recastSettings.cellSize,
+                                          2 * candidate.recastSettings.cellHeight);
+        const auto nearest = [&](Vec3 point) -> std::optional<std::uint32_t>
+        {
+            std::optional<std::uint32_t> found;
+            auto best = tolerance * tolerance;
+            for (std::uint32_t polygon{}; polygon < mesh.polygons.size(); ++polygon)
+            {
+                if (mesh.polygons[polygon].flags & (1U << 3))
+                {
+                    continue;
+                }
+                const auto distance = DoorDistanceSquared(point, mesh, mesh.polygons[polygon]);
+                if (distance <= best)
+                {
+                    best = distance;
+                    found = polygon;
+                }
+            }
+            return found;
+        };
+        const auto first = nearest(departure);
+        const auto last = nearest(arrival);
+        if (!first || !last)
+        {
+            return false;
+        }
+        // Follow only actual generated shared-edge adjacency. A nearby but disconnected
+        // upper floor cannot replace an authored ledge merely by matching its position.
+        std::vector<bool> visited(mesh.polygons.size());
+        std::vector<std::uint32_t> pending{*first};
+        while (!pending.empty())
+        {
+            const auto polygon = pending.back();
+            pending.pop_back();
+            if (polygon == *last)
+            {
+                return true;
+            }
+            if (visited[polygon])
+            {
+                continue;
+            }
+            visited[polygon] = true;
+            const auto &face = mesh.polygons[polygon];
+            for (std::size_t edge{}; edge < 3; ++edge)
+            {
+                if (!(face.flags & (1U << edge)) && face.neighbors[edge] < mesh.polygons.size() &&
+                    !(mesh.polygons[face.neighbors[edge]].flags & (1U << 3)))
+                {
+                    pending.push_back(face.neighbors[edge]);
+                }
+            }
+        }
+        return false;
+    }
+
     std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
                                        const std::vector<NavMesh> &originalNeighbors,
                                        const std::vector<NavMesh> &authored, bool deferUnlinkedBorders,
@@ -4470,8 +4536,42 @@ namespace navmesh::core
         const auto initialLinks = candidate.borderLinks.size();
         const float maximumGap = candidate.profile.agentRadius * 2.0F + 16.0F;
         const auto distance = [](Vec3 a, Vec3 b) { return std::hypot(std::hypot(a.x - b.x, a.y - b.y), a.z - b.z); };
+        const auto coordinate = [](Vec3 point) { return std::tuple{point.x, point.y, point.z}; };
+        using PointKey = decltype(coordinate(Vec3{}));
+        std::set<std::pair<PointKey, PointKey>> explicitCrossingEdges;
+        // Reciprocal authored identities establish the intended CELL crossing even
+        // when an endpoint drifts beyond the incidental geometric matching tolerance.
+        // Only those complete edges may use the movement profile's bounded border halo.
+        for (const auto &neighbor : neighbors)
+        {
+            for (const auto &link : neighbor.externalLinks)
+            {
+                const auto source = std::find_if(authored.begin(), authored.end(),
+                                                 [&](const auto &mesh) { return mesh.id == link.navmeshId; });
+                if (link.type != 0 || source == authored.end() || link.polygon >= neighbor.polygons.size() ||
+                    link.edge >= 3 ||
+                    std::none_of(source->externalLinks.begin(), source->externalLinks.end(),
+                                 [&](const auto &reverse)
+                                 {
+                                     return reverse.type == 0 && reverse.polygon == link.targetPolygon &&
+                                            reverse.navmeshId == neighbor.id && reverse.targetPolygon == link.polygon;
+                                 }))
+                {
+                    continue;
+                }
+                const auto &face = neighbor.polygons[link.polygon];
+                const auto first = coordinate(neighbor.vertices.at(face.vertices[link.edge]));
+                const auto last = coordinate(neighbor.vertices.at(face.vertices[(link.edge + 1) % 3]));
+                explicitCrossingEdges.emplace(first, last);
+                explicitCrossingEdges.emplace(last, first);
+            }
+        }
         const auto border = [&](Vec3 a, Vec3 b, float tolerance)
         {
+            if (tolerance == AuthoredBorderTolerance && explicitCrossingEdges.contains({coordinate(a), coordinate(b)}))
+            {
+                tolerance = std::max(tolerance, maximumGap);
+            }
             // Near a CELL corner, a short edge can fall within the search halo
             // of two sides. Its smallest perpendicular deviation selects the seam.
             const std::array deviations{std::max(std::abs(a.x - cellBounds.min.x), std::abs(b.x - cellBounds.min.x)),
@@ -4484,6 +4584,15 @@ namespace navmesh::core
         const auto obstacles = BuildExcludedCollisionIndex(authored.empty() ? nullptr : sourceScene);
         const auto required =
             ResolveAuthoredBorderPortals(authored, neighbors, border, candidate, maximumGap, obstacles, waterHeight);
+        const auto markRequiredCrossings = [&]
+        {
+            for (auto &link : candidate.borderLinks)
+            {
+                link.requiredAuthoredCrossing |=
+                    !link.generatedNeighborCell &&
+                    required.contains({link.neighborNavmeshId, link.neighborPolygon, link.neighborEdge});
+            }
+        };
         CoalesceGeneratedBorders(candidate, neighbors, border, maximumGap);
         std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint8_t>> used;
         for (const auto &link : candidate.borderLinks)
@@ -4615,6 +4724,7 @@ namespace navmesh::core
         {
             // Batch neighbors may not have been generated yet. Preserve every floor
             // and open seam until shared generated partitions can be reconciled.
+            markRequiredCrossings();
             RefreshCandidateTopology(candidate);
             ValidateStitchedBorders(candidate, neighbors, border, false);
             ValidateRequiredBorderPortals(candidate, required);
@@ -4640,6 +4750,7 @@ namespace navmesh::core
         }
         BuildAdjacency(candidate.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
         RetractUnlinkedBorders(candidate, border);
+        markRequiredCrossings();
         if (!deferReachability)
         {
             RetainConnectedBorderRegions(candidate);
@@ -5581,11 +5692,12 @@ namespace navmesh::core
         {
             const auto &link = candidate.borderLinks[i];
             out << (i ? "," : "")
-                << std::format("{{\"polygon\":{},\"edge\":{},\"neighbor_navmesh_id\":\"{:08X}\",\"neighbor_polygon\":{}"
-                               ",\"neighbor_edge\":{},\"generated_neighbor_cell\":{}}}",
-                               link.polygon, link.edge, link.neighborNavmeshId, link.neighborPolygon, link.neighborEdge,
-                               link.generatedNeighborCell ? std::format("\"{:08X}\"", *link.generatedNeighborCell)
-                                                          : "null");
+                << std::format(
+                       "{{\"polygon\":{},\"edge\":{},\"neighbor_navmesh_id\":\"{:08X}\",\"neighbor_polygon\":{}"
+                       ",\"neighbor_edge\":{},\"generated_neighbor_cell\":{},\"required_authored_crossing\":{}}}",
+                       link.polygon, link.edge, link.neighborNavmeshId, link.neighborPolygon, link.neighborEdge,
+                       link.generatedNeighborCell ? std::format("\"{:08X}\"", *link.generatedNeighborCell) : "null",
+                       link.requiredAuthoredCrossing);
         }
         out << "],\n  \"authored_border_vertex_edits\": [";
         for (std::size_t i{}; i < candidate.authoredBorderVertexEdits.size(); ++i)

@@ -44,7 +44,7 @@ namespace navmesh::core
         bool deleted{};
         /// Winning placement has a teleport destination (XTEL), including non-physical cave exits.
         bool teleportExit{};
-        /// Reciprocal XTEL arrival position in this reference's Skyrim world space; absent without a valid return link.
+        /// Reciprocal XTEL arrival position in this reference's Skyrim world space; absent without a live return link.
         /// Exit matching uses this standing position to select the accessible side of a teleport threshold.
         std::optional<Vec3> teleportArrival;
         /// Base-object OBND in model-local Skyrim units; absent when missing or degenerate.

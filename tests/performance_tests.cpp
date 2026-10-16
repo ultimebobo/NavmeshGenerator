@@ -53,6 +53,16 @@ void TestPerformanceCaches()
     const auto authoredKey = app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {authored});
     authored.polygons[0].flags = 0;
     assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {authored}) != authoredKey);
+    // A load-order edit can change connectivity without changing any authored geometry.
+    authored.externalLinks.push_back({.polygon = 0, .edge = 0, .navmeshId = 7, .targetPolygon = 1});
+    authored.doorLinks.push_back({.polygon = 0, .referenceId = 20});
+    const auto connectedKey =
+        app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {authored});
+    authored.externalLinks[0].navmeshId = 8;
+    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {authored}) != connectedKey);
+    authored.externalLinks[0].navmeshId = 7;
+    authored.doorLinks[0].referenceId = 21;
+    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {authored}) != connectedKey);
     scene.geometrySources[0].navigationObstacle = true;
     assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed") != key);
     scene.geometrySources[0].navigationObstacle = false;
@@ -68,6 +78,11 @@ void TestPerformanceCaches()
     assert(candidate.topology.valid && candidate.mesh.polygons.size() == 2);
     candidate.triangleTagging = true;
     candidate.mesh.polygons.front().flags = core::WaterFlag | core::PreferredPathFlag;
+    candidate.mesh.polygons.front().coverFlags = 0x4008;
+    candidate.coverGeometry = scene.mesh;
+    candidate.closedAuthoredPortals.push_back({7, 0, 1, 8, 2, 0});
+    candidate.borderLinks.push_back(
+        {.polygon = 0, .edge = 0, .neighborNavmeshId = 7, .requiredAuthoredCrossing = true});
     const auto root = std::filesystem::temp_directory_path() / "navmesh-cache-round-trip";
     std::filesystem::create_directories(root);
     const auto path = root / "candidate.gz";
@@ -77,6 +92,11 @@ void TestPerformanceCaches()
     core::CandidateNavMesh loaded;
     core::Scene evidence;
     assert(app::detail::LoadCandidate(path, loaded, evidence));
+    assert(loaded.mesh.polygons.front().coverFlags == candidate.mesh.polygons.front().coverFlags);
+    assert(loaded.coverGeometry.vertices.size() == candidate.coverGeometry.vertices.size());
+    assert(loaded.coverGeometry.triangles.size() == candidate.coverGeometry.triangles.size());
+    assert(loaded.closedAuthoredPortals.size() == 1 && loaded.closedAuthoredPortals[0].neighborNavmeshId == 8);
+    assert(loaded.borderLinks.size() == 1 && loaded.borderLinks.front().requiredAuthoredCrossing);
     std::ostringstream before, after;
     assert(core::WriteCandidateJson(before, candidate, scene, "{}"));
     assert(core::WriteCandidateJson(after, loaded, evidence, "{}"));

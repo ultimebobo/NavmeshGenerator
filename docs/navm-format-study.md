@@ -72,7 +72,7 @@ worldspace records in their source plugins. Its TES4 master list contains each
 NAVM source plugin and its dependencies in load order; record and group FormIDs
 are rebased into that table. It places generated world-space vertices and triangles in the
 largest original NAVM and writes empty geometry into the other NAVM overrides.
-Generated geometry has matched external and door links, an empty cover section,
+Generated geometry has matched external and door links, rebuilt cover metadata,
 and a rebuilt spatial grid. Adjacent NAVM overrides retain their geometry and
 authored sections while rebuilding external portals. Every authored NAVM with
 an incoming link to replaced geometry receives an override, even without a
@@ -106,13 +106,16 @@ payloads are not copied. New identities are allocated consecutively above the
 reserved local range, and TES4 HEDR records the next available identity. The ESP
 uses the light flag only when those identities and its master table fit the
 light format. Existing unsupported NAVM records cannot be treated as uncovered.
-Additional authored
-NAVM subrecords are rejected because they may contain geometry references.
-Unmatched authored external and door connections, cover data, and REFR
-XNDP references are not rebuilt. They can still break navigation between NAVMs,
-doors, or cells. Independent-tool and disposable-profile game validation are
-required before an output plugin is used.
-Localized source plugins work because no localized parent records are copied.
+ONAM base-object dependencies are rebased, and PNAM/NNAM connector constraints
+are remapped to nearby generated vertices. Unknown auxiliary fields, contradictory
+constraints and constraints without a representable vertex reject export.
+Authored crossings require matched generated portals or explicit obstacle-floor
+closure evidence. Reciprocal intra-cell ledges are superseded when nearby generated
+thresholds have a shared-edge route. Ledges without that replacement route and
+enable/disable portals reject regeneration. Malformed input or a source edit during
+generation also stops export; no final ESP is published on a validation failure.
+Install a patch after its input plugins and regenerate it after changing that
+load-order snapshot. Unrelated later overrides can supersede its navigation.
 
 The optional Plugin-scope copy export retains all unrelated source records,
 including localized payloads and TES4 localization flags. It keeps the source
@@ -126,7 +129,34 @@ in ONAM, retaining existing entries; an existing ONAM table is also extended in
 other copies. This follows [xEdit's ONAM description](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/whatsnew.md),
 which identifies the table as overridden records in temporary CELL child groups.
 NAVI entries for emitted NAVMs are rebuilt; unrelated source NAVI entries are retained.
-XNDP and other unsupported authored data are not rebuilt.
+Affected door references are merged under their winning group placement.
+
+### Cover and door finalization
+
+Cover is derived from physical collision walls alongside final unlinked edges,
+with coincident authored cover retained when applicable. Visual fallback and
+navigation-exclusion effects supply no cover. Portal edges remain traversable;
+triangle rotation moves cover into the format's available edge slots without
+renumbering triangles, and all edge-dependent indices rotate together. Cover
+tables are rebuilt from the resulting flags. Matching authored creature
+restrictions are retained independently of optional surface classification.
+
+Each generated door portal marks its triangle and receives a reciprocal REFR
+XNDP association. Initially disabled doors remain eligible because gameplay can
+enable them. An authored live door without a reachable generated triangle stops
+export. Obsolete associations are removed from other emitted NAVMs. The writer
+copies the winning reference, preserving scripts, locks, ownership, enable
+parents, flags and other supported fields while rebasing their embedded FormIDs.
+Unknown reference layouts fail rather than being copied with incorrect indices.
+Localized reference names require their original filename and string resources.
+
+Read-back checks geometry, cover and grid indices, reciprocal portals and both
+directions of door associations against unchanged input destinations as well as
+emitted records. Untouched authored portal offsets retain their original relationship
+and endpoint coordinates; new or moved edges must agree with their reciprocal edge.
+This verifies the exported record graph; runtime movement and
+AI behavior still require game testing. The layouts follow
+[xEdit's Skyrim record definitions](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsTES5.pas).
 
 ### Navigation information map
 
@@ -141,8 +171,8 @@ The layout follows [xEdit's Skyrim NAVI definition](https://github.com/TES5Edit/
 Source copies preserve unrelated NVMI entries and deleted-mesh registrations,
 removing registrations for regenerated meshes. The optional NVPP precomputed-path
 cache is emitted empty so it cannot retain stale routes. NAVI is read back and
-compared before the plugin is finalized. This does not validate in-game pathing
-or rebuild the unsupported connection data listed above.
+compared before the plugin is finalized. It participates in the navigation graph
+validation described above.
 
 The generated trailing section layout follows
 [OpenMW's NAVM loader](https://gitlab.com/OpenMW/openmw/-/raw/master/components/esm4/loadnavm.cpp).

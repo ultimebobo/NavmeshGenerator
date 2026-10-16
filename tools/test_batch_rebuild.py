@@ -98,6 +98,20 @@ def read_subrecords(payload):
     assert offset == len(payload) and extended is None
 
 
+def navm_with_door(x, reference):
+    body = bytearray(navm(x)[6:])
+    vertices = struct.unpack_from("<I", body, 16)[0]
+    triangle_at = 20 + vertices * 12
+    triangles = struct.unpack_from("<I", body, triangle_at)[0]
+    links_at = triangle_at + 4 + triangles * 16
+    door_at = links_at + 4
+    struct.pack_into("<I", body, door_at, 1)
+    body[door_at + 4:door_at + 4] = struct.pack("<HII", 0, 0xE48B73F3, reference)
+    flags = struct.unpack_from("<H", body, triangle_at + 4 + 12)[0]
+    struct.pack_into("<H", body, triangle_at + 4 + 12, flags | 0x400)
+    return sub("NVNM", body)
+
+
 class BatchRebuild(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="navmesh-batch-cli-")
@@ -1627,6 +1641,99 @@ class BatchRebuild(unittest.TestCase):
         navi_ids = [form for kind, form, flags, payload in emitted if kind == "NAVI"]
         self.assertEqual(navi_ids, [0x01000000 | (0x800 + len(ids))])
         self.assertEqual(struct.unpack_from("<I", header, 14)[0], 0x800 + len(ids) + len(navi_ids))
+        self.assert_door_navigation(output / "generated-navmesh.esp")
+
+    def test_required_crossing_retains_neighbor_endpoint_drift(self):
+        def portal(payload, polygon, edge, target, target_polygon, drift=False):
+            body = bytearray(payload[6:])
+            vertices = struct.unpack_from("<I", body, 16)[0]
+            if drift:
+                for vertex in (0, 3):
+                    at = 20 + vertex * 12
+                    struct.pack_into("<f", body, at, struct.unpack_from("<f", body, at)[0] + 6)
+            triangle_at = 24 + vertices * 12
+            triangles = struct.unpack_from("<I", body, triangle_at - 4)[0]
+            face = triangle_at + polygon * 16
+            struct.pack_into("<H", body, face + 6 + edge * 2, 0)
+            flags = struct.unpack_from("<H", body, face + 12)[0]
+            struct.pack_into("<H", body, face + 12, flags | (1 << edge))
+            links = triangle_at + triangles * 16
+            self.assertEqual(struct.unpack_from("<I", body, links)[0], 0)
+            struct.pack_into("<I", body, links, 1)
+            body[links + 4:links + 4] = struct.pack("<IIH", 0, target, target_polygon)
+            return sub("NVNM", body)
+
+        neighbor = portal(navm(1), 1, 2, 0x200, 0, drift=True)
+        self.write_baseline({0: portal(navm(0), 0, 1, 0x201, 1), 1: neighbor})
+        output = self.run_cli("--cell-formid", "100", "--generate-plugin", output="authored-endpoint-drift")
+        records = read_records(output / "generated-navmesh.esp")
+        copied = next(payload for kind, form, _, payload in records if kind == "NAVM" and form == 0x201)
+        original = dict(read_subrecords(neighbor))[b"NVNM"]
+        actual = dict(read_subrecords(copied))[b"NVNM"]
+        count = struct.unpack_from("<I", original, 16)[0]
+        self.assertEqual(actual[20:20 + count * 12], original[20:20 + count * 12])
+        candidate = json.loads((output / "candidate-navm.json").read_text())
+        required = [link for link in candidate["border_links"] if link["required_authored_crossing"]]
+        self.assertEqual(len(required), 1)
+        self.assertEqual(required[0]["neighbor_navmesh_id"], "00000201")
+
+    def assert_door_navigation(self, path):
+        emitted = read_records(path)
+        references = {}
+        for source in (self.root / "Baseline.esm", self.root / "Patch.esp", path):
+            references.update({form: (flags, payload) for kind, form, flags, payload in read_records(source)
+                               if kind == "REFR"})
+        portals = 0
+        for kind, form, _, payload in emitted:
+            if kind != "NAVM":
+                continue
+            mesh = dict(read_subrecords(payload))[b"NVNM"]
+            vertices = struct.unpack_from("<I", mesh, 16)[0]
+            triangle_at = 20 + vertices * 12
+            triangles = struct.unpack_from("<I", mesh, triangle_at)[0]
+            links_at = triangle_at + 4 + triangles * 16
+            links = struct.unpack_from("<I", mesh, links_at)[0]
+            door_at = links_at + 4 + links * 10
+            doors = struct.unpack_from("<I", mesh, door_at)[0]
+            for index in range(doors):
+                triangle, crc, reference = struct.unpack_from("<HII", mesh, door_at + 4 + index * 10)
+                self.assertEqual(crc, 0xE48B73F3)
+                self.assertTrue(struct.unpack_from("<H", mesh, triangle_at + 4 + triangle * 16 + 12)[0] & 0x400)
+                fields = dict(read_subrecords(references[reference][1]))
+                self.assertEqual(struct.unpack("<IHH", fields[b"XNDP"]), (form, triangle, 0))
+                portals += 1
+        self.assertGreater(portals, 0)
+
+    def test_door_navigation_preserves_winner_and_cached_candidates(self):
+        references = {x: record("REFR", 0x500 + x,
+                                sub("NAME", struct.pack("<I", 0x600)) +
+                                sub("XNDP", struct.pack("<IHH", 0x200 + x, 0, 0)) +
+                                sub("DATA", struct.pack("<6f", x * 4096 + 2048, 2048, 0, 0, 0, 0)))
+                      for x in range(3)}
+        self.write_baseline({x: navm_with_door(x, 0x500 + x) for x in range(3)}, references)
+        baseline = self.root / "Baseline.esm"
+        baseline.write_bytes(baseline.read_bytes() + record("DOOR", 0x600, b"") + record("KEYM", 0x700, b""))
+        lock = struct.pack("<B3xIB11x", 41, 0x700, 4)
+        winning = (sub("NAME", struct.pack("<I", 0x600)) + sub("XLOC", lock) +
+                   sub("XNDP", struct.pack("<IHH", 0x200, 0, 0)) +
+                   sub("DATA", struct.pack("<6f", 2048, 2048, 0, 0, 0, 0)))
+        selected = self.root / "Patch.esp"
+        selected.write_bytes(selected.read_bytes() + group(0x400, 1, group(0x100, 6, group(0x100, 9,
+                             record("REFR", 0x500, winning, 0x800)))))
+        for index, extra in enumerate([[], [], ["--copy-plugin"]]):
+            with self.subTest(index=index):
+                output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", *extra,
+                                      output=f"door-finalization-{index}")
+                report = json.loads((output / "batch-report.json").read_text())
+                if index:
+                    self.assertGreater(report["candidate_cache_hits"], 0)
+                path = output / ("Patch.esp" if extra else "generated-navmesh.esp")
+                self.assert_door_navigation(path)
+                door = next((flags, payload) for kind, form, flags, payload in read_records(path)
+                            if kind == "REFR" and form == 0x500)
+                self.assertEqual(door[0], 0x800)
+                self.assertEqual([(kind, data) for kind, data in read_subrecords(door[1]) if kind != b"XNDP"],
+                                 [(kind, data) for kind, data in read_subrecords(winning) if kind != b"XNDP"])
 
     def test_navigation_map_matches_final_meshes(self):
         for scope, args, filename in [
