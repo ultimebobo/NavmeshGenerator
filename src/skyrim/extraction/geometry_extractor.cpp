@@ -426,6 +426,8 @@ namespace
         return result;
     }
 
+    constexpr float SkyrimUnitsPerHavokUnit = 69.99125F;
+
     /// Shape wrappers use Havok units; the collision target and its ancestors use NIF/Skyrim units.
     struct CollisionTransform
     {
@@ -470,14 +472,13 @@ namespace
     [[nodiscard]] navmesh::core::Vec3 ApplyCollisionTransform(const CollisionTransform &transform,
                                                               const nifly::Vector3 &vertex)
     {
-        constexpr float skyrimUnitsPerHavokUnit = 69.99125F;
         auto position = transform.shape * vertex;
         // Only the T body activates its stored translation and rotation.
         if (dynamic_cast<const nifly::bhkRigidBodyT *>(transform.body))
         {
             position = ApplyHavokTransform(transform.body->rotation, transform.body->translation, position);
         }
-        position = transform.target * (position * skyrimUnitsPerHavokUnit);
+        position = transform.target * (position * SkyrimUnitsPerHavokUnit);
         return {position.x, position.y, position.z};
     }
     void AddPackedTriangles(const nifly::hkPackedNiTriStripsData &data, const CollisionTransform &transform,
@@ -508,6 +509,7 @@ namespace
         }
     }
 
+    /// Unpacked strip vertices use model units; normalize to Havok units before wrapper/body transforms.
     void AddNiTriStripsTriangles(const nifly::NiTriStripsData &data, const CollisionTransform &transform,
                                  TriangleGeometry &result)
     {
@@ -520,7 +522,7 @@ namespace
         result.vertices.reserve(result.vertices.size() + data.vertices.size());
         for (const auto &vertex : data.vertices)
         {
-            result.vertices.push_back(ApplyCollisionTransform(transform, vertex));
+            result.vertices.push_back(ApplyCollisionTransform(transform, vertex / SkyrimUnitsPerHavokUnit));
         }
         for (const auto &triangle : triangles)
         {

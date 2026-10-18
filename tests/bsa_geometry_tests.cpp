@@ -252,6 +252,68 @@ namespace
         target->collisionRef.index = nif.GetHeader().AddBlock(std::move(object));
     }
 
+    /// Unpacked strips store model-unit vertices inside a Havok-unit transform hierarchy.
+    void CheckStripCollisionUnits(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        constexpr float units = 69.99125F;
+        const std::vector<nifly::Vector3> vertices = {{0, 0, 0}, {256, 0, 0}, {0, 256, 0}, {0, 0, 512}};
+        const std::vector<nifly::Triangle> faces = {{0, 1, 2}, {2, 1, 3}};
+        for (const bool transformed : {false, true})
+        {
+            nifly::NifFile nif;
+            nif.Create({nifly::V20_2_0_7, 12, 130});
+            nif.GetRootNode()->transform.scale = 10;
+            auto data = std::make_unique<nifly::NiTriStripsData>();
+            data->Create(nif.GetHeader().GetVersion(), &vertices, &faces, nullptr, nullptr);
+            data->stripsInfo.stripLengths.resize(1);
+            data->stripsInfo.stripLengths[0] = 4;
+            data->stripsInfo.points = {{0, 1, 2, 3}};
+            auto shape = std::make_unique<nifly::bhkNiTriStripsShape>();
+            shape->partRefs.AddBlockRef(nif.GetHeader().AddBlock(std::move(data)));
+            auto wrapper = std::make_unique<nifly::bhkTransformShape>();
+            wrapper->shapeRef.index = nif.GetHeader().AddBlock(std::move(shape));
+            wrapper->xform[12] = 1;
+            wrapper->xform[13] = 2;
+            wrapper->xform[14] = 3;
+            nifly::MatTransform targetTransform;
+            targetTransform.Clear();
+            targetTransform.translation = {32, 64, 96};
+            targetTransform.scale = 2;
+            auto *target = nif.AddNode("StripTarget", targetTransform, nif.GetRootNode());
+            AttachCollision(nif, target, nif.GetHeader().AddBlock(std::move(wrapper)), transformed);
+            assert(nif.Save(root / "meshes/strip-collision.nif") == 0);
+            core::Cell cell;
+            cell.references = {{.id = 1,
+                                .recordType = "REFR",
+                                .modelPath = "strip-collision.nif",
+                                .position = {1000, 2000, 3000},
+                                .rotation = {0, 0, 1.57079632679F},
+                                .scale = 0.5F,
+                                .baseRecordType = "STAT"}};
+            for (const bool navigationOnly : {false, true})
+            {
+                const auto geometry =
+                    skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+                assert(geometry.collisionTriangles == faces.size());
+                assert(geometry.scene.mesh.vertices.size() == vertices.size());
+                assert(geometry.scene.HasCompleteTriangleProvenance());
+                for (std::size_t index{}; index < vertices.size(); ++index)
+                {
+                    const auto input = vertices[index];
+                    const auto actual = geometry.scene.mesh.vertices[index];
+                    const float x = transformed ? 90 * units - input.x : input.x + units;
+                    const float y = transformed ? 70 * units - input.y : input.y + 2 * units;
+                    const float z = input.z + (transformed ? 56 : 3) * units;
+                    assert(std::abs(actual.x - (1000 + y + 32)) < 0.01F);
+                    assert(std::abs(actual.y - (2000 - x - 16)) < 0.01F);
+                    assert(std::abs(actual.z - (3000 + z + 48)) < 0.01F);
+                }
+                core::ValidateRecastSceneHeightRange(geometry.scene, {}, {}, {});
+            }
+        }
+    }
+
     void CheckCollisionShapes(const std::filesystem::path &root)
     {
         using namespace navmesh;
@@ -1069,6 +1131,7 @@ void TestNativeBsaGeometry()
     assert(architecture.modelsLoaded == 1 && !architecture.scene.geometrySources[0].navigationObstacle);
     CheckFurnitureAndFire(root);
     CheckFixedClutter(root);
+    CheckStripCollisionUnits(root);
     CheckCollisionShapes(root);
     CheckPlacedModelTransforms(root);
     CheckCollisionEligibility(root);

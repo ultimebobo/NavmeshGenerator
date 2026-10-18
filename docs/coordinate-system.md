@@ -4,6 +4,11 @@ All neutral geometry and NAVM vertices use `skyrim-world-z-up-v1`: Skyrim world 
 
 NIF vertices begin in shape-local space. The extractor applies the shape or collision target's transform and its non-root ancestors by block identity, then the neutral reference transform described below. Skyrim placement replaces the NIF root's translation, rotation and scale; the stored root transform does not contribute. Collision, display meshes and fire bounds share this rule.
 
+Unpacked collision `NiTriStripsData` vertices use NIF model units. They are
+normalized to Havok units before shape-wrapper and active rigid-body transforms,
+then converted back to model units before collision-target ancestry and placement.
+Packed triangle streams and collision primitives begin in Havok units.
+
 OBJ is written without axis remapping: `v x y z` is Skyrim world X/Y/Z. A viewer that assumes Y-up may need its own import-axis conversion. Future glTF exports must document any required conversion separately; none exists today.
 
 Use a tolerance of 0.01 world units for synthetic fixture comparisons and 0.1 world units for visual alignment checks, allowing for float serialization and viewer display precision. Larger systematic offsets are evidence of missing transforms or coverage, not a reason to silently relax analysis thresholds.
