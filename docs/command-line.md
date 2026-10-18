@@ -305,12 +305,14 @@ and Load order scopes. Use `--no-triangle-tagging` to disable both. The saved
 desktop setting is **Tag water and preferred path triangles** in Advanced settings.
 
 Water detection compares each final triangle's centroid with the effective
-exterior CELL water surface. The parser requires the CELL water flag and resolves
-explicit heights or default heights from winning worldspace water data, including
-parent-world inheritance. Invalid heights supply no plane. Interiors and the
-direct single-plugin reader have no worldspace-plane inference; explicit exterior
-heights remain usable in the direct reader. Without a supported plane, matching
-authored water markings supply evidence.
+CELL water surface. The parser requires the CELL water flag and accepts explicit
+heights for interiors and exteriors. Exterior default heights resolve from winning
+worldspace water data, including parent-world inheritance. Invalid or unresolved
+heights supply no plane. The direct single-plugin reader accepts explicit CELL
+heights without worldspace-plane inference. Authored water markings serve only as
+validation evidence and never determine generated water tags. Triangles without a
+supported plane remain untagged; submerged triangles appear blue in the scene,
+including those that also carry preferred-path tags.
 
 Preferred paths come from the closest overlapping winning authored triangle at
 a compatible height. Unmarked floors participate in matching to keep preference

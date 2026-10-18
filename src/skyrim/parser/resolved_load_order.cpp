@@ -1064,7 +1064,7 @@ namespace navmesh::skyrim
                 auto &cell = result.cells.back();
                 bool hasWater{};
                 bool defaultHeight = true;
-                if (record.raw && !cell.isInterior && !(record.raw->flags & 0x20U))
+                if (record.raw && !(record.raw->flags & 0x20U))
                 {
                     for (const auto &sub : record.raw->subrecords)
                     {
@@ -1092,7 +1092,7 @@ namespace navmesh::skyrim
                 {
                     cell.waterHeight.reset();
                 }
-                else if (defaultHeight && record.worldspaceFormId)
+                else if (defaultHeight && !cell.isInterior && record.worldspaceFormId)
                 {
                     cell.waterHeight = worldWaterHeight(*record.worldspaceFormId);
                 }

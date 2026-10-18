@@ -110,8 +110,8 @@ Plugin writing requires a valid candidate.
 ## Advanced generation settings
 
 **Tag water and preferred path triangles** enables generated classification and
-is saved with the other desktop choices. Water uses supported exterior water
-levels, with authored water markings as a fallback. Preferred paths follow
+is saved with the other desktop choices. Water uses supported CELL/WRLD water
+levels independently of authored water markings. Preferred paths follow
 nearby winning authored markings on a matching floor. Disable the checkbox to
 omit both tags; the CLI equivalent is `--no-triangle-tagging`.
 

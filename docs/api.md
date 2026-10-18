@@ -84,10 +84,10 @@ this reference. The showcase utilities and renderer are described in the
   skipped generation targets as untouched authored neighbors.
 
 - `navmesh::core::TagCandidateTriangles`: optional centroid-based water detection
-  and closest-floor authored water/preferred-path transfer after border reshaping.
+  from CELL/WRLD data and closest-floor authored preferred-path transfer after border reshaping.
   It preserves geometry and connection bits; `WaterFlag` and `PreferredPathFlag`
   name the independent Skyrim NVNM classification bits.
-- `navmesh::core::Cell::waterHeight`: supported effective exterior water-surface Z
+- `navmesh::core::Cell::waterHeight`: supported effective CELL water-surface Z
   supplied by the Skyrim parser, including winning worldspace inheritance.
 
 - `navmesh::core`: neutral geometry, world and navmesh data, scene provenance,

@@ -28,8 +28,8 @@ python tools/render_media.py --scene <scene.glb> --output ./output/images
 
 The output contains `scene.png` and `render-manifest.json`. Images show the number
 of selected cells from the adjacent metadata, deduplicated by CELL Form ID.
-The manifest records source paths, hashes, cell counts and image filenames. Candidate navigation is teal and
-supporting collision is gray. Geometry can occlude navigation behind it;
+The manifest records source paths, hashes, cell counts and image filenames. Candidate navigation is teal,
+water-tagged navigation is blue even when also preferred-path tagged, and supporting collision is gray. Geometry can occlude navigation behind it;
 coplanar navigation remains visible without shifting its vertices.
 
 Optional presentation controls apply to every scene:
@@ -225,12 +225,10 @@ plugin counts and records reciprocal generated-portal checks. The generated
 `validation-report.md` contains the measured results and reproduction evidence.
 Reviewed region comparisons are available in `docs/images/`.
 
-These checks distinguish mesh generation from tagging and reporting. Extreme
-positive CELL `XCLW` heights can be accepted as finite water planes, marking land
-triangles as water in candidate JSON and emitted NAVM. Presentation colors do
-not show those flags; disclose the tagging issue in affected comparison captions.
-The intended interpretation of unusual water values requires independent format
-review before changing parsing policy.
+These checks distinguish mesh generation from tagging and reporting. Tagged
+diagnostic renders preserve blue water classifications from the exported scene;
+classification follows supported CELL/WRLD water data as described in the
+[triangle-tagging contract](command-line.md#generated-triangle-tagging).
 
 For geometry showcases, disable experimental water and preferred-path tagging
 with `--no-triangle-tagging` on the generator command. Verify `triangle_tagging`

@@ -1679,6 +1679,20 @@ namespace
         world(0x803, 0x800, 9, 0x730, true, -2147483648.0F);
         world(0x804, 0x804, 9, 0x740, false, std::numeric_limits<float>::max());
         world(0x805, 0x800, 9, 0x750, false, std::numeric_limits<float>::quiet_NaN());
+        // Interior water requires its own finite CELL plane, without WRLD inference.
+        const auto interior = [&](std::uint32_t id, bool wet, float height)
+        {
+            auto payload = CellPayload("IndoorWaterCell");
+            PutText(payload, "DATA", {static_cast<std::uint8_t>(wet ? 3 : 1)});
+            std::vector<std::uint8_t> data;
+            PutFloat(data, height);
+            PutText(payload, "XCLW", data);
+            PutRecord(plugin, "CELL", id, payload);
+        };
+        interior(0x760, true, 10);
+        interior(0x770, false, 10);
+        interior(0x780, true, std::numeric_limits<float>::max());
+        interior(0x790, true, std::numeric_limits<float>::quiet_NaN());
         const auto path = root / "Inherited.esm";
         std::ofstream file(path, std::ios::binary);
         file.write(reinterpret_cast<const char *>(plugin.data()), static_cast<std::streamsize>(plugin.size()));
@@ -1705,6 +1719,14 @@ namespace
         Require(!cell(0x740).waterHeight && !cell(0x750).waterHeight);
         const auto standalone = navmesh::skyrim::LoadCell(path, {}, {}, {}, {}, 0x710);
         Require(standalone && !standalone->waterHeight);
+        Require(cell(0x760).isInterior && cell(0x760).waterHeight == 10);
+        for (const auto id : {0x760U, 0x770U, 0x780U, 0x790U})
+        {
+            const auto direct = navmesh::skyrim::LoadCell(path, {}, {}, {}, {}, id);
+            Require(direct && direct->isInterior);
+            Require(direct->waterHeight == cell(id).waterHeight);
+        }
+        Require(!cell(0x770).waterHeight && !cell(0x780).waterHeight && !cell(0x790).waterHeight);
     }
     void WriteTextFile(const std::filesystem::path& path, const std::string& text) { std::ofstream output(path, std::ios::binary); output << text; }
     void TestMo2UnicodeProfileImport()

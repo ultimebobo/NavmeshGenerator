@@ -71,8 +71,8 @@ Model extraction encloses supported collision in filled world bounds on
 volumes, and analysis excludes their surfaces from floor evidence. No BOS syntax
 or Skyrim runtime policy enters the neutral algorithm layer.
 
-Winning exterior CELL water flags and heights resolve into `Cell::waterHeight`.
-Default heights use winning WRLD water data and master-aware parent-world
+Winning CELL water flags and explicit heights resolve into `Cell::waterHeight`.
+Exterior default heights use winning WRLD water data and master-aware parent-world
 inheritance; invalid, cyclic or unresolved data supplies no water plane. Both engine default-height
 sentinel forms request world water rather than becoming literal elevations.
 The range interpretation follows [CommonLibSSE-NG](https://github.com/CharmedBaryon/CommonLibSSE-NG/blob/main/src/RE/T/TESObjectCELL.cpp).

@@ -91,6 +91,17 @@ class NavigationOcclusionTests(unittest.TestCase):
 
 
 class ComparisonCountsTests(unittest.TestCase):
+    def test_water_classifications_remain_blue_with_depth_testing(self):
+        for classification in ("water", "water_preferred_path"):
+            with self.subTest(classification=classification):
+                scene = [("Candidate NAVM", f"Candidate NAVM: {classification}", square(0, 1))]
+                visible = np.array(renderer.render(scene, "Candidate NAVM", None, 160, 160, 0, 90))
+                self.assertGreater(np.count_nonzero(np.all(visible == renderer.WATER, axis=2)), 100)
+                self.assertFalse(np.any(np.all(visible == renderer.GENERATED, axis=2)))
+                scene.append(("Collision", "bridge deck", square(1, 2)))
+                hidden = np.array(renderer.render(scene, "Candidate NAVM", None, 160, 160, 0, 90))
+                self.assertFalse(np.any(np.all(hidden == renderer.WATER, axis=2)))
+
     def test_cell_metadata_deduplicates_identities_and_survives_view_override(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "scene.glb"

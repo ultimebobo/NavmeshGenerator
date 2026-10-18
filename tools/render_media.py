@@ -21,6 +21,7 @@ TEXT = (232, 240, 244)
 MUTED = (157, 174, 185)
 AUTHORED = (238, 185, 91)
 GENERATED = (70, 216, 181)
+WATER = (13, 76, 255)
 # Skyrim world units retained above the highest selected navigation vertex.
 INTERIOR_CUT_MARGIN = 64.0
 
@@ -265,7 +266,6 @@ def presentation(scene, path, view, cut_height, bounds, azimuth, elevation,
 
 def render(scene, navigation, bounds, width, height, azimuth, elevation, cut_height=None):
     basis = camera_basis(azimuth, elevation)
-    selected = crop_triangles(layer_triangles(scene, navigation), bounds)
     terrain = clip_support(crop_triangles(layer_triangles(scene, "Terrain"), bounds), cut_height)
     collision = clip_support(crop_triangles(layer_triangles(scene, "Collision"), bounds), cut_height)
     # Both comparison panels share the union of navigation extents, including
@@ -280,7 +280,14 @@ def render(scene, navigation, bounds, width, height, azimuth, elevation, cut_hei
     # Navigation uses the collision/terrain depth buffer. A floating-point-sized
     # tolerance reveals coplanar faces without lifting geometry or exposing a
     # route through a bridge deck, wall, terrain, or an individual stair tread.
-    rasterize(selected, color, basis, framing, pixels, depth, wire=True, depth_tolerance=0.001)
+    for layer, name, triangles in scene:
+        if layer != navigation:
+            continue
+        classification = name.rsplit(": ", 1)[-1]
+        face_color = WATER if navigation == "Candidate NAVM" and classification in (
+            "water", "water_preferred_path") else color
+        rasterize(crop_triangles(triangles, bounds), face_color, basis, framing,
+                  pixels, depth, wire=True, depth_tolerance=0.001)
     return Image.fromarray(pixels)
 
 

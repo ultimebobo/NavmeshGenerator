@@ -20,15 +20,29 @@ void TestTriangleTagging()
     const std::vector<NavMesh> originals{authored};
     TagCandidateTriangles(candidate, originals, std::nullopt);
     assert(candidate.triangleTagging);
-    assert(candidate.mesh.polygons[0].flags == (WaterFlag | PreferredPathFlag | 1U));
+    assert(candidate.mesh.polygons[0].flags == (PreferredPathFlag | 1U));
     assert(candidate.mesh.polygons[1].flags == 0);
 
-    // Explicit water overrides authored water; preference and connection bits are independent.
+    // Authored water flags are validation data, independent of physical water and route preference.
     TagCandidateTriangles(candidate, originals, -1.0F);
     assert(candidate.mesh.polygons[0].flags == (PreferredPathFlag | 1U));
     TagCandidateTriangles(candidate, originals, 10.0F);
     assert(candidate.mesh.polygons[0].flags == (WaterFlag | PreferredPathFlag | 1U));
     assert(candidate.mesh.polygons[1].flags == 0);
+    auto unmarked = originals;
+    unmarked.front().polygons.front().flags &= static_cast<std::uint16_t>(~WaterFlag);
+    auto withoutAuthoredWater = candidate;
+    TagCandidateTriangles(withoutAuthoredWater, unmarked, 10.0F);
+    assert(withoutAuthoredWater.mesh.polygons[0].flags == candidate.mesh.polygons[0].flags);
+    TagCandidateTriangles(withoutAuthoredWater, {}, 10.0F);
+    assert(withoutAuthoredWater.mesh.polygons[0].flags == (WaterFlag | 1U));
+    assert(withoutAuthoredWater.mesh.polygons[1].flags == 0);
+    // A plane at the floor is dry; shoreline classification samples the interpolated centroid.
+    TagCandidateTriangles(withoutAuthoredWater, {}, 0.0F);
+    assert(withoutAuthoredWater.mesh.polygons[0].flags == 1U);
+    withoutAuthoredWater.mesh.vertices[0].z = -30;
+    TagCandidateTriangles(withoutAuthoredWater, {}, 0.0F);
+    assert(withoutAuthoredWater.mesh.polygons[0].flags == (WaterFlag | 1U));
     TagCandidateTriangles(candidate, originals, 10.0F, false);
     assert(!candidate.triangleTagging && candidate.mesh.polygons[0].flags == 1U);
 

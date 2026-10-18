@@ -357,6 +357,7 @@ namespace navmesh::skyrim
                         }
                         else if (subType == "DATA" && subSize >= 1)
                         {
+                            cell.isInterior = ((*payload)[subDataStart] & 1U) != 0;
                             hasWater = ((*payload)[subDataStart] & 2U) != 0;
                         }
                         else if (subType == "XCLW" && subSize >= sizeof(float))
@@ -378,7 +379,7 @@ namespace navmesh::skyrim
                         }
                         subOffset = subDataEnd;
                     }
-                    if (!hasWater || cell.isInterior)
+                    if (!hasWater)
                     {
                         cell.waterHeight.reset();
                     }

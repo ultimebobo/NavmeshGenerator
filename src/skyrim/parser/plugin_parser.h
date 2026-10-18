@@ -107,7 +107,7 @@ namespace navmesh::skyrim
         /// CELL water enable flag and finite explicit CELL/WRLD water height in Skyrim world Z units.
         bool hasWater{};
         std::optional<float> waterHeight;
-        /// CELLs without an explicit height inherit their worldspace's water surface.
+        /// Exterior CELLs without an explicit height inherit their worldspace's water surface.
         bool usesWorldWater{true};
         /// Resolved parent worldspace and terrain/water inheritance at this WRLD version.
         std::optional<std::uint32_t> parentWorldFormId;

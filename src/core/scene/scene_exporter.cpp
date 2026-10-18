@@ -818,7 +818,7 @@ namespace navmesh::core
                                                          "NAVM link (green)",
                                                          "Water NAVM (blue)",
                                                          "Preferred path NAVM (yellow)",
-                                                         "Water preferred path NAVM (teal)"};
+                                                         "Water preferred path NAVM (blue)"};
         const std::array<std::array<float, 4>, 18> colors{{{{0.0F, 0.85F, 0.95F, 0.70F}},
                                                            {{0.35F, 0.48F, 0.16F, 1.0F}},
                                                            {{0.46F, 0.46F, 0.50F, 1.0F}},
@@ -836,7 +836,7 @@ namespace navmesh::core
                                                            {{0.05F, 1.0F, 0.10F, 1.0F}},
                                                            {{0.05F, 0.30F, 1.0F, 0.8F}},
                                                            {{1.0F, 0.85F, 0.10F, 0.8F}},
-                                                           {{0.10F, 0.85F, 0.85F, 0.8F}}}};
+                                                           {{0.05F, 0.30F, 1.0F, 0.8F}}}};
         std::vector<std::string> materials;
         for (std::size_t i{}; i < materialNames.size(); ++i)
         {

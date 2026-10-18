@@ -126,8 +126,8 @@ namespace navmesh::core
                 3.0F;
             const auto matched = MatchedFlags(centroid, surfaces, heightTolerance);
             polygon.flags |= matched & PreferredPathFlag;
-            const bool water = waterHeight ? centroid.z < *waterHeight : (matched & WaterFlag) != 0;
-            if (water)
+            // Water is a physical CELL/WRLD input; authored markings only constrain route preference.
+            if (waterHeight && centroid.z < *waterHeight)
             {
                 polygon.flags |= WaterFlag;
             }

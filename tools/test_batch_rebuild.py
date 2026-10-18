@@ -651,6 +651,16 @@ class BatchRebuild(unittest.TestCase):
         scene = json.loads(glb[20:20 + glb_json_size])
         self.assertTrue(any(mesh["name"] == "Candidate NAVM: water" for mesh in scene["meshes"]))
         self.assertTrue(any(mesh["name"] == "Candidate NAVM: water_preferred_path" for mesh in scene["meshes"]))
+        water_materials = []
+        for mesh in scene["meshes"]:
+            if mesh["name"] in ("Candidate NAVM: water", "Candidate NAVM: water_preferred_path"):
+                for primitive in mesh["primitives"]:
+                    color = scene["materials"][primitive["material"]]["pbrMetallicRoughness"]["baseColorFactor"]
+                    self.assertGreater(color[2], color[0])
+                    self.assertGreater(color[2], color[1])
+                    water_materials.append(color)
+        self.assertTrue(water_materials)
+        self.assertTrue(all(color == water_materials[0] for color in water_materials))
         # Independent NVNM decoding proves actual plugin flags, beyond inspection JSON.
         for kind, form, _, payload in read_records(single / "generated-navmesh.esp"):
             if kind == "NAVM" and form & 0xffffff == 0x200:
@@ -688,6 +698,22 @@ class BatchRebuild(unittest.TestCase):
         check(json.loads((disabled_batch / "cells/00000100/candidate-navm.json").read_text()), False)
         report = json.loads((disabled_batch / "batch-report.json").read_text())
         self.assertFalse(any(cell["candidate_reused"] for cell in report["cells"]))
+
+    def test_water_classification_ignores_authored_water(self):
+        # An authored dry floor under water must be wet; an authored wet floor without water must be dry.
+        for authored_flags in (0, 0x200):
+            for wet in (False, True):
+                with self.subTest(authored_flags=authored_flags, wet=wet):
+                    self.write_baseline(navmeshes={x: navm(x, flags=(authored_flags, authored_flags))
+                                                  for x in range(3)},
+                                        water={0: sub("DATA", b"\x02\x00") +
+                                               sub("XCLW", struct.pack("<f", 10))} if wet else {})
+                    for args, filename in ((["--cell-formid", "100", "--generate-candidate"], "candidate-navm.json"),
+                                           (["--rebuild-plugin", "Patch.esp"], "cells/00000100/candidate-navm.json")):
+                        output = self.run_cli(*args, output=f"water-independent-{authored_flags}-{wet}-{len(args)}")
+                        candidate = json.loads((output / filename).read_text())
+                        self.assertTrue(candidate["polygons"])
+                        self.assertTrue(all(p["water"] == wet for p in candidate["polygons"]))
 
     def test_effective_water_height(self):
         variants = [(b"", True), (sub("XCLW", struct.pack("<f", -2147483648)), True),

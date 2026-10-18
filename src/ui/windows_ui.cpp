@@ -654,8 +654,8 @@ namespace
         {
             ImGui::SeparatorText("Recast generation");
             ImGui::Checkbox("Tag water and preferred path triangles (experimental)", &options.tagTriangles);
-            Help("Classify submerged floors using exterior water levels and preserve nearby authored preferred "
-                 "routes on the same floor. Without a supported water plane, authored water tags provide evidence.");
+            Help("Classify submerged floors using CELL and worldspace water levels and preserve nearby authored "
+                 "preferred routes on the same floor. Water tagging requires a supported water plane.");
             int algorithm = static_cast<int>(options.partitioningAlgorithm);
             ImGui::TextUnformatted("Region partitioning");
             ImGui::SetNextItemWidth(-1);

@@ -45,7 +45,7 @@ inside its owning group.
 | `Candidate NAVM` | blue-green | generated navigation connected to an entrance or matched exterior portal |
 | `Candidate NAVM: water` | blue | generated triangles classified as water |
 | `Candidate NAVM: preferred_path` | yellow | generated triangles following authored preferred routes |
-| `Candidate NAVM: water_preferred_path` | teal | generated triangles with both independent tags |
+| `Candidate NAVM: water_preferred_path` | blue | generated triangles with both independent tags |
 | `Authored link ...` / `Candidate link ...` | bright green | solid bars running along the recorded edge between connected triangles, lifted above the surface |
 | `Door ...` | orange | enabled exit position, including physical doors and invisible cave entrances |
 | `Terrain` | brown-green | decoded `LAND` height surface |
