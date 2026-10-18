@@ -16,6 +16,8 @@ namespace navmesh::skyrim::detail
      * @param error Receives the malformed mesh, dangling link, or nonreciprocal connection reason.
      * @param generatedStepHeights Output-local generated NAVM identities and their allowed shared-edge climb,
      * in Skyrim world units including weld tolerance. Other meshes retain authored endpoint tolerance.
+     * Generated and edited live faces require positive horizontal winding; connection-only overrides can retain
+     * zero-area authored faces only at identical triangle/vertex indices and exactly unchanged coordinates.
      * @return True when geometry, grid, cover, portal destinations and both directions of door associations agree.
      * Coordinates use Skyrim world units. Unrelated original records are inspected only when referenced.
      */

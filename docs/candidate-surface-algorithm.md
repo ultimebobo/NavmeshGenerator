@@ -57,13 +57,15 @@ Collision-impact selection includes historical hearth/fire dependencies.
 Operable DOOR references do not supply permanent collision or render geometry:
 their closed model pose would obstruct an intended portal. Extraction records
 them as excluded while preserving reference metadata for exit matching. Exterior
-teleport doors with valid base-object bounds and reciprocal arrival metadata
+non-automatic teleport doors with valid base-object bounds and reciprocal arrival metadata
 supply an obstacle-only volume from their placed bounds: teleportation does not
 provide a same-world route through the threshold into scenery. Exit matching uses
 the reciprocal arrival position on the accessible side. Missing or invalid return
 metadata supplies no boundary volume. This policy uses geometry and teleport
 records independently of authored NAVM. Static door frames, thresholds and
-adjoining floors remain eligible geometry.
+adjoining floors remain eligible geometry. Automatic DOOR trigger bounds describe
+activation space, so they supply no solid threshold volume; their reciprocal
+arrival positions still anchor generated navigation.
 Stateful ACTI passages use the same open-traversal policy for their movable parts:
 animated panel branches supply neither permanent collision nor display fallback,
 while fixed frame and threshold siblings remain eligible. Paired Open/Close NIF

@@ -20,13 +20,14 @@ follows the reference or original base history; Load order includes all BOS
 impacts independently of that history. Inspect `bos-input.json` and retain the
 same configs with the generated patch. See [BOS inputs](base-object-swapper.md).
 
-In Cell scope, **Make scene** / `--make-scene` adds a combined `scene.glb` and its
+In Cell scope or a small Plugin selection, **Make scene** / `--make-scene` adds a combined `scene.glb` and its
 sidecars regardless of batch output policy. Geometry is deduplicated across
 overlapping neighborhoods; generated candidates are displayed after final seam
 reconciliation, alongside authored navigation from skipped cells. This is a
 complete-selection export and excludes cost estimation. Retaining requested scene
 geometry adds memory beyond the generation admission budget. Scene write failures
-stop publishing the plugin.
+stop publishing the plugin. Plugin selections must fit `app::MaximumPluginSceneCells`
+before skipped cells are removed; larger scenes require an explicit Cell selection.
 
 For authoring, **Copy selected plugin** / `--copy-plugin` enables writing and
 uses the selected file as the output template. The UI persists the

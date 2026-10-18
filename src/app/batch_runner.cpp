@@ -709,6 +709,13 @@ namespace navmesh::app::detail
         {
             return fail(selectionError);
         }
+        if (options.makeScene && options.rebuildScope == RebuildScope::Plugin &&
+            selectedCells > MaximumPluginSceneCells)
+        {
+            return fail(std::format("Plugin scenes support at most {} affected cells; selected {}. Use Cell scope "
+                                    "to export an explicit selection.",
+                                    MaximumPluginSceneCells, selectedCells));
+        }
         if (!summary("running"))
         {
             return fail("Cannot write batch-report.json");

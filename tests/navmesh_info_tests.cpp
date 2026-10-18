@@ -202,6 +202,41 @@ namespace
         assert(!detail::BuildNavmeshInfo({}, &unsupported, payload, error));
     }
 
+    void TestUnchangedAuthoredVerticalTriangle(const std::filesystem::path &root)
+    {
+        auto geometry = Geometry(0x100);
+        const navmesh::core::Vec3 verticalVertex{0, 0, 18};
+        std::memcpy(geometry.data() + 20 + 2 * sizeof(verticalVertex), &verticalVertex, sizeof(verticalVertex));
+        Bytes payload, mesh, children, plugin;
+        Sub(payload, "NVNM", geometry);
+        Record(mesh, "NAVM", 0x900, payload);
+        Record(children, "CELL", 0x100, {});
+        Group(children, 0x100, 6, mesh);
+        Record(plugin, "TES4", 0, {});
+        Group(plugin, 0x4C4C4543, 0, children);
+        const auto path = root / "VerticalAuthored.esm";
+        Write(path, plugin);
+        const auto input = ResolveLoadOrder({.dataDirectory = root, .plugins = {path}});
+        assert(input.diagnostics.empty() && input.cells.size() == 1);
+        const auto records = Read(path);
+        std::string error;
+        const auto validate = [&](const ResolvedLoadOrder &source, const std::map<std::uint32_t, float> &generated)
+        {
+            return detail::ValidateNavigationGraph(records, {}, path.filename().string(), source, {0x900}, {}, error,
+                                                   generated);
+        };
+        assert(validate(input, {}));
+        assert(!validate(input, {{0x900, 36.0F}}));
+        assert(error.find("winding") != std::string::npos);
+        auto changed = input;
+        changed.cells.front().navMeshes.front().vertices[2].z += 1;
+        assert(!validate(changed, {}));
+        assert(error.find("winding") != std::string::npos);
+        changed = input;
+        changed.cells.front().navMeshes.front().polygons.front().flags |= 1U << 3;
+        assert(!validate(changed, {}));
+    }
+
     void TestAuxiliaryMetadata()
     {
         PluginRecord source;
@@ -694,6 +729,7 @@ void TestNavmeshInfoExport()
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root);
     TestInfoEntries(root);
+    TestUnchangedAuthoredVerticalTriangle(root);
     TestAuxiliaryMetadata();
     TestReferenceSafety(root);
     TestReplacedLedge(root / "traversal");

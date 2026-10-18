@@ -19,7 +19,8 @@ namespace navmesh::ui
      * MO2 resolves mod storage from its INI; Vortex reads the active deployment and game plugin list.
      * Desktop actions clear developer directory overrides and the unselected manager's inputs.
      * Cell scope retains its explicit list and enabled copy source; hidden cell lists are cleared in other scopes.
-     * Make scene is retained only for Cell runs and clears cost estimation so the complete selection is exported.
+     * Make scene is retained for Cell and Plugin runs and clears cost estimation; shared-run selection validates
+     * the Plugin scene size against app::MaximumPluginSceneCells before extraction.
      * @throws std::invalid_argument When the manager is invalid or required visible source, output or target inputs are missing.
      */
     [[nodiscard]] app::Options PrepareDesktopOptions(const app::Options &draft, bool listOnly);

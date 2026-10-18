@@ -36,7 +36,39 @@ namespace
         return std::hypot(std::hypot(a.x - b.x, a.y - b.y), a.z - b.z) <= navmesh::core::AuthoredBorderTolerance;
     }
 
-    bool Decode(const ResolvedRecord &record, navmesh::core::NavMesh &mesh, float stepHeight, std::string &stage)
+    /// Connection-only overrides can preserve vertical authored faces with zero horizontal area.
+    /// Require identical vertex indices and coordinates; generated, moved or newly activated faces stay strict.
+    bool UnchangedAuthoredTriangle(const navmesh::core::NavMesh &mesh, std::size_t index,
+                                   const navmesh::core::NavMesh *authored)
+    {
+        if (!authored || index >= authored->polygons.size())
+        {
+            return false;
+        }
+        const auto &before = authored->polygons[index];
+        const auto &after = mesh.polygons[index];
+        if ((before.flags & (1U << 3)) || before.vertices != after.vertices)
+        {
+            return false;
+        }
+        for (const auto vertex : before.vertices)
+        {
+            if (vertex >= authored->vertices.size())
+            {
+                return false;
+            }
+            const auto a = authored->vertices[vertex];
+            const auto b = mesh.vertices[vertex];
+            if (a.x != b.x || a.y != b.y || a.z != b.z)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool Decode(const ResolvedRecord &record, navmesh::core::NavMesh &mesh, float stepHeight,
+                const navmesh::core::NavMesh *authored, std::string &stage)
     {
         stage = "record layout";
         if (!record.raw || !record.navm || !record.navm->supported || (record.raw->flags & 0x20U))
@@ -92,7 +124,8 @@ namespace
             const auto winding = (static_cast<double>(b.x) - a.x) * (static_cast<double>(c.y) - a.y) -
                                  (static_cast<double>(b.y) - a.y) * (static_cast<double>(c.x) - a.x);
             stage = std::format("live triangle {} winding", index);
-            if (!(winding > 0) || !std::isfinite(winding))
+            if (!std::isfinite(winding) || winding < 0 ||
+                (winding == 0 && !UnchangedAuthoredTriangle(mesh, index, authored)))
             {
                 return false;
             }
@@ -373,7 +406,10 @@ bool navmesh::skyrim::detail::ValidateNavigationGraph(const std::vector<Resolved
             const auto settings = generatedStepHeights.find(record.winning.formId);
             const auto stepHeight =
                 settings == generatedStepHeights.end() ? core::AuthoredBorderTolerance : settings->second;
-            if (!std::isfinite(stepHeight) || stepHeight < 0 || !Decode(record, mesh, stepHeight, stage))
+            const auto source = sourceMeshes.find(record.winning.formId);
+            const auto *authored =
+                settings == generatedStepHeights.end() && source != sourceMeshes.end() ? source->second : nullptr;
+            if (!std::isfinite(stepHeight) || stepHeight < 0 || !Decode(record, mesh, stepHeight, authored, stage))
             {
                 error = std::format("Exported NAVM {:08X} has invalid {}.", record.winning.formId, stage);
                 return false;

@@ -2038,6 +2038,7 @@ namespace
         PutGroup(cells, 0x100, 6, references);
         std::vector<std::uint8_t> plugin;
         PutRecord(plugin, "TES4", 0, {});
+        PutText(base, "FNAM", {2});
         PutRecord(plugin, "DOOR", 0x310, base);
         PutRecord(plugin, "WRLD", 0x400, {});
         PutGroup(plugin, 0x400, 1, cells);
@@ -2053,12 +2054,19 @@ namespace
             Require(cell.navMeshes.empty() && cell.references.size() == 2);
             const auto &door = cell.references.front();
             Require(door.recordType == "REFR" && door.baseRecordType == "DOOR" && door.teleportExit);
+            Require(door.automaticDoor);
             Require(door.localBounds && door.localBounds->max.y == 64);
             Require(door.teleportArrival && door.teleportArrival->x == 50 && door.teleportArrival->y == 75);
             for (const bool navigationOnly : {false, true})
             {
-                const auto geometry =
+                const auto automatic =
                     skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+                Require(automatic.scene.mesh.triangles.empty() && automatic.modelsMissing == 0);
+                Require(automatic.modelsExcluded == 2);
+                auto physical = cell;
+                physical.references.front().automaticDoor = false;
+                const auto geometry =
+                    skyrim::ExtractGeometry(root, physical, root, {}, {}, nullptr, nullptr, navigationOnly);
                 Require(geometry.scene.mesh.triangles.size() == 12 && geometry.modelsMissing == 0);
                 Require(geometry.scene.HasCompleteTriangleProvenance());
                 Require(geometry.scene.geometrySources.front().navigationObstacle);
@@ -2955,6 +2963,11 @@ int main(int argc, char **argv)
         TestTeleportEnclosure();
         TestGeneratedBatchTopology();
         TestCollisionImpactSelection();
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--desktop-options-only")
+    {
+        TestDesktopOptionsAndRecastSettings();
         return 0;
     }
     TestBorderCavityRegressions();

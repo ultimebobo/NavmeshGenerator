@@ -149,6 +149,7 @@ namespace navmesh::skyrim
     /// changing transform keys. External runtime graphs are not evaluated or assigned an inferred pose.
     /// Exterior teleport thresholds with valid bounds and reciprocal arrival metadata supply obstacle-only
     /// placed OBND volumes, separating same-space floors without reading authored NAVM or the door model.
+    /// Automatic DOOR activation volumes remain traversable and supply no threshold obstruction.
     /// Static frames and thresholds remain eligible, and exit metadata is handled by callers.
     [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path &dataDirectory, const core::Cell &cell,
                                                      const std::filesystem::path &cacheDirectory = {},

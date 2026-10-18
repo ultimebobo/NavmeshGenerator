@@ -1361,8 +1361,35 @@ class BatchRebuild(unittest.TestCase):
                 self.assertFalse((output / "generated-navmesh.esp").exists())
                 self.assertEqual(json.loads((output / "batch-report.json").read_text())["status"], "failed")
 
-    def test_make_scene_rejects_non_cell_and_partial_run_options(self):
-        for arguments in [("--rebuild-plugin", "Patch.esp"), ("--rebuild-load-order",),
+    def test_make_scene_plugin_includes_final_candidates(self):
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--make-scene",
+                              "--batch-output", "plugin_only")
+        scene, _, metadata = self.read_combined_scene(output)
+        self.assertEqual(len(metadata["selected_cells"]), 2)
+        self.assertTrue(any(mesh["name"].startswith("Candidate NAVM CELL") for mesh in scene["meshes"]))
+        self.assertTrue((output / "generated-navmesh.esp").exists())
+
+    def test_make_scene_plugin_limit_counts_skipped_cells(self):
+        (self.root / "plugins.txt").write_text("Baseline.esm\n")
+        for count in [9, 10]:
+            with self.subTest(count=count):
+                self.write_baseline(cell_count=count)
+                output = self.run_cli("--rebuild-plugin", "Baseline.esm", "--make-scene",
+                                      "--skip-existing-navmesh", output=f"scene-limit-{count}",
+                                      code=0 if count < 10 else 2)
+                report = json.loads((output / "batch-report.json").read_text())
+                self.assertEqual(report["selected_cells"], count)
+                self.assertEqual(report["completed_cells"], 0)
+                if count < 10:
+                    _, _, metadata = self.read_combined_scene(output)
+                    self.assertEqual(len(metadata["selected_cells"]), count)
+                else:
+                    self.assertIn("affected cells", report["error"])
+                    self.assertEqual(report["geometry_cells_extracted"], 0)
+                    self.assertFalse((output / "scene.glb").exists())
+
+    def test_make_scene_rejects_unsupported_scope_and_partial_run_options(self):
+        for arguments in [("--rebuild-load-order",), ("--rebuild-plugin", "Patch.esp", "--estimate-only"),
                           ("--list-cells",), ("--cells", "100,101", "--generate-candidate", "--estimate-only")]:
             with self.subTest(arguments=arguments):
                 self.run_cli(*arguments, "--make-scene", code=1)
@@ -1786,6 +1813,33 @@ class BatchRebuild(unittest.TestCase):
                 self.assertEqual(door[0], 0x800)
                 self.assertEqual([(kind, data) for kind, data in read_subrecords(door[1]) if kind != b"XNDP"],
                                  [(kind, data) for kind, data in read_subrecords(winning) if kind != b"XNDP"])
+
+    def test_automatic_teleport_trigger_retains_arrival_floor_and_door_navigation(self):
+        references = b""
+        for identity, destination, y in [(0x500, 0x501, 2048), (0x501, 0x500, 2560)]:
+            payload = (sub("NAME", struct.pack("<I", 0x600)) +
+                       sub("XTEL", struct.pack("<I6fI", destination, 2048, y, 0, 0, 0, 0, 0)) +
+                       sub("DATA", struct.pack("<6f", 2048, y, 0, 0, 0, 0)))
+            if identity == 0x500:
+                payload += sub("XNDP", struct.pack("<IHH", 0x200, 0, 0))
+            references += record("REFR", identity, payload)
+        self.write_baseline({0: navm_with_door(0, 0x500)}, {0: references}, cell_count=1)
+        baseline = self.root / "Baseline.esm"
+        base = (sub("FNAM", b"\x02") + sub("OBND", struct.pack("<6h", -900, -900, -16, 900, 900, 256)) +
+                sub("MODL", b"synthetic/automatic-trigger.nif\0"))
+        baseline.write_bytes(baseline.read_bytes() + record("DOOR", 0x600, base))
+        (self.root / "plugins.txt").write_text("Baseline.esm\n")
+        for attempt in range(2):
+            output = self.run_cli("--rebuild-plugin", "Baseline.esm", "--generate-plugin", "--make-scene",
+                                  terrain_only=False, output=f"automatic-trigger-{attempt}")
+            report = json.loads((output / "batch-report.json").read_text())
+            self.assertEqual(report["status"], "complete")
+            if attempt:
+                self.assertEqual(report["candidate_cache_hits"], 1)
+            candidate = json.loads((output / "cells/00000100/candidate-navm.json").read_text())
+            self.assertEqual(len(candidate["exits"]), 2)
+            self.assertTrue(all(exit["polygon"] is not None for exit in candidate["exits"]))
+            self.assert_door_navigation(output / "generated-navmesh.esp")
 
     def test_navigation_map_matches_final_meshes(self):
         for scope, args, filename in [

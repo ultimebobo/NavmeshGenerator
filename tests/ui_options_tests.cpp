@@ -34,9 +34,9 @@ void TestDesktopOptionsAndRecastSettings()
     draft.recastSettings.cellSize = 8;
     draft.rebuildScope = app::RebuildScope::Plugin;
     const auto plugin = ui::PrepareDesktopOptions(draft, false);
-    assert(plugin.copyPlugin && plugin.generatePlugin && plugin.generateCandidate && plugin.estimateOnly);
+    assert(plugin.copyPlugin && plugin.generatePlugin && plugin.generateCandidate && !plugin.estimateOnly);
     assert(!plugin.tagTriangles);
-    assert(!plugin.makeScene);
+    assert(plugin.makeScene);
     assert(!plugin.cellFormId && plugin.editorId.empty() && !plugin.cellX && !plugin.cellY);
     assert(plugin.plugin.empty() && !plugin.terrainOnly && !plugin.diagnostics);
     assert(plugin.modsDirectory.empty());

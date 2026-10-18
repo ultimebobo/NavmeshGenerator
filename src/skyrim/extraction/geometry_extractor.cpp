@@ -1040,8 +1040,11 @@ namespace
                                 navmesh::core::GeometrySource source, navmesh::skyrim::GeometryReferenceReport &report)
     {
         using namespace navmesh;
-        if (!reference.teleportExit || !reference.teleportArrival || !reference.localBounds ||
-            reference.baseRecordType != "DOOR" || !std::isfinite(reference.scale) || reference.scale <= 0)
+        // Automatic doors activate while traversing their bounds. Treating that trigger as solid
+        // would remove its arrival floor; surrounding static collision supplies physical barriers.
+        if (!reference.teleportExit || reference.automaticDoor || !reference.teleportArrival ||
+            !reference.localBounds || reference.baseRecordType != "DOOR" || !std::isfinite(reference.scale) ||
+            reference.scale <= 0)
         {
             return false;
         }

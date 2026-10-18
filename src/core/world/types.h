@@ -44,6 +44,8 @@ namespace navmesh::core
         bool deleted{};
         /// Winning placement has a teleport destination (XTEL), including non-physical cave exits.
         bool teleportExit{};
+        /// Base DOOR activates by entering its trigger volume; its OBND does not describe a solid threshold.
+        bool automaticDoor{};
         /// Reciprocal XTEL arrival position in this reference's Skyrim world space; absent without a live return link.
         /// Exit matching uses this standing position to select the accessible side of a teleport threshold.
         std::optional<Vec3> teleportArrival;

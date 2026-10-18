@@ -162,6 +162,9 @@ Read-back checks geometry, cover and grid indices, reciprocal portals and both
 directions of door associations against unchanged input destinations as well as
 emitted records. Untouched authored portal offsets retain their original relationship
 and endpoint coordinates; new or moved edges must agree with their reciprocal edge.
+Connection-only overrides can retain authored triangles with zero horizontal area
+at unchanged indices and exact coordinates; generated or edited live triangles
+must have positive horizontal winding.
 This verifies the exported record graph; runtime movement and
 AI behavior still require game testing. The layouts follow
 [xEdit's Skyrim record definitions](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsTES5.pas).

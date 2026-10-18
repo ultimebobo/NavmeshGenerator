@@ -74,6 +74,7 @@ namespace
         std::string editorId;
         std::string modelPath;
         std::optional<navmesh::core::AABB> localBounds;
+        bool automaticDoor{};
     };
 
     struct ParsedReference
@@ -434,6 +435,10 @@ namespace navmesh::skyrim
                             {
                                 record.modelPath = TrimNulls(ReadAscii(*payload, subDataStart, subSize));
                             }
+                            else if (record.type == "DOOR" && subType == "FNAM" && subSize >= 1)
+                            {
+                                record.automaticDoor = ((*payload)[subDataStart] & (1U << 1)) != 0;
+                            }
                             else if (subType == "OBND" && subSize == 12)
                             {
                                 std::array<std::int16_t, 6> values;
@@ -485,6 +490,7 @@ namespace navmesh::skyrim
                     parsed.reference.editorId = base->second.editorId;
                     parsed.reference.modelPath = base->second.modelPath;
                     parsed.reference.localBounds = base->second.localBounds;
+                    parsed.reference.automaticDoor = base->second.automaticDoor;
                 }
                 const auto partner = teleportReferences.find(parsed.teleportDestinationId);
                 if (partner != teleportReferences.end() &&

@@ -87,6 +87,8 @@ namespace navmesh::skyrim
         std::optional<float> modelRadius;
         /// Base-object bounds in model-local Skyrim units; absent without a valid three-dimensional OBND.
         std::optional<core::AABB> localBounds;
+        /// Base DOOR FNAM automatic flag; its bounds describe a traversable activation volume.
+        bool automaticDoor{};
         /// Resolved XTEL destination reference; absent without a supported teleport subrecord.
         std::optional<std::uint32_t> teleportDestinationId;
         /// XTEL standing position in the destination's Skyrim world space; absent for invalid coordinates.
@@ -249,7 +251,7 @@ namespace navmesh::skyrim
     /// @return Winning records, cells, and explicit diagnostics for unsupported input.
     /// File-local master indices at or beyond the master count name the containing plugin;
     /// null references remain null. Missing-master diagnostics identify hexadecimal source-local IDs.
-    /// References include valid model-local base bounds and reciprocal teleport arrival positions;
+    /// References include valid model-local base bounds, automatic DOOR state and reciprocal teleport arrival positions;
     /// Missing or deleted return links supply no arrival anchor; initially disabled quest doors retain theirs.
     /// Partial CELL/WRLD declarations retain their full parent's coordinates and environment data.
     [[nodiscard]] ResolvedLoadOrder ResolveLoadOrder(const LoadOrderInput &input,

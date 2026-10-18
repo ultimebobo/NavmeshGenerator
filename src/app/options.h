@@ -12,6 +12,9 @@
 
 namespace navmesh::app
 {
+    /// Maximum affected selection size for a combined Plugin-scope inspection scene, including skipped cells.
+    inline constexpr std::size_t MaximumPluginSceneCells = 9;
+
     /// Desktop input source; MO2 is selected when no preference has been saved.
     enum class ModManager
     {
@@ -50,7 +53,8 @@ namespace navmesh::app
         /// Explicit resolved CELL Form IDs or editor IDs, separated by whitespace, commas or semicolons.
         /// Used in Cell scope; each identifier must resolve uniquely before processing.
         std::string cellSelection;
-        /// Write one inspection scene for the Cell selection, including finalized generated candidates.
+        /// Write one inspection scene for a Cell selection or a Plugin selection within MaximumPluginSceneCells,
+        /// including finalized generated candidates. Plugin limits apply before skips or estimation.
         /// Independent interiors/worldspaces retain their native coordinates and may overlap.
         bool makeScene{};
         /// Active plugin filename to copy when copyPlugin is enabled in Cell scope.

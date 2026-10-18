@@ -84,7 +84,7 @@ plugin-only output policy is available when batch writing or estimation is
 selected. Settings retain their saved values when hidden, but inactive selectors
 and dependent flags are cleared before invoking `app::Run`.
 
-In **Cell** scope, enable **Make scene** to write one `scene.glb` for the complete
+In **Cell** scope or a small **Plugin** selection, enable **Make scene** to write one `scene.glb` for the complete
 selection. It combines terrain, collision, display models, authored NAVMs and any
 finalized generated NAVMs, with shared neighborhood geometry emitted once. It
 works during inspection, candidate generation and plugin-copy exports, independently

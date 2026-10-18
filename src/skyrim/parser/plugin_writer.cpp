@@ -549,7 +549,10 @@ namespace
             {
                 if (!record.raw || (!(record.raw->flags & 0x20U) && !doorAssignments.contains(record.formId)))
                 {
-                    return fail("A door linked to replaced navigation has no reachable generated triangle.");
+                    error =
+                        std::format("Door {:08X} linked to replaced NAVM {:08X} has no reachable generated triangle.",
+                                    record.formId, record.navmeshDoor->navmeshId);
+                    return false;
                 }
                 doorReferences.emplace(record.formId, &record);
             }
@@ -564,7 +567,10 @@ namespace
                     if (replacedMeshes.contains(mesh.id) && reference && reference->raw &&
                         !(reference->raw->flags & 0x20U) && !doorAssignments.contains(door.referenceId))
                     {
-                        return fail("An authored door portal has no reachable generated triangle.");
+                        error = std::format(
+                            "Authored door {:08X} on replaced NAVM {:08X} has no reachable generated triangle.",
+                            door.referenceId, mesh.id);
+                        return false;
                     }
                     if (!replacedMeshes.contains(mesh.id) && doorAssignments.contains(door.referenceId))
                     {

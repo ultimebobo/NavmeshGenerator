@@ -726,12 +726,22 @@ namespace
         const bool batchGeneration = navmesh::app::UsesBatchGeneration(options);
         BeginCard("output", "OUTPUT", "Reports and exports are saved under this folder.");
         TextField(workspace, window, "output", "Output folder", "Folder for this run's results", true);
-        if (cellScope)
+        if (copyAllowed)
         {
             ImGui::Checkbox("Make scene", &options.makeScene);
             Help("Write scene.glb for all selected cells, with terrain, models and NAVMs. Generated NAVMs are "
                  "included when enabled. Cells keep their native coordinates; separate interiors or worldspaces "
                  "can overlap.");
+            if (!cellScope)
+            {
+                Help(std::format("Plugin scenes support at most {} affected cells, including skipped cells. "
+                                 "Larger selections require Cell scope.",
+                                 navmesh::app::MaximumPluginSceneCells)
+                         .c_str());
+            }
+        }
+        if (cellScope)
+        {
             bool candidate = options.generateCandidate || options.generatePlugin || options.copyPlugin;
             ImGui::BeginDisabled(options.generatePlugin || options.copyPlugin);
             if (ImGui::Checkbox("Generate candidate NAVM", &candidate))
@@ -769,7 +779,7 @@ namespace
         }
         if (batchGeneration)
         {
-            ImGui::BeginDisabled(cellScope && options.makeScene);
+            ImGui::BeginDisabled(copyAllowed && options.makeScene);
             ImGui::Checkbox("Estimate batch cost", &options.estimateOnly);
             ImGui::EndDisabled();
             Help("Sample eligible targets, cache the work and write a cost report before a full rebuild.");

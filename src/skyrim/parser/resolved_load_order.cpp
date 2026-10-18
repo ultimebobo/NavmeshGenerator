@@ -922,6 +922,10 @@ namespace navmesh::skyrim
                                 }
                             }
                         }
+                        if (record.type == "DOOR" && sub.type == "FNAM" && !sub.data.empty())
+                        {
+                            record.winning.automaticDoor = (sub.data[0] & (1U << 1)) != 0;
+                        }
                         if (sub.type == "OBND" && sub.data.size() == 12)
                         {
                             std::array<std::int16_t, 6> bounds{};
@@ -1177,6 +1181,7 @@ namespace navmesh::skyrim
                 reference.basePlugin = base->winning.plugin;
                 reference.baseRecordType = base->type;
                 reference.localBounds = base->winning.localBounds;
+                reference.automaticDoor = base->winning.automaticDoor;
             }
             if (record.winning.teleportDestinationId)
             {

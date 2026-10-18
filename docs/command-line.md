@@ -139,7 +139,7 @@ identifiers fail selection before processing. Single-cell selectors,
 with `--cells`. Batch skip, estimation, output and resource settings apply to
 multi-cell generation and copy exports.
 
-Add `--make-scene` to a Cell-mode command to write one combined `<output>/scene.glb`
+Add `--make-scene` to a Cell-mode or small Plugin-scope command to write one combined `<output>/scene.glb`
 with adjacent provenance and metadata JSON. It works with `--cells`, single-cell
 selectors, candidate generation and plugin copies, including `plugin_only` output.
 Generated meshes use their finalized seams, and shared source geometry is included
@@ -149,7 +149,8 @@ once. For example:
 NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --cells "<cell identifiers>" --make-scene --output "<output folder>"
 ```
 
-This flag does not enable generation. It requires Cell scope and cannot combine
+This flag does not enable generation. It accepts Cell scope or Plugin selections
+within the [batch scene limit](batch-rebuilding.md) and cannot combine
 listing or cost estimation. Single-cell inspection emits its standard scene
 automatically. Independent interiors/worldspaces keep native coordinates and can
 overlap in the scene. Layer and provenance detail selections apply to the combined

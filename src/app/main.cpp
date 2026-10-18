@@ -177,9 +177,10 @@ namespace
         }
         const bool batchGeneration = UsesBatchGeneration(options);
         if (options.makeScene &&
-            (options.rebuildScope != RebuildScope::Cell || options.listCells || options.estimateOnly))
+            (options.rebuildScope == RebuildScope::LoadOrder || options.listCells || options.estimateOnly))
         {
-            std::cerr << "--make-scene requires Cell scope and cannot combine listing or cost estimation.\n";
+            std::cerr
+                << "--make-scene requires Cell or small Plugin scope and cannot combine listing or cost estimation.\n";
             return 1;
         }
         if (options.rebuildScope != RebuildScope::Cell)

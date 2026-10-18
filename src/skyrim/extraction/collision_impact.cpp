@@ -351,6 +351,7 @@ namespace navmesh::skyrim
                             reference.basePlugin = version->plugin;
                             reference.deleted = reference.deleted || version->deleted;
                             reference.localBounds = version->localBounds;
+                            reference.automaticDoor = version->automaticDoor;
                         }
                     }
                 }

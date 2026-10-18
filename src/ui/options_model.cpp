@@ -100,6 +100,9 @@ namespace navmesh::ui
         if (listOnly || !cellScope)
         {
             result.cellSelection.clear();
+        }
+        if (listOnly || result.rebuildScope == app::RebuildScope::LoadOrder)
+        {
             result.makeScene = false;
         }
         if (listOnly || result.rebuildScope != app::RebuildScope::Plugin)
