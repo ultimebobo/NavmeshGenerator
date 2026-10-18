@@ -237,35 +237,47 @@ namespace
         return result;
     }
 
-    [[nodiscard]] navmesh::core::Vec3 ApplyRigidBodyTransform(const nifly::bhkRigidBody &body,
-                                                              const nifly::Vector3 &vertex)
+    /// Shape wrappers use Havok units; the collision target and its ancestors use NIF/Skyrim units.
+    struct CollisionTransform
     {
-        // Havok stores rigid-body rotation as xyzw quaternion and translation
-        // separately, in Havok units. Convert the complete rigid-body result
-        // to Skyrim units before applying the reference transform. Without
-        // this, collision shrinks to roughly 1/70 of the render geometry.
-        constexpr float skyrimUnitsPerHavokUnit = 69.99125F;
-        const auto &q = body.rotation;
+        nifly::Matrix4 shape;
+        const nifly::bhkRigidBody *body{};
+        nifly::Matrix4 target;
+    };
+
+    /// Rotate an xyzw quaternion and translate without changing the input coordinate units.
+    [[nodiscard]] nifly::Vector3 ApplyHavokTransform(const nifly::QuaternionXYZW &q, const nifly::Vector4 &translation,
+                                                     const nifly::Vector3 &vertex)
+    {
         const float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
         const float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z, wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
-        return {((1 - 2 * (yy + zz)) * vertex.x + 2 * (xy - wz) * vertex.y + 2 * (xz + wy) * vertex.z +
-                 body.translation.x) *
-                    skyrimUnitsPerHavokUnit,
-                (2 * (xy + wz) * vertex.x + (1 - 2 * (xx + zz)) * vertex.y + 2 * (yz - wx) * vertex.z +
-                 body.translation.y) *
-                    skyrimUnitsPerHavokUnit,
-                (2 * (xz - wy) * vertex.x + 2 * (yz + wx) * vertex.y + (1 - 2 * (xx + yy)) * vertex.z +
-                 body.translation.z) *
-                    skyrimUnitsPerHavokUnit};
+        return {((1 - 2 * (yy + zz)) * vertex.x + 2 * (xy - wz) * vertex.y + 2 * (xz + wy) * vertex.z + translation.x),
+                (2 * (xy + wz) * vertex.x + (1 - 2 * (xx + zz)) * vertex.y + 2 * (yz - wx) * vertex.z + translation.y),
+                (2 * (xz - wy) * vertex.x + 2 * (yz + wx) * vertex.y + (1 - 2 * (xx + yy)) * vertex.z + translation.z)};
     }
-    void AddPackedTriangles(const nifly::hkPackedNiTriStripsData &data, const nifly::bhkRigidBody &body,
+
+    /// Resolve shape -> body -> collision target in model coordinates; placed-reference transforms follow later.
+    [[nodiscard]] navmesh::core::Vec3 ApplyCollisionTransform(const CollisionTransform &transform,
+                                                              const nifly::Vector3 &vertex)
+    {
+        constexpr float skyrimUnitsPerHavokUnit = 69.99125F;
+        auto position = transform.shape * vertex;
+        // Only the T body activates its stored translation and rotation.
+        if (dynamic_cast<const nifly::bhkRigidBodyT *>(transform.body))
+        {
+            position = ApplyHavokTransform(transform.body->rotation, transform.body->translation, position);
+        }
+        position = transform.target * (position * skyrimUnitsPerHavokUnit);
+        return {position.x, position.y, position.z};
+    }
+    void AddPackedTriangles(const nifly::hkPackedNiTriStripsData &data, const CollisionTransform &transform,
                             TriangleGeometry &result)
     {
         const auto base = static_cast<std::uint32_t>(result.vertices.size());
         result.vertices.reserve(result.vertices.size() + data.compressedVertData.size());
         for (const auto &vertex : data.compressedVertData)
         {
-            result.vertices.push_back(ApplyRigidBodyTransform(body, vertex));
+            result.vertices.push_back(ApplyCollisionTransform(transform, vertex));
         }
         const auto &triangles = data.triData;
         for (const auto &triangle : triangles)
@@ -286,7 +298,7 @@ namespace
         }
     }
 
-    void AddNiTriStripsTriangles(const nifly::NiTriStripsData &data, const nifly::bhkRigidBody &body,
+    void AddNiTriStripsTriangles(const nifly::NiTriStripsData &data, const CollisionTransform &transform,
                                  TriangleGeometry &result)
     {
         std::vector<nifly::Triangle> triangles;
@@ -298,7 +310,7 @@ namespace
         result.vertices.reserve(result.vertices.size() + data.vertices.size());
         for (const auto &vertex : data.vertices)
         {
-            result.vertices.push_back(ApplyRigidBodyTransform(body, vertex));
+            result.vertices.push_back(ApplyCollisionTransform(transform, vertex));
         }
         for (const auto &triangle : triangles)
         {
@@ -317,7 +329,7 @@ namespace
         }
     }
 
-    void AddCompressedBigTriangles(const nifly::bhkCompressedMeshShapeData &data, const nifly::bhkRigidBody &body,
+    void AddCompressedBigTriangles(const nifly::bhkCompressedMeshShapeData &data, const CollisionTransform &transform,
                                    TriangleGeometry &result)
     {
         // "Big" vertices are already stored as floating-point coordinates.
@@ -328,7 +340,7 @@ namespace
         result.vertices.reserve(result.vertices.size() + data.bigVerts.size());
         for (auto vertex = data.bigVerts.cbegin(); vertex != data.bigVerts.cend(); ++vertex)
         {
-            result.vertices.push_back(ApplyRigidBodyTransform(body, {vertex->x, vertex->y, vertex->z}));
+            result.vertices.push_back(ApplyCollisionTransform(transform, {vertex->x, vertex->y, vertex->z}));
         }
         for (auto triangle = data.bigTris.cbegin(); triangle != data.bigTris.cend(); ++triangle)
         {
@@ -349,11 +361,18 @@ namespace
         }
     }
 
-    void AddCompressedChunkTriangles(const nifly::bhkCompressedMeshShapeData &data, const nifly::bhkRigidBody &body,
+    void AddCompressedChunkTriangles(const nifly::bhkCompressedMeshShapeData &data, const CollisionTransform &transform,
                                      TriangleGeometry &result)
     {
         for (auto chunk = data.chunks.cbegin(); chunk != data.chunks.cend(); ++chunk)
         {
+            // Each chunk indexes its own Havok-space rotation/translation after vertex dequantization.
+            if (chunk->transformIndex >= data.transforms.size())
+            {
+                ++result.invalidIndices;
+                continue;
+            }
+            const auto &chunkTransform = *(data.transforms.cbegin() + chunk->transformIndex);
             // Chunk::verts is a flat [x, y, z] u16 component array.  Each
             // component is quantized using the mesh-wide error term around
             // this chunk's local translation.  Indices address the resulting
@@ -366,7 +385,8 @@ namespace
                 const nifly::Vector3 position{chunk->translation.x + static_cast<float>(*component++) * data.error,
                                               chunk->translation.y + static_cast<float>(*component++) * data.error,
                                               chunk->translation.z + static_cast<float>(*component++) * data.error};
-                result.vertices.push_back(ApplyRigidBodyTransform(body, position));
+                result.vertices.push_back(ApplyCollisionTransform(
+                    transform, ApplyHavokTransform(chunkTransform.rotation, chunkTransform.translation, position)));
             }
 
             std::vector<std::uint16_t> indices;
@@ -418,14 +438,9 @@ namespace
 
     /// Decode the closed vertex hull in Havok units before applying rigid-body and placed-reference transforms.
     /// Degenerate or nonfinite hulls supply no partial collision; the render mesh remains diagnostic fallback.
-    void AddConvexTriangles(const nifly::bhkConvexVerticesShape &shape, const nifly::bhkRigidBody &body,
-                            TriangleGeometry &result)
+    void AddHullTriangles(const std::vector<navmesh::core::Vec3> &vertices, const CollisionTransform &transform,
+                          const std::string &shapeName, TriangleGeometry &result)
     {
-        std::vector<navmesh::core::Vec3> vertices;
-        for (auto vertex = shape.verts.cbegin(); vertex != shape.verts.cend(); ++vertex)
-        {
-            vertices.push_back({vertex->x, vertex->y, vertex->z});
-        }
         const auto triangles = navmesh::core::TriangulateConvexHull(vertices);
         if (!triangles)
         {
@@ -434,7 +449,7 @@ namespace
         const auto base = static_cast<std::uint32_t>(result.vertices.size());
         for (const auto &vertex : vertices)
         {
-            result.vertices.push_back(ApplyRigidBodyTransform(body, {vertex.x, vertex.y, vertex.z}));
+            result.vertices.push_back(ApplyCollisionTransform(transform, {vertex.x, vertex.y, vertex.z}));
         }
         for (auto triangle : *triangles)
         {
@@ -444,7 +459,91 @@ namespace
             }
             result.triangles.push_back(triangle);
         }
-        result.shapes.push_back("bhkConvexVerticesShape");
+        result.shapes.push_back(shapeName);
+    }
+
+    void AddConvexTriangles(const nifly::bhkConvexVerticesShape &shape, const CollisionTransform &transform,
+                            TriangleGeometry &result)
+    {
+        std::vector<navmesh::core::Vec3> vertices;
+        for (auto vertex = shape.verts.cbegin(); vertex != shape.verts.cend(); ++vertex)
+        {
+            vertices.push_back({vertex->x, vertex->y, vertex->z});
+        }
+        AddHullTriangles(vertices, transform, "bhkConvexVerticesShape", result);
+    }
+
+    /// Box dimensions are half extents in Havok units; skin radii do not expand the explicit faces.
+    void AddBoxTriangles(const nifly::bhkBoxShape &shape, const CollisionTransform &transform, TriangleGeometry &result)
+    {
+        const auto &extent = shape.dimensions;
+        if (!std::isfinite(extent.x) || !std::isfinite(extent.y) || !std::isfinite(extent.z) || extent.x <= 0 ||
+            extent.y <= 0 || extent.z <= 0)
+        {
+            return;
+        }
+        std::vector<navmesh::core::Vec3> vertices;
+        for (const float x : {-extent.x, extent.x})
+        {
+            for (const float y : {-extent.y, extent.y})
+            {
+                for (const float z : {-extent.z, extent.z})
+                {
+                    vertices.push_back({x, y, z});
+                }
+            }
+        }
+        AddHullTriangles(vertices, transform, "bhkBoxShape", result);
+    }
+
+    /// Tessellate the capsule's cylindrical side and hemispherical ends in its arbitrary local axis.
+    /// A closed hull removes coincident equators for zero-length capsules and supplies outward winding.
+    void AddCapsuleTriangles(const nifly::bhkCapsuleShape &shape, const CollisionTransform &transform,
+                             TriangleGeometry &result)
+    {
+        const auto &first = shape.point1;
+        const auto &second = shape.point2;
+        const float radius = shape.radius;
+        if (!std::isfinite(radius) || radius <= 0 || !std::isfinite(first.x) || !std::isfinite(first.y) ||
+            !std::isfinite(first.z) || !std::isfinite(second.x) || !std::isfinite(second.y) || !std::isfinite(second.z))
+        {
+            return;
+        }
+        auto axis = second - first;
+        const float length = axis.length();
+        if (!std::isfinite(length))
+        {
+            return;
+        }
+        axis = length > 0 ? axis / length : nifly::Vector3{0, 0, 1};
+        auto radial = std::abs(axis.z) < 0.9F ? nifly::Vector3{axis.y, -axis.x, 0} : nifly::Vector3{-axis.z, 0, axis.x};
+        radial.Normalize();
+        const nifly::Vector3 tangent{axis.y * radial.z - axis.z * radial.y, axis.z * radial.x - axis.x * radial.z,
+                                     axis.x * radial.y - axis.y * radial.x};
+        constexpr unsigned sectors = 16;
+        constexpr unsigned hemisphereSteps = 4;
+        constexpr float pi = 3.14159265358979323846F;
+        std::vector<navmesh::core::Vec3> vertices;
+        for (unsigned end = 0; end < 2; ++end)
+        {
+            const auto center = end == 0 ? first : second;
+            const float direction = end == 0 ? -1.0F : 1.0F;
+            const auto pole = center + axis * (direction * radius);
+            vertices.push_back({pole.x, pole.y, pole.z});
+            for (unsigned step = 0; step < hemisphereSteps; ++step)
+            {
+                const float latitude = static_cast<float>(step) * pi / (2 * hemisphereSteps);
+                for (unsigned sector = 0; sector < sectors; ++sector)
+                {
+                    const float angle = static_cast<float>(sector) * 2 * pi / sectors;
+                    const auto position =
+                        center + axis * (direction * radius * std::sin(latitude)) +
+                        (radial * std::cos(angle) + tangent * std::sin(angle)) * (radius * std::cos(latitude));
+                    vertices.push_back({position.x, position.y, position.z});
+                }
+            }
+        }
+        AddHullTriangles(vertices, transform, "bhkCapsuleShape", result);
     }
 
     /// Skyrim's nonphysical layers describe queries or event volumes, even when their bodies have contact response.
@@ -516,97 +615,102 @@ namespace
         }
     }
 
-    // Follow reachable triangle meshes and convex vertex hulls through supported shape wrappers.
-    // Unsupported primitives remain diagnostic fallback rather than decorative render collision.
+    /// Decode each reachable shape placement. The active path prevents cycles without discarding shared instances.
     void LoadPackedCollision(const nifly::NifFile &nif, TriangleGeometry &result, std::vector<std::string> &shapeTypes,
                              bool &nonSolidCollision)
     {
         const auto &header = nif.GetHeader();
-        std::unordered_set<std::uint32_t> reachablePacked;
-        std::function<void(nifly::bhkShape *, const nifly::bhkRigidBody &)> visit =
-            [&](nifly::bhkShape *shape, const nifly::bhkRigidBody &body)
+        std::function<void(nifly::bhkShape *, CollisionTransform, std::vector<std::uint32_t>)> visit =
+            [&](nifly::bhkShape *shape, CollisionTransform transform, std::vector<std::uint32_t> path)
         {
             if (!shape)
             {
                 return;
             }
+            const auto id = header.GetBlockID(shape);
+            if (std::find(path.begin(), path.end(), id) != path.end())
+            {
+                return;
+            }
+            path.push_back(id);
             const std::string shapeName = shape->GetBlockName();
             if (std::find(shapeTypes.begin(), shapeTypes.end(), shapeName) == shapeTypes.end())
             {
                 shapeTypes.push_back(shapeName);
             }
-            if (auto *mopp = dynamic_cast<nifly::bhkMoppBvTreeShape *>(shape))
+            if (auto *wrapper = dynamic_cast<nifly::bhkTransformShape *>(shape))
             {
-                visit(header.GetBlock(mopp->shapeRef), body);
-                return;
+                // NIF stores this Havok matrix column-major; Nifly's arithmetic uses row-major matrices.
+                nifly::Matrix4 local;
+                for (int row = 0; row < 4; ++row)
+                {
+                    for (int column = 0; column < 4; ++column)
+                    {
+                        local[row * 4 + column] = wrapper->xform[column * 4 + row];
+                    }
+                }
+                transform.shape = transform.shape * local;
+                visit(header.GetBlock(wrapper->shapeRef), transform, path);
             }
-            if (auto *list = dynamic_cast<nifly::bhkListShape *>(shape))
+            else if (auto *mopp = dynamic_cast<nifly::bhkMoppBvTreeShape *>(shape))
+            {
+                visit(header.GetBlock(mopp->shapeRef), transform, path);
+            }
+            else if (auto *list = dynamic_cast<nifly::bhkListShape *>(shape))
             {
                 for (const auto &child : list->subShapeRefs)
                 {
-                    visit(header.GetBlock(child), body);
+                    visit(header.GetBlock(child), transform, path);
                 }
-                return;
             }
-            if (auto *convexList = dynamic_cast<nifly::bhkConvexListShape *>(shape))
+            else if (auto *convexList = dynamic_cast<nifly::bhkConvexListShape *>(shape))
             {
                 for (const auto &child : convexList->shapeRefs)
                 {
-                    visit(header.GetBlock(child), body);
+                    visit(header.GetBlock(child), transform, path);
                 }
-                return;
             }
-            if (auto *convex = dynamic_cast<nifly::bhkConvexVerticesShape *>(shape))
+            else if (auto *capsule = dynamic_cast<nifly::bhkCapsuleShape *>(shape))
             {
-                if (reachablePacked.insert(header.GetBlockID(convex)).second)
+                AddCapsuleTriangles(*capsule, transform, result);
+            }
+            else if (auto *box = dynamic_cast<nifly::bhkBoxShape *>(shape))
+            {
+                AddBoxTriangles(*box, transform, result);
+            }
+            else if (auto *convex = dynamic_cast<nifly::bhkConvexVerticesShape *>(shape))
+            {
+                AddConvexTriangles(*convex, transform, result);
+            }
+            else if (auto *packed = dynamic_cast<nifly::bhkPackedNiTriStripsShape *>(shape))
+            {
+                if (const auto *data = header.GetBlock(packed->dataRef))
                 {
-                    AddConvexTriangles(*convex, body, result);
+                    AddPackedTriangles(*data, transform, result);
+                    result.shapes.push_back("hkPackedNiTriStripsData");
                 }
-                return;
             }
-            if (auto *packed = dynamic_cast<nifly::bhkPackedNiTriStripsShape *>(shape))
+            else if (auto *triStrips = dynamic_cast<nifly::bhkNiTriStripsShape *>(shape))
             {
-                const auto id = header.GetBlockID(packed);
-                if (reachablePacked.insert(id).second)
+                for (const auto &part : triStrips->partRefs)
                 {
-                    if (const auto *data = header.GetBlock(packed->dataRef))
+                    if (const auto *data = header.GetBlock(part))
                     {
-                        AddPackedTriangles(*data, body, result);
-                        result.shapes.push_back("hkPackedNiTriStripsData");
+                        AddNiTriStripsTriangles(*data, transform, result);
+                        result.shapes.push_back("NiTriStripsData");
                     }
                 }
-                return;
             }
-            if (auto *triStrips = dynamic_cast<nifly::bhkNiTriStripsShape *>(shape))
+            else if (auto *compressed = dynamic_cast<nifly::bhkCompressedMeshShape *>(shape))
             {
-                const auto id = header.GetBlockID(triStrips);
-                if (reachablePacked.insert(id).second)
+                if (const auto *data = header.GetBlock(compressed->dataRef))
                 {
-                    for (const auto &part : triStrips->partRefs)
+                    const auto trianglesBefore = result.triangles.size();
+                    AddCompressedBigTriangles(*data, transform, result);
+                    AddCompressedChunkTriangles(*data, transform, result);
+                    if (result.triangles.size() > trianglesBefore)
                     {
-                        if (const auto *data = header.GetBlock(part))
-                        {
-                            AddNiTriStripsTriangles(*data, body, result);
-                            result.shapes.push_back("NiTriStripsData");
-                        }
-                    }
-                }
-                return;
-            }
-            if (auto *compressed = dynamic_cast<nifly::bhkCompressedMeshShape *>(shape))
-            {
-                const auto id = header.GetBlockID(compressed);
-                if (reachablePacked.insert(id).second)
-                {
-                    if (const auto *data = header.GetBlock(compressed->dataRef))
-                    {
-                        const auto trianglesBefore = result.triangles.size();
-                        AddCompressedBigTriangles(*data, body, result);
-                        AddCompressedChunkTriangles(*data, body, result);
-                        if (result.triangles.size() > trianglesBefore)
-                        {
-                            result.shapes.push_back("bhkCompressedMeshShape");
-                        }
+                        result.shapes.push_back("bhkCompressedMeshShape");
                     }
                 }
             }
@@ -620,15 +724,30 @@ namespace
             }
             const auto *body =
                 dynamic_cast<nifly::bhkRigidBody *>(header.GetBlock<nifly::NiObject>(collision->bodyRef));
-            if (body && !HasSolidNavigationCollision(*body, header.GetVersion()))
+            if (!body)
+            {
+                continue;
+            }
+            if (!HasSolidNavigationCollision(*body, header.GetVersion()))
             {
                 nonSolidCollision = true;
                 continue;
             }
-            if (body)
+            // Collision follows the target's complete node hierarchy, including unnamed and duplicate-named nodes.
+            CollisionTransform transform{.body = body};
+            auto *target = header.GetBlock(collision->targetRef);
+            std::unordered_set<const nifly::NiAVObject *> ancestors;
+            while (target && ancestors.insert(target).second)
             {
-                visit(header.GetBlock(body->shapeRef), *body);
+                auto local = target->transform.ToMatrix();
+                transform.target = local * transform.target;
+                target = nif.GetParentNode(target);
             }
+            if (target)
+            {
+                continue;
+            }
+            visit(header.GetBlock(body->shapeRef), transform, {});
         }
     }
 

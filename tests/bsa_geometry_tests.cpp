@@ -236,6 +236,172 @@ namespace
         assert(nif.Save(path) == 0);
     }
 
+    /// Attach a physical shape to a target node; stored transforms on non-T bodies are deliberately inactive.
+    void AttachCollision(nifly::NifFile &nif, nifly::NiNode *target, std::uint32_t shape, bool transformed = false,
+                         bool solid = true)
+    {
+        std::unique_ptr<nifly::bhkRigidBody> body =
+            transformed ? std::make_unique<nifly::bhkRigidBodyT>() : std::make_unique<nifly::bhkRigidBody>();
+        body->shapeRef.index = shape;
+        body->translation = {91, 72, 53, 0};
+        body->rotation = {0, 0, 1, 0};
+        body->collisionResponse = solid ? nifly::RESPONSE_SIMPLE_CONTACT : nifly::RESPONSE_NONE;
+        auto object = std::make_unique<nifly::bhkCollisionObject>();
+        object->bodyRef.index = nif.GetHeader().AddBlock(std::move(body));
+        object->targetRef.index = nif.GetBlockID(target);
+        target->collisionRef.index = nif.GetHeader().AddBlock(std::move(object));
+    }
+
+    void CheckCollisionShapes(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        constexpr float units = 69.99125F;
+        WriteCollisionModel(root / "meshes/shape-floor.nif", 768, 0);
+        for (const float radius : {64.0F / units, 0.0F, -1.0F, std::numeric_limits<float>::quiet_NaN()})
+        {
+            for (const bool solid : {true, false})
+            {
+                nifly::NifFile nif;
+                nif.Create({nifly::V20_2_0_7, 12, 130});
+                auto capsule = std::make_unique<nifly::bhkCapsuleShape>();
+                capsule->point1 = {0, 0, 0};
+                capsule->point2 = {4, 0, 0};
+                capsule->radius = radius;
+                capsule->radius1 = radius;
+                capsule->radius2 = radius;
+                // A node rotates the Havok X-axis into model Z, as in tree skeleton collision.
+                auto *target = nif.GetRootNode();
+                target->transform.rotation[0] = {0, 0, -1};
+                target->transform.rotation[1] = {0, 1, 0};
+                target->transform.rotation[2] = {1, 0, 0};
+                AttachCollision(nif, target, nif.GetHeader().AddBlock(std::move(capsule)), false, solid);
+                assert(nif.Save(root / "meshes/capsule.nif") == 0);
+                core::Cell cell;
+                cell.references = {
+                    {.id = 1, .recordType = "REFR", .modelPath = "shape-floor.nif", .baseRecordType = "STAT"},
+                    {.id = 2, .recordType = "REFR", .modelPath = "capsule.nif", .baseRecordType = "TREE"}};
+                for (const bool navigationOnly : {false, true})
+                {
+                    const auto geometry =
+                        skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+                    const bool valid = solid && radius > 0 && std::isfinite(radius);
+                    assert(geometry.collisionModelsLoaded == (valid ? 2 : 1));
+                    if (!valid)
+                    {
+                        continue;
+                    }
+                    assert(geometry.references[1].collisionType == "bhkCapsuleShape");
+                    core::AABB bounds;
+                    const auto &report = geometry.references[1];
+                    for (std::size_t i = report.meshVertexOffset; i < report.meshVertexOffset + report.vertices; ++i)
+                    {
+                        bounds.Expand(geometry.scene.mesh.vertices[i]);
+                    }
+                    assert(std::abs(bounds.min.x + 64) < 0.01F && std::abs(bounds.max.x - 64) < 0.01F);
+                    assert(std::abs(bounds.min.z + 64) < 0.01F && std::abs(bounds.max.z - (4 * units + 64)) < 0.01F);
+                    for (const auto partitioning :
+                         {core::RegionPartitioningAlgorithm::Watershed, core::RegionPartitioningAlgorithm::Monotone,
+                          core::RegionPartitioningAlgorithm::Layers})
+                    {
+                        const auto candidate = core::RecastCandidateGenerator{}.Generate(
+                            geometry.scene, {}, std::nullopt, {}, partitioning, {},
+                            core::CandidateRetention::AllWalkable);
+                        assert(candidate.topology.valid);
+                        assert(!HasNavigationAt(candidate, {0, 0, 0}));
+                        assert(HasNavigationAt(candidate, {256, 0, 0}));
+                    }
+                }
+            }
+        }
+
+        // A shared box under two wrappers must appear at both placements, after target ancestry and reference rotation.
+        nifly::NifFile nif;
+        nif.Create({nifly::V20_2_0_7, 12, 130});
+        nif.GetRootNode()->transform.translation = {100, 200, 0};
+        nif.GetRootNode()->transform.scale = 2;
+        nifly::MatTransform nodeTransform;
+        nodeTransform.Clear();
+        nodeTransform.translation = {32, 16, 0};
+        nodeTransform.rotation[0] = {0, -1, 0};
+        nodeTransform.rotation[1] = {1, 0, 0};
+        auto *target = nif.AddNode("CollisionTarget", nodeTransform, nif.GetRootNode());
+        auto box = std::make_unique<nifly::bhkBoxShape>();
+        box->dimensions = {32 / units, 16 / units, 64 / units};
+        const auto boxId = nif.GetHeader().AddBlock(std::move(box));
+        auto list = std::make_unique<nifly::bhkListShape>();
+        for (const float translation : {100.0F, -100.0F})
+        {
+            auto wrapper = std::make_unique<nifly::bhkConvexTransformShape>();
+            wrapper->shapeRef.index = boxId;
+            wrapper->xform[12] = translation / units;
+            list->subShapeRefs.AddBlockRef(nif.GetHeader().AddBlock(std::move(wrapper)));
+        }
+        AttachCollision(nif, target, nif.GetHeader().AddBlock(std::move(list)));
+        assert(nif.Save(root / "meshes/instanced-box.nif") == 0);
+        core::Cell cell;
+        cell.references = {{.id = 1,
+                            .recordType = "REFR",
+                            .modelPath = "instanced-box.nif",
+                            .position = {1000, 2000, 300},
+                            .rotation = {0, 0, 1.57079632679F},
+                            .scale = 0.5F,
+                            .baseRecordType = "STAT"}};
+        for (const bool navigationOnly : {false, true})
+        {
+            const auto geometry = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+            assert(geometry.collisionTriangles == 24 && geometry.scene.mesh.vertices.size() == 16);
+            for (std::size_t instance = 0; instance < 2; ++instance)
+            {
+                core::AABB bounds;
+                for (std::size_t i = instance * 8; i < (instance + 1) * 8; ++i)
+                {
+                    bounds.Expand(geometry.scene.mesh.vertices[i]);
+                }
+                const float centerX = instance == 0 ? 1216.0F : 1016.0F;
+                assert(std::abs(bounds.min.x - (centerX - 32)) < 0.01F);
+                assert(std::abs(bounds.max.x - (centerX + 32)) < 0.01F);
+                assert(std::abs(bounds.min.y - 1902) < 0.01F && std::abs(bounds.max.y - 1934) < 0.01F);
+                assert(std::abs(bounds.min.z - 236) < 0.01F && std::abs(bounds.max.z - 364) < 0.01F);
+            }
+        }
+
+        // Chunk rotations precede chunk translation, body transforms and target transforms.
+        nifly::NifFile compressed;
+        compressed.Create({nifly::V20_2_0_7, 12, 130});
+        auto data = std::make_unique<nifly::bhkCompressedMeshShapeData>();
+        data->error = 1;
+        data->transforms.resize(2);
+        data->chunks.resize(2);
+        for (std::uint16_t i = 0; i < 2; ++i)
+        {
+            data->transforms[i].translation = {i == 0 ? 4.0F : -4.0F, 2, 0, 0};
+            data->transforms[i].rotation = {0, 0, std::sqrt(0.5F), std::sqrt(0.5F)};
+            auto &chunk = data->chunks[i];
+            chunk.reference = 0xFFFF;
+            chunk.transformIndex = i;
+            chunk.translation = {1, 0, 0, 0};
+            chunk.verts.resize(9);
+            chunk.verts[3] = 1;
+            chunk.verts[7] = 1;
+            chunk.indices.resize(3);
+            chunk.indices[1] = 1;
+            chunk.indices[2] = 2;
+        }
+        auto shape = std::make_unique<nifly::bhkCompressedMeshShape>();
+        shape->dataRef.index = compressed.GetHeader().AddBlock(std::move(data));
+        AttachCollision(compressed, compressed.GetRootNode(), compressed.GetHeader().AddBlock(std::move(shape)));
+        assert(compressed.Save(root / "meshes/chunks.nif") == 0);
+        cell.references[0] = {.id = 1, .recordType = "REFR", .modelPath = "chunks.nif", .baseRecordType = "STAT"};
+        const auto chunks = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, true);
+        assert(chunks.collisionTriangles == 2 && chunks.scene.mesh.vertices.size() == 6);
+        for (std::size_t i = 0; i < 2; ++i)
+        {
+            const auto vertex = chunks.scene.mesh.vertices[i * 3];
+            assert(std::abs(vertex.x - (i == 0 ? 4 : -4) * units) < 0.01F);
+            assert(std::abs(vertex.y - 3 * units) < 0.01F);
+        }
+    }
+
     void CheckFixedClutter(const std::filesystem::path &root)
     {
         using namespace navmesh;
@@ -841,6 +1007,7 @@ void TestNativeBsaGeometry()
     assert(architecture.modelsLoaded == 1 && !architecture.scene.geometrySources[0].navigationObstacle);
     CheckFurnitureAndFire(root);
     CheckFixedClutter(root);
+    CheckCollisionShapes(root);
     CheckCollisionEligibility(root);
     CheckFireFootprints(root);
     CheckHearthFireBounds(root);

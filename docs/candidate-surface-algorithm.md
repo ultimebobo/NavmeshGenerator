@@ -22,9 +22,14 @@ clutter furniture and static assets in the clutter directory retain supported
 collision with the same obstacle-only tag. Seats, barrels, crates, sacks and other
 fixed clutter cannot become floor evidence or seam-repair anchors. Inventory
 placements retain their existing exclusion policy. Extraction triangulates closed
-`bhkConvexVerticesShape` vertex hulls, including through supported list wrappers,
-before rigid-body and reference transforms; convex skin radii are not expanded.
-Degenerate hulls supply no collision. Without supported collision these obstacles
+`bhkConvexVerticesShape` vertex hulls and boxes, and tessellates capsule sides
+and hemispherical ends, including through list and shape-transform wrappers.
+Shape and compressed-chunk transforms apply in Havok space; active `bhkRigidBodyT`
+transforms precede conversion to model units and the collision target's complete
+node ancestry, then the placed-reference transform. Ordinary `bhkRigidBody`
+translation and rotation are inactive. Shared shapes retain each distinct placement.
+Convex skin radii are not expanded; degenerate hulls and invalid primitive dimensions
+supply no collision. Without supported collision these obstacles
 remain unsupported for generation; visual fallback meshes do not supply permanent obstruction.
 Shape decoding requires physical contact response and excludes nonphysical Skyrim
 collision layers, including NonCollidable, triggers and query volumes. A shape's

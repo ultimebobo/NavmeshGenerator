@@ -1903,7 +1903,7 @@ namespace
         const auto packedDataId = nif.GetHeader().AddBlock(std::move(packedData));
         auto packedShape = std::make_unique<nifly::bhkPackedNiTriStripsShape>(); packedShape->dataRef.index = packedDataId;
         const auto packedShapeId = nif.GetHeader().AddBlock(std::move(packedShape));
-        auto body = std::make_unique<nifly::bhkRigidBody>(); body->shapeRef.index = packedShapeId; body->translation = { 0, 0, 2, 0 };
+        auto body = std::make_unique<nifly::bhkRigidBodyT>(); body->shapeRef.index = packedShapeId; body->translation = { 0, 0, 2, 0 };
         const auto bodyId = nif.GetHeader().AddBlock(std::move(body));
         auto collision = std::make_unique<nifly::bhkCollisionObject>(); collision->bodyRef.index = bodyId; collision->targetRef.index = nif.GetBlockID(nif.GetRootNode());
         nif.GetRootNode()->collisionRef.index = nif.GetHeader().AddBlock(std::move(collision));

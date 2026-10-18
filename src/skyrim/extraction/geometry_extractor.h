@@ -126,8 +126,10 @@ namespace navmesh::skyrim
     /// navigationOnly excludes render-only support.
     /// Landscape rock assets are tagged as navigation obstacles while retaining their collision geometry.
     /// Furniture, containers and STAT assets in the clutter directory retain supported collision as obstacles
-    /// without supplying walkable floors. Convex vertex hulls are triangulated in addition to supported mesh shapes;
-    /// degenerate hulls and unsupported primitives supply no collision, and convex skin radii are not expanded.
+    /// without supplying walkable floors. Supported meshes, convex hulls, boxes and tessellated capsules follow
+    /// shape/chunk transforms, active T-body transforms, collision-target ancestry and the placed reference.
+    /// Ordinary body translation/rotation are inactive. Shared shapes retain distinct placements.
+    /// Degenerate hulls, invalid dimensions and unsupported primitives supply no collision; skin radii are not expanded.
     /// Bodies with nonphysical Skyrim layers or without physical contact response supply no solid geometry;
     /// their shapes and visual meshes cannot substitute for navigation collision.
     /// Persistent static fires supply obstacle-only rectangular fuel bounds, or flame bounds when fuel is absent.
