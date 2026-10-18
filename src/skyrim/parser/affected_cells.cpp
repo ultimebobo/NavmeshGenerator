@@ -27,7 +27,9 @@ namespace navmesh::skyrim
             if (record && record->worldspaceFormId)
             {
                 worlds_.emplace(cell.id, *record->worldspaceFormId);
-                if (cell.exteriorCoordinates)
+                // Persistent containers have placeholder coordinates, not a terrain
+                // tile. Keep their ownership but bucket placements into ordinary cells.
+                if (cell.exteriorCoordinates && !(record->raw && (record->raw->flags & 0x400U)))
                 {
                     exterior_.emplace(
                         Key{*record->worldspaceFormId, (*cell.exteriorCoordinates)[0], (*cell.exteriorCoordinates)[1]},

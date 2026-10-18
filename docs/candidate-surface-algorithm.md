@@ -191,7 +191,9 @@ parameters and expectations live in the test builders; exported scenes and
 reports provide inspection evidence. Coverage and route connectivity are checked
 separately from topology, since a valid mesh can still omit intended routes.
 Coarse voxels can erase valid treads before detail sampling; climb is rounded
-down to whole vertical voxels. Candidate warnings report quantization and
+down to whole vertical voxels. A world-aligned vertical voxel lattice keeps shared
+floors quantized consistently across cells with different minimum collision heights.
+Candidate warnings report quantization and
 adaptive horizontal resolution instead of silently presenting requested values
 as the effective constraints.
 
@@ -338,6 +340,9 @@ isolated interiors and exterior borders awaiting generated neighbors. Only untou
 cells supply authored border edges; batch stitching provisionally preserves unpaired seams
 and unanchored components. The complete generated set supplies common
 seam partitions, compatible shared heights and reciprocal generated triangle indices.
+Height correction is shared in proportion to each seam triangle's interior depth,
+limiting deformation of thin clipped floors. Subdivision centers interpolate the
+adjusted triangle corners to keep the repair continuous.
 Shared corner heights are planned together; established portal endpoints remain pinned.
 Linking repeats until corner welding exposes no new compatible shared intervals.
 Different authored corner heights use separate vertices and climb-compatible internal

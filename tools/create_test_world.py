@@ -1,6 +1,6 @@
-"""Create a Skyrim SE exterior test plugin without authored navigation or copied assets."""
+"""Create a Skyrim SE terrain and follower-door test plugin without authored navigation."""
 
-# Binary layouts follow the WRLD/CELL/LAND definitions in xEdit:
+# Binary layouts follow the WRLD/CELL/LAND/REFR definitions in xEdit:
 # https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.5/Core/wbDefinitionsTES5.pas
 
 import argparse
@@ -24,6 +24,8 @@ SELF_INDEX = 0x01000000  # Skyrim.esm is master zero; this full ESP owns slot on
 COC_MARKER = 0x00000032  # STAT COCMarkerHeading
 LAND_TEXTURE = 0x00000C14  # LTEX LDirt01
 CLIMATE = 0x00000812  # CLMT SkyrimClimate
+TELEPORT_DOOR = 0x0004203A  # DOOR ImpDoorSingleLoad01
+DOOR_SURROUND = 0x0003E1FD  # STAT ImpFreeDoor01
 
 
 def subrecord(signature, payload):
@@ -106,7 +108,7 @@ def cell_editor_id(base_name, x, y):
 
 
 def build_plugin(cell_name, size):
-    """Return the full ESP and a manifest of file-local identities and seam destinations."""
+    """Return the full ESP and file-local identities for terrain seams and a two-way door route."""
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", cell_name):
         raise ValueError("Cell name must start with an ASCII letter and contain only letters, "
                          "digits or underscores (at most 80 characters)")
@@ -133,36 +135,70 @@ def build_plugin(cell_name, size):
         group_count += 1
         return group(label, group_type, payload)
 
-    world_id = allocate()
-    persistent_cell_id = allocate()
     lower = -(size // 2)
     upper = lower + size - 1
     world_name = cell_name + "World"
-    world = text_subrecord("EDID", world_name)
-    world += text_subrecord("FULL", "Navmesh stitching test world")
-    world += subrecord("CNAM", struct.pack("<I", CLIMATE))
-    world += subrecord("DNAM", struct.pack("<ff", 256.0, -8192.0))
-    world += subrecord("ONAM", struct.pack("<4f", 1.0, 0.0, 0.0, 0.0))
-    world += subrecord("DATA", bytes([0x8B]))  # Small world, no fast travel/LOD water/grass.
-    world += subrecord("NAM0", struct.pack("<ff", lower * CELL_SIZE, lower * CELL_SIZE))
-    world += subrecord("NAM9", struct.pack("<ff", (upper + 1) * CELL_SIZE, (upper + 1) * CELL_SIZE))
-    world_record = emit_record("WRLD", world_id, world)
-
-    # The persistent world container is a direct world child, outside the exterior
-    # block/sub-block tree. It has no coordinates, LAND, or navigation.
-    persistent = text_subrecord("EDID", world_name + "Persistent")
-    persistent += subrecord("DATA", struct.pack("<H", 0))
-    world_children = emit_record("CELL", persistent_cell_id, persistent, 0x400)
-    blocks = {}
+    destination_name = cell_name + "DoorDestination"
+    coordinates = [(x, y) for y in range(lower, upper + 1) for x in range(lower, upper + 1)]
+    # Separate worldspaces make the teleport pair the only route between A and B.
+    # Both endpoints use level LAND, with arrivals clear of the door's bounds and
+    # facing away from it. XTEL stores the standing transform at the OTHER end.
+    center = CELL_SIZE // 2
+    ground = terrain_height(center // SAMPLE_SPACING, center // SAMPLE_SPACING) * HEIGHT_UNIT
+    door_route = [
+        {"point": "A", "reference_id": f"{allocate():08X}", "cell": cell_name,
+         "worldspace": world_name, "position": [center, center + 512, ground],
+         "rotation": [0.0, 0.0, 0.0], "arrival": [center, center + 256, ground, 0.0, 0.0, math.pi]},
+        {"point": "B", "reference_id": f"{allocate():08X}", "cell": destination_name,
+         "worldspace": destination_name + "World", "position": [center, center - 512, ground],
+         "rotation": [0.0, 0.0, math.pi], "arrival": [center, center - 256, ground, 0.0, 0.0, 0.0]},
+    ]
+    world_data = b""
     cells = []
-    for y in range(lower, upper + 1):
-        for x in range(lower, upper + 1):
+    for endpoint, base_name, world_coordinates in (
+            (door_route[0], cell_name, coordinates),
+            (door_route[1], destination_name, [(0, 0)])):
+        world_id = allocate()
+        persistent_cell_id = allocate()
+        name = endpoint["worldspace"]
+        world = text_subrecord("EDID", name)
+        world += text_subrecord("FULL", f"Navmesh test world: point {endpoint['point']}")
+        world += subrecord("CNAM", struct.pack("<I", CLIMATE))
+        world += subrecord("DNAM", struct.pack("<ff", 256.0, -8192.0))
+        world += subrecord("ONAM", struct.pack("<4f", 1.0, 0.0, 0.0, 0.0))
+        world += subrecord("DATA", bytes([0x8B]))  # Small world, no fast travel/LOD water/grass.
+        minimum_x = min(x for x, y in world_coordinates) * CELL_SIZE
+        minimum_y = min(y for x, y in world_coordinates) * CELL_SIZE
+        maximum_x = (max(x for x, y in world_coordinates) + 1) * CELL_SIZE
+        maximum_y = (max(y for x, y in world_coordinates) + 1) * CELL_SIZE
+        world += subrecord("NAM0", struct.pack("<ff", minimum_x, minimum_y))
+        world += subrecord("NAM9", struct.pack("<ff", maximum_x, maximum_y))
+        world_record = emit_record("WRLD", world_id, world)
+
+        # The world container uses the vanilla exterior CELL layout, including
+        # placeholder grid coordinates. It holds persistent doors but no LAND;
+        # reference positions associate those doors with navigable terrain cells.
+        persistent = text_subrecord("EDID", name + "Persistent")
+        persistent += subrecord("DATA", struct.pack("<H", 0))
+        persistent += subrecord("XCLC", struct.pack("<iiI", 0, 0, 0))
+        world_children = emit_record("CELL", persistent_cell_id, persistent, 0x400)
+        partner = door_route[1] if endpoint["point"] == "A" else door_route[0]
+        door = text_subrecord("EDID", cell_name + "DoorPoint" + endpoint["point"])
+        door += subrecord("NAME", struct.pack("<I", TELEPORT_DOOR))
+        door += subrecord("XTEL", struct.pack("<I6fI", int(partner["reference_id"], 16),
+                                             *partner["arrival"], 0))
+        door += subrecord("DATA", struct.pack("<6f", *endpoint["position"], *endpoint["rotation"]))
+        door_record = emit_record("REFR", int(endpoint["reference_id"], 16), door, 0x400)
+        world_children += emit_group(persistent_cell_id, 6,
+                                     emit_group(persistent_cell_id, 8, door_record))
+        blocks = {}
+        for x, y in world_coordinates:
             cell_id = allocate()
             land_id = allocate()
             marker_id = allocate()
-            editor_id = cell_editor_id(cell_name, x, y)
+            editor_id = cell_editor_id(base_name, x, y)
             cell = text_subrecord("EDID", editor_id)
-            cell += text_subrecord("FULL", f"Navmesh test ({x}, {y})")
+            cell += text_subrecord("FULL", f"Navmesh point {endpoint['point']} ({x}, {y})")
             cell += subrecord("DATA", struct.pack("<H", 0))
             cell += subrecord("XCLC", struct.pack("<iiI", x, y, 0))
             cell += subrecord("XCLW", struct.pack("<f", -8192.0))
@@ -173,6 +209,16 @@ def build_plugin(cell_name, size):
             marker += subrecord("DATA", struct.pack("<6f", *spawn, 0.0, 0.0, 0.0))
             temporary = emit_record("LAND", land_id, land_payload(x, y))
             temporary += emit_record("REFR", marker_id, marker)
+            if x == 0 and y == 0:
+                # This freestanding stone surround and its matching load door
+                # share a model origin. The static frame is ordinary collision
+                # geometry; the operable door remains a teleport/navigation anchor.
+                surround_id = allocate()
+                surround = text_subrecord("EDID", cell_name + "DoorSurround" + endpoint["point"])
+                surround += subrecord("NAME", struct.pack("<I", DOOR_SURROUND))
+                surround += subrecord("DATA", struct.pack("<6f", *endpoint["position"], *endpoint["rotation"]))
+                temporary += emit_record("REFR", surround_id, surround)
+                endpoint["surround_reference_id"] = f"{surround_id:08X}"
             children = emit_group(cell_id, 6, emit_group(cell_id, 9, temporary))
             cell_records = emit_record("CELL", cell_id, cell) + children
 
@@ -180,14 +226,15 @@ def build_plugin(cell_name, size):
             block = blocks.setdefault((x // 32, y // 32), {})
             block.setdefault((x // 8, y // 8), []).append(cell_records)
             cells.append({"editor_id": editor_id, "form_id": f"{cell_id:08X}",
-                          "coordinates": [x, y], "spawn": spawn, "coc": f"coc {editor_id}"})
+                          "worldspace": name, "coordinates": [x, y], "spawn": spawn,
+                          "coc": f"coc {editor_id}"})
 
-    for (block_x, block_y), subblocks in sorted(blocks.items()):
-        block_data = b""
-        for (subblock_x, subblock_y), entries in sorted(subblocks.items()):
-            block_data += emit_group(coordinate_label(subblock_x, subblock_y), 5, b"".join(entries))
-        world_children += emit_group(coordinate_label(block_x, block_y), 4, block_data)
-    world_data = world_record + emit_group(world_id, 1, world_children)
+        for (block_x, block_y), subblocks in sorted(blocks.items()):
+            block_data = b""
+            for (subblock_x, subblock_y), entries in sorted(subblocks.items()):
+                block_data += emit_group(coordinate_label(subblock_x, subblock_y), 5, b"".join(entries))
+            world_children += emit_group(coordinate_label(block_x, block_y), 4, block_data)
+        world_data += world_record + emit_group(world_id, 1, world_children)
     body = emit_group(int.from_bytes(b"WRLD", "little"), 0, world_data)
 
     # HEDR counts every following record AND group. Next Object ID is local,
@@ -198,18 +245,19 @@ def build_plugin(cell_name, size):
     header += text_subrecord("MAST", "Skyrim.esm") + subrecord("DATA", bytes(8))
     plugin = record("TES4", 0, header) + body
 
-    by_coordinates = {tuple(cell["coordinates"]): cell for cell in cells}
+    by_coordinates = {(cell["worldspace"], *cell["coordinates"]): cell for cell in cells}
     seams = []
     for cell in cells:
         x, y = cell["coordinates"]
         for dx, dy in ((1, 0), (0, 1)):
-            neighbor = by_coordinates.get((x + dx, y + dy))
+            neighbor = by_coordinates.get((cell["worldspace"], x + dx, y + dy))
             if neighbor:
                 seams.append([cell["editor_id"], neighbor["editor_id"]])
     manifest = {"plugin": PLUGIN_NAME, "master": "Skyrim.esm", "worldspace": world_name,
                 "coordinate_space": "skyrim-world-z-up-v1",
                 "form_id_space": "file-local (self master index); runtime prefix depends on load order",
-                "grid_size": size, "coc": f"coc {cell_name}", "cells": cells, "seams": seams}
+                "grid_size": size, "coc": f"coc {cell_name}", "cells": cells, "seams": seams,
+                "door_route": door_route}
     return plugin, manifest
 
 
@@ -233,7 +281,8 @@ def main(argv=None):
     parser.add_argument("--cell-name", default="myTestCell",
                         help="origin cell editor ID used by coc (default: %(default)s)")
     parser.add_argument("--size", type=int, default=3,
-                        help="square exterior grid side, from 2 to 16 (default: %(default)s)")
+                        help="main exterior grid side, from 2 to 16; adds an isolated door destination "
+                             "(default: %(default)s)")
     options = parser.parse_args(argv)
     try:
         manifest = create_test_world(options.output, options.cell_name, options.size)
@@ -242,6 +291,8 @@ def main(argv=None):
     print(f"Created {options.output / PLUGIN_NAME}")
     print(f"{len(manifest['cells'])} exterior cells; {len(manifest['seams'])} shared borders; no NAVM/NAVI")
     print(f"Install and enable the ESP with Skyrim.esm, then use: {manifest['coc']}")
+    print("Follower door test: use the large wooden door in the stone arch ahead of the origin spawn "
+          "to travel A -> B, then return B -> A.")
     return 0
 
 

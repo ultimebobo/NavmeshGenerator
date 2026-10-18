@@ -25,7 +25,10 @@ namespace navmesh::core
      * Each pass plans all interval intersections before editing either mesh.
      * Linking repeats until corner welding exposes no new compatible intervals;
      * established portal endpoints remain pinned through subsequent refinement. Shared heights
-     * are welded within both movement profiles' climb limits; stacked floors are matched
+     * are welded within both movement profiles' climb limits, sharing height correction
+     * in proportion to each original triangle's interior depth so thin clipped floors
+     * do not absorb a broad neighbor's full height discrepancy. New fan centers follow
+     * the adjusted triangle corners. Stacked floors are matched
      * by nearest compatible height. Authored portal endpoints are immutable constraints.
      * Different authored corner heights retain separate endpoints joined by
      * climb-compatible internal edges. Triangulation preserves interior edges,

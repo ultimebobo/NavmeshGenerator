@@ -38,7 +38,7 @@ namespace navmesh::skyrim
     class CellImpactIndex
     {
       public:
-        /// Index exterior coordinates, winning reference placements, and cell ownership.
+        /// Index terrain CELL coordinates, winning placements, and ownership; persistent world containers are not tiles.
         explicit CellImpactIndex(const ResolvedLoadOrder &resolved);
         /** Select conservative navigation targets from record edit history.
          * @param plugin Active filename, case insensitive; empty selects all plugins

@@ -379,11 +379,115 @@ void TestTeleportEnclosure()
     }
 }
 
+void TestGeneratedLandingSeams()
+{
+    using namespace navmesh::core;
+
+    // A small height bend on a broad neighbor must not become a steep barrier
+    // when its partitions subdivide a thin strip on the other side of the CELL.
+    {
+        std::array<CandidateNavMesh, 2> candidates;
+        candidates[0].mesh.vertices = {{4096, 0, 2}, {4096, 300, 2}, {4084, 150, 2}};
+        candidates[0].mesh.polygons = {{.vertices = {0, 1, 2}}};
+        candidates[1].mesh.vertices = {{4096, 0, 1}, {4096, 100, 1}, {4096, 103, 0}, {4096, 300, 0}, {4296, 150, 1}};
+        candidates[1].mesh.polygons = {{.vertices = {1, 0, 4}}, {.vertices = {2, 1, 4}}, {.vertices = {3, 2, 4}}};
+        for (auto &candidate : candidates)
+        {
+            CandidateRegion region{.id = 0};
+            for (std::uint32_t index{}; index < candidate.mesh.polygons.size(); ++index)
+            {
+                candidate.polygonSourceTriangles.push_back(0);
+                candidate.polygonContributingTriangles.push_back({0});
+                region.polygons.push_back(index);
+            }
+            candidate.regions.push_back(std::move(region));
+            RefreshCandidateTopology(candidate);
+            assert(candidate.topology.valid);
+        }
+        std::array<GeneratedCellCandidate, 2> cells{{{1, 1, {{0, 0, -100}, {4096, 4096, 100}}, &candidates[0]},
+                                                     {2, 1, {{4096, 0, -100}, {8192, 4096, 100}}, &candidates[1]}}};
+        assert(StitchGeneratedCandidates(cells) == 3);
+        VerifyPortals(cells);
+        for (const auto &candidate : candidates)
+        {
+            for (const auto &face : candidate.mesh.polygons)
+            {
+                const auto a = candidate.mesh.vertices[face.vertices[0]];
+                const auto u = candidate.mesh.vertices[face.vertices[1]] - a;
+                const auto v = candidate.mesh.vertices[face.vertices[2]] - a;
+                const auto normal = Vec3{u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x};
+                assert(std::hypot(normal.x, normal.y) <= normal.z);
+            }
+        }
+    }
+
+    // Independently extracted cells share the same elevated landing even when
+    // their lower collision floors have unrelated fractional world heights.
+    for (const auto lowerHeight : {-500.25F, 20.25F})
+    {
+        std::array<CandidateNavMesh, 2> landings;
+        std::array<GeneratedCellCandidate, 2> landingCells;
+        for (std::size_t index{}; index < landings.size(); ++index)
+        {
+            Scene scene;
+            scene.geometrySources.push_back({.sourceType = GeometrySourceType::Collision, .confidence = 1});
+            for (const auto height : {lowerHeight + index * 0.75F, 300.25F})
+            {
+                const auto offset = static_cast<std::uint32_t>(scene.mesh.vertices.size());
+                scene.mesh.vertices.insert(
+                    scene.mesh.vertices.end(),
+                    {{3900, 0, height}, {4300, 0, height}, {4300, 1024, height}, {3900, 1024, height}});
+                scene.mesh.triangles.push_back({{offset, offset + 1, offset + 2}});
+                scene.mesh.triangles.push_back({{offset, offset + 2, offset + 3}});
+                scene.triangleProvenance.push_back({0, scene.triangleProvenance.size()});
+                scene.triangleProvenance.push_back({0, scene.triangleProvenance.size()});
+            }
+            const auto x = index * 4096.0F;
+            const AABB bounds{{x, 0, -1000}, {x + 4096, 4096, 1000}};
+            landings[index] = RecastCandidateGenerator{}.Generate(
+                scene, {}, bounds, {}, RegionPartitioningAlgorithm::Watershed, {}, CandidateRetention::AllWalkable);
+            assert(landings[index].topology.valid && !landings[index].mesh.polygons.empty());
+            landingCells[index] = {static_cast<std::uint32_t>(index + 1), 1, bounds, &landings[index]};
+        }
+        std::optional<float> landingHeight;
+        for (const auto &candidate : landings)
+        {
+            bool foundLanding{};
+            for (const auto vertex : candidate.mesh.vertices)
+            {
+                if (vertex.z > 200)
+                {
+                    if (landingHeight)
+                    {
+                        assert(vertex.z == *landingHeight);
+                    }
+                    landingHeight = vertex.z;
+                    foundLanding = true;
+                }
+            }
+            assert(foundLanding);
+        }
+        assert(StitchGeneratedCandidates(landingCells) > 0);
+        VerifyPortals(landingCells);
+        for (const auto &candidate : landings)
+        {
+            for (const auto vertex : candidate.mesh.vertices)
+            {
+                if (vertex.z > 200)
+                {
+                    assert(vertex.z == *landingHeight);
+                }
+            }
+        }
+    }
+}
+
 void TestGeneratedBatchTopology()
 {
     using namespace navmesh::core;
     TestCandidateIslandRemoval();
     TestTeleportEnclosure();
+    TestGeneratedLandingSeams();
     // Batch interiors retain a supported floor even without any authored NAVM,
     // exterior boundary or door anchor, under every partitioning strategy.
     Scene interior;

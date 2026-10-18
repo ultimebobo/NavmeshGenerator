@@ -14,6 +14,7 @@ namespace navmesh::skyrim::detail
      * @param retainsStringTable True only when localized FULL IDs retain the same filename and resources.
      * @param localizedSource Whether the source TES4 header uses localized strings.
      * @param output Receives the complete payload, preserving non-navigation fields and rebasing their FormIDs.
+     * Rebuilt XNDP occupies its authored slot or precedes the final DATA placement field.
      * @param error Receives the unsupported field, malformed payload, or missing dependency on failure.
      * @return False rather than copying a field whose reference layout is unknown.
      */

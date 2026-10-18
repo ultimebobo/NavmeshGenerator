@@ -614,6 +614,8 @@ namespace
     struct Group
     {
         std::array<std::uint8_t, 24> header{};
+        /// Optional parent declaration, serialized immediately before this child group.
+        Bytes parent;
         Bytes records;
         std::vector<Group> children;
     };
@@ -646,10 +648,40 @@ namespace
         {
             return body;
         }
-        Bytes output(group.header.begin(), group.header.end());
-        Set32(output, 4, static_cast<std::uint32_t>(24 + body.size()));
+        Bytes output = group.parent;
+        output.insert(output.end(), group.header.begin(), group.header.end());
+        Set32(output, group.parent.size() + 4, static_cast<std::uint32_t>(24 + body.size()));
         output.insert(output.end(), body.begin(), body.end());
         return output;
+    }
+
+    /// Persistent reference overrides need parent load context before their child groups.
+    /// Partial declarations inherit CELL/WRLD data without copying localized fields or embedded FormIDs.
+    std::size_t AddPersistentDoorParents(Group &group, bool inWorldspace = false)
+    {
+        const auto type = Get32(group.header, 12);
+        inWorldspace = inWorldspace || type == 1;
+        std::size_t count{};
+        for (auto &child : group.children)
+        {
+            count += AddPersistentDoorParents(child, inWorldspace);
+        }
+        const bool persistentCell =
+            type == 6 && std::any_of(group.children.begin(), group.children.end(),
+                                     [](const Group &child) { return Get32(child.header, 12) == 8; });
+        if (!persistentCell && !(type == 1 && count))
+        {
+            return count;
+        }
+        const char *signature = persistentCell ? "CELL" : "WRLD";
+        group.parent.insert(group.parent.end(), signature, signature + 4);
+        U32(group.parent, 0);
+        U32(group.parent, 0x4000U | (persistentCell && inWorldspace ? 0x400U : 0));
+        U32(group.parent, Get32(group.header, 8));
+        U32(group.parent, 0);
+        U16(group.parent, 44);
+        U16(group.parent, 0);
+        return count + 1;
     }
     /// TES4 HEDR counts both records and GRUP headers, excluding TES4 itself.
     std::size_t CountGroups(const Group &group)
@@ -776,6 +808,26 @@ namespace
                 reference->raw->decodedPayload != navmesh::core::SharedBytes(payload))
             {
                 return false;
+            }
+            if (!copiedPlugin && reference->persistent)
+            {
+                // A valid persistent door payload also needs its parent load
+                // declarations in this file; group labels alone are insufficient.
+                for (const auto parent : {reference->cellFormId, reference->worldspaceFormId})
+                {
+                    if (!parent)
+                    {
+                        continue;
+                    }
+                    const auto declaration = std::find_if(records.begin(), records.end(),
+                                                          [&](const auto &item) { return item.formId == *parent; });
+                    if (declaration == records.end() || !declaration->raw || !(declaration->raw->flags & 0x4000U) ||
+                        !declaration->raw->subrecords.empty() ||
+                        declaration->raw->headerRange.offset >= reference->raw->headerRange.offset)
+                    {
+                        return false;
+                    }
+                }
             }
         }
         // Index emitted identities once; whole-plugin rebuilds may allocate a
@@ -2433,6 +2485,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     {
         return false;
     }
+    const auto parentCount = copy ? 0 : AddPersistentDoorParents(root);
     if (!navigationId)
     {
         navigationId = selfIndex << 24 | nextObjectId++;
@@ -2469,7 +2522,9 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         U32(hedr, 0);
         U32(hedr, 0x800);
     }
-    Set32(hedr, 4, static_cast<std::uint32_t>(expected.size() + expectedReferences.size() + 1 + CountGroups(root)));
+    Set32(
+        hedr, 4,
+        static_cast<std::uint32_t>(expected.size() + expectedReferences.size() + parentCount + 1 + CountGroups(root)));
     Set32(hedr, 8, nextObjectId);
     Bytes headerPayload;
     PutSubrecord(headerPayload, "HEDR", hedr);

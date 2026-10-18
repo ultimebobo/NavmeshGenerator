@@ -50,6 +50,14 @@ namespace
         return edge.first + (edge.last - edge.first) * fraction;
     }
 
+    /// Horizontal depth available to absorb a seam height correction in the original triangle.
+    float InteriorDepth(const CandidateNavMesh &candidate, const SeamEdge &edge, bool vertical, float boundary)
+    {
+        const auto &face = candidate.mesh.polygons.at(edge.index.first);
+        const auto interior = candidate.mesh.vertices.at(face.vertices[(edge.index.second + 2) % 3]);
+        return std::abs((vertical ? interior.x : interior.y) - boundary);
+    }
+
     std::vector<SeamEdge> Boundary(const CandidateNavMesh &candidate, bool vertical, float boundary)
     {
         std::set<EdgeIndex> consumed;
@@ -180,7 +188,14 @@ namespace
                         point.x = parameter;
                         point.y = boundary;
                     }
-                    point.z = std::min(point.z, other.z);
+                    // Thin clipped floors cannot absorb the same vertical correction
+                    // as broad neighbors. Balance their normal height gradients by
+                    // sharing displacement in proportion to their interior depths.
+                    const auto leftDepth = InteriorDepth(a, leftEdges[l], vertical, boundary);
+                    const auto rightDepth = InteriorDepth(b, rightEdges[r], vertical, boundary);
+                    point.z = static_cast<float>(
+                        (static_cast<double>(point.z) * rightDepth + static_cast<double>(other.z) * leftDepth) /
+                        (leftDepth + rightDepth));
                     const auto index = plan.endpoints.size();
                     plan.endpoints.push_back({point, cells[left].worldspaceId,
                                               std::max(PointAt(leftEdges[l], parameter).z, other.z) - climb - tolerance,
@@ -416,9 +431,10 @@ namespace
             {
                 continue;
             }
-            const auto centerPoint = (original.vertices[face.vertices[0]] + original.vertices[face.vertices[1]] +
-                                      original.vertices[face.vertices[2]]) /
-                                     3.0F;
+            const auto centerPoint =
+                (candidate.mesh.vertices[face.vertices[0]] + candidate.mesh.vertices[face.vertices[1]] +
+                 candidate.mesh.vertices[face.vertices[2]]) /
+                3.0F;
             std::vector<std::array<std::uint32_t, 3>> refined;
             bool interiorCenter = true;
             for (std::size_t edge{}; edge < outline.size(); ++edge)

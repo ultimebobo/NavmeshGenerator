@@ -102,7 +102,9 @@ a null tag leaves those fields unread and misaligns the geometry arrays. Writer
 read-back verifies the tag on every newly allocated NAVM, for patches and source
 copies as well as interior and exterior cells.
 The master table includes the CELL source and its dependencies; parent CELL
-payloads are not copied. New identities are allocated consecutively above the
+payloads are not copied. Persistent door groups are preceded by partial WRLD and CELL
+declarations that establish their loading context while inheriting the original parent data.
+New identities are allocated consecutively above the
 reserved local range, and TES4 HEDR records the next available identity. The ESP
 uses the light flag only when those identities and its master table fit the
 light format. Existing unsupported NAVM records cannot be treated as uncovered.
@@ -147,6 +149,7 @@ enable them. An authored live door without a reachable generated triangle stops
 export. Obsolete associations are removed from other emitted NAVMs. The writer
 copies the winning reference, preserving scripts, locks, ownership, enable
 parents, flags and other supported fields while rebasing their embedded FormIDs.
+XNDP uses its authored field position or is inserted before the final DATA placement field.
 Unknown reference layouts fail rather than being copied with incorrect indices.
 Localized reference names require their original filename and string resources.
 

@@ -371,7 +371,10 @@ namespace
         // still enforce actual climb and headroom before any height simplification.
         config.detailSampleMaxError = std::max(ch, profile.stepHeight);
         config.bmin[0] = bounds.min.x - cs * 2;
-        config.bmin[1] = bounds.min.z - ch * 2;
+        // Exterior candidates sample overlapping collision independently. A world
+        // height lattice keeps identical floors at identical voxel levels even
+        // when the cells contain different minimum collision heights.
+        config.bmin[1] = std::floor(bounds.min.z / ch) * ch - ch * 2;
         config.bmin[2] = bounds.min.y - cs * 2;
         config.bmax[0] = bounds.max.x + cs * 2;
         config.bmax[1] = bounds.max.z + profile.agentHeight + ch * 2;

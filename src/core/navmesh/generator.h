@@ -74,6 +74,8 @@ namespace navmesh::core
       public:
         /** Rasterize authoritative Skyrim-world terrain, collision and explicit navigation exclusions,
          * including vertical and obstacle-only solids, and sample floor heights into detail triangles.
+         * Raster heights use a world-aligned vertical voxel lattice so identical floors
+         * retain the same quantization across independently extracted cells.
          * Convex patches share height detail with approximation error bounded by the larger
          * of climb and vertical voxel size. Contour error is refined if a retained voxel
          * region would collapse. Unrepresentable watershed contours trigger layer recovery

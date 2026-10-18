@@ -43,7 +43,9 @@ namespace navmesh::skyrim
      * Cover is built from retained physical collision and coincident authored edges. Connector
      * constraints and base-object arrays are remapped to the primary generated record.
      * Winning door references receive reciprocal XNDP associations while preserving their
-     * other fields, scripts, locks, flags and group placement. Changed input snapshots fail export.
+     * other fields, scripts, locks, flags and group placement. Patch exports place partial WRLD/CELL
+     * parent declarations immediately before persistent door groups to establish their loading context.
+     * Changed input snapshots fail export.
      * @param writtenPath Receives the finalized plugin path on success.
      * @param error Receives a failure reason; no final plugin is published on failure.
      * @param copyPlugin Optional active filename to copy with generated NAVMs. Preserves

@@ -251,6 +251,7 @@ namespace navmesh::skyrim
     /// null references remain null. Missing-master diagnostics identify hexadecimal source-local IDs.
     /// References include valid model-local base bounds and reciprocal teleport arrival positions;
     /// Missing or deleted return links supply no arrival anchor; initially disabled quest doors retain theirs.
+    /// Partial CELL/WRLD declarations retain their full parent's coordinates and environment data.
     [[nodiscard]] ResolvedLoadOrder ResolveLoadOrder(const LoadOrderInput &input,
                                                      const IPluginReader &reader = DirectPluginReader{});
 

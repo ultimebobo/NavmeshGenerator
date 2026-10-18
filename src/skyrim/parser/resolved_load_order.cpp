@@ -946,6 +946,15 @@ namespace navmesh::skyrim
                 }
                 if (const auto found = winners.find(*global); found != winners.end())
                 {
+                    // Partial parent records supply child-loading context. Their
+                    // absent fields inherit the full declaration, including CELL
+                    // coordinates and WRLD environment data.
+                    if ((record.type == "CELL" || record.type == "WRLD") && record.raw && (record.raw->flags & 0x4000U))
+                    {
+                        record.winning.navigationChanged = false;
+                        result.records[found->second].origins.push_back(record.winning);
+                        continue;
+                    }
                     // LAND overrides commonly change texture/colour data without
                     // repeating VHGT.  Preserve the inherited height subrecord in
                     // the resolved representation so terrain remains the winning

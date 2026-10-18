@@ -1,6 +1,7 @@
-"""Binary-layout and CLI stitching regressions for the playable world fixture."""
+"""Binary-layout, CLI stitching and door-link regressions for the playable world fixture."""
 
 import json
+import math
 from pathlib import Path
 import struct
 import subprocess
@@ -87,16 +88,18 @@ class TestWorldFixture(unittest.TestCase):
                     fields = dict(subrecords(payload))
                     if kind == b"CELL":
                         if flags & 0x400:
-                            self.assertNotIn(b"XCLC", fields)
+                            self.assertEqual(struct.unpack("<iiI", fields[b"XCLC"]), (0, 0, 0))
                             self.assertEqual([item[0] for item in ancestors], [0, 1])
                             continue
                         x, y, _ = struct.unpack("<iiI", fields[b"XCLC"])
-                        cells[form_id] = (x, y)
+                        cells[form_id] = (ancestors[1][1], x, y)
                         self.assertEqual([item[0] for item in ancestors], [0, 1, 4, 5])
                         self.assertEqual(struct.unpack("<hh", struct.pack("<I", ancestors[2][1])), (y // 32, x // 32))
                         self.assertEqual(struct.unpack("<hh", struct.pack("<I", ancestors[3][1])), (y // 8, x // 8))
                         self.assertFalse(struct.unpack("<H", fields[b"DATA"])[0] & 3)
                     elif kind in (b"LAND", b"REFR"):
+                        if kind == b"REFR" and struct.unpack("<I", fields[b"NAME"])[0] == fixture.TELEPORT_DOOR:
+                            continue
                         self.assertEqual([item[0] for item in ancestors], [0, 1, 4, 5, 6, 9])
                         owner = ancestors[-1][1]
                         self.assertEqual(owner, ancestors[-2][1])
@@ -107,23 +110,85 @@ class TestWorldFixture(unittest.TestCase):
                             textures = [struct.unpack("<IBBh", value) for sig, value in subrecords(payload) if sig == b"BTXT"]
                             self.assertEqual(textures, [(fixture.LAND_TEXTURE, quadrant, 0, -1) for quadrant in range(4)])
                         else:
-                            self.assertEqual(struct.unpack("<I", fields[b"NAME"])[0], fixture.COC_MARKER)
-                            markers[owner] = struct.unpack("<6f", fields[b"DATA"])
-                self.assertEqual(len(cells), size * size)
+                            base = struct.unpack("<I", fields[b"NAME"])[0]
+                            self.assertIn(base, (fixture.COC_MARKER, fixture.DOOR_SURROUND))
+                            if base == fixture.COC_MARKER:
+                                markers[owner] = struct.unpack("<6f", fields[b"DATA"])
+                self.assertEqual(len(cells), size * size + 1)
                 self.assertEqual(cells.keys(), terrain.keys())
                 self.assertEqual(cells.keys(), markers.keys())
                 by_coordinates = {coordinates: terrain[form_id] for form_id, coordinates in cells.items()}
-                for form_id, (x, y) in cells.items():
+                for form_id, (world, x, y) in cells.items():
                     heights = terrain[form_id]
                     spawn = markers[form_id]
                     self.assertEqual(spawn[:2], (x * 4096 + 2048, y * 4096 + 2048))
                     self.assertGreater(spawn[2], heights[16 * 33 + 16])
-                    if (x + 1, y) in by_coordinates:
-                        self.assertEqual(heights[32::33], by_coordinates[(x + 1, y)][::33])
-                    if (x, y + 1) in by_coordinates:
-                        self.assertEqual(heights[-33:], by_coordinates[(x, y + 1)][:33])
+                    if (world, x + 1, y) in by_coordinates:
+                        self.assertEqual(heights[32::33], by_coordinates[(world, x + 1, y)][::33])
+                    if (world, x, y + 1) in by_coordinates:
+                        self.assertEqual(heights[-33:], by_coordinates[(world, x, y + 1)][:33])
                 self.assertEqual(len(manifest["seams"]), 2 * size * (size - 1))
                 self.assertEqual(manifest["coc"], "coc SyntheticCell")
+
+    def test_door_route_is_persistent_reciprocal_and_grounded(self):
+        for size in (2, 3, 16):
+            with self.subTest(size=size):
+                plugin, manifest = fixture.build_plugin("DoorTestCell", size)
+                records, _ = read_records(plugin)
+                by_id = {form_id: (kind, flags, dict(subrecords(payload)), ancestors)
+                         for kind, form_id, flags, payload, ancestors in records}
+                worlds = {form_id: fields[b"EDID"].rstrip(b"\0").decode()
+                          for form_id, (kind, _, fields, _) in by_id.items() if kind == b"WRLD"}
+                cells = {cell["editor_id"]: cell for cell in manifest["cells"]}
+                endpoints = manifest["door_route"]
+                self.assertEqual([point["point"] for point in endpoints], ["A", "B"])
+                self.assertEqual(endpoints[0]["cell"], "DoorTestCell")
+                self.assertNotEqual(endpoints[0]["worldspace"], endpoints[1]["worldspace"])
+                self.assertEqual(sum(cell["worldspace"] == endpoints[1]["worldspace"]
+                                     for cell in manifest["cells"]), 1)
+                for endpoint, partner in ((endpoints[0], endpoints[1]), (endpoints[1], endpoints[0])):
+                    kind, flags, fields, ancestors = by_id[int(endpoint["reference_id"], 16)]
+                    self.assertEqual(kind, b"REFR")
+                    self.assertEqual(flags, 0x400)  # Persistent, enabled and unlocked.
+                    self.assertEqual([item[0] for item in ancestors], [0, 1, 6, 8])
+                    self.assertEqual(ancestors[-1][1], ancestors[-2][1])
+                    owner = by_id[ancestors[-1][1]]
+                    self.assertEqual(owner[0], b"CELL")
+                    self.assertTrue(owner[1] & 0x400)
+                    self.assertEqual(struct.unpack("<iiI", owner[2][b"XCLC"]), (0, 0, 0))
+                    self.assertEqual(worlds[ancestors[1][1]], endpoint["worldspace"])
+                    self.assertEqual(struct.unpack("<I", fields[b"NAME"])[0], fixture.TELEPORT_DOOR)
+                    self.assertNotIn(b"XNDP", fields)
+                    self.assertNotIn(b"XLOC", fields)
+                    self.assertNotIn(b"VMAD", fields)
+                    self.assertEqual(struct.unpack("<6f", fields[b"DATA"]),
+                                     struct.unpack("<6f", struct.pack("<6f", *endpoint["position"], *endpoint["rotation"])))
+                    destination, *transform, teleport_flags = struct.unpack("<I6fI", fields[b"XTEL"])
+                    self.assertEqual(destination, int(partner["reference_id"], 16))
+                    self.assertEqual(teleport_flags, 0)
+                    for actual, expected in zip(transform, partner["arrival"]):
+                        self.assertAlmostEqual(actual, expected, places=6)
+                    cell = cells[endpoint["cell"]]
+                    self.assertEqual(cell["worldspace"], endpoint["worldspace"])
+                    frame_kind, frame_flags, frame_fields, frame_placement = by_id[int(endpoint["surround_reference_id"], 16)]
+                    self.assertEqual(frame_kind, b"REFR")
+                    self.assertEqual(frame_flags, 0)
+                    self.assertEqual(struct.unpack("<I", frame_fields[b"NAME"])[0], fixture.DOOR_SURROUND)
+                    self.assertEqual(frame_fields[b"DATA"], fields[b"DATA"])
+                    self.assertEqual([item[0] for item in frame_placement], [0, 1, 4, 5, 6, 9])
+                    self.assertEqual(frame_placement[-1][1], int(cell["form_id"], 16))
+                    land = next(payload for kind, _, _, payload, placement in records
+                                if kind == b"LAND" and placement[-1][1] == int(cell["form_id"], 16))
+                    heights = decode_heights(land)
+                    for position in (endpoint["position"], endpoint["arrival"]):
+                        x, y, z = position[:3]
+                        self.assertEqual([int(x // 4096), int(y // 4096)], cell["coordinates"])
+                        sample = int(y % 4096 // 128) * 33 + int(x % 4096 // 128)
+                        self.assertEqual(z, heights[sample])
+                    offset = [endpoint["arrival"][i] - endpoint["position"][i] for i in range(2)]
+                    self.assertGreater(math.hypot(*offset), 128)
+                    heading = endpoint["arrival"][5]
+                    self.assertGreater(offset[0] * math.sin(heading) + offset[1] * math.cos(heading), 0)
 
     def test_cli_output_validation_and_overwrite_refusal(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -139,6 +204,8 @@ class TestWorldFixture(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             manifest = json.loads((output / "fixture.json").read_text())
             self.assertIn(manifest["coc"], result.stdout)
+            self.assertIn("A -> B", result.stdout)
+            self.assertIn("B -> A", result.stdout)
             self.assertEqual((output / "load-order.txt").read_text().splitlines(),
                              ["Skyrim.esm", str(output.resolve() / fixture.PLUGIN_NAME)])
             original = {path.name: path.read_bytes() for path in output.iterdir()}
@@ -146,15 +213,20 @@ class TestWorldFixture(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(original, {path.name: path.read_bytes() for path in output.iterdir()})
 
-    @unittest.skipUnless(EXE, "Pass the desktop executable to run the CLI stitching regression")
-    def test_generation_links_every_shared_border(self):
+    @unittest.skipUnless(EXE, "Pass the desktop executable to run the CLI navigation regression")
+    def test_generation_links_every_shared_border_and_door(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest = fixture.create_test_world(root / "fixture")
-            # Only the master identity is needed for this terrain-only run. The
-            # real game supplies the referenced texture, climate, and marker.
-            master = b"TES4" + struct.pack("<IIIIHH", 18, 1, 0, 0, 44, 0)
-            master += b"HEDR" + struct.pack("<HfII", 12, 1.7, 0, 0x800)
+            # A project-authored DOOR base lets this terrain-only run resolve the
+            # endpoint type and bounds without requiring any installed game assets.
+            door = fixture.text_subrecord("EDID", "SyntheticTeleportDoor")
+            door += fixture.subrecord("OBND", struct.pack("<6h", -48, -8, 0, 48, 8, 192))
+            door += fixture.subrecord("FNAM", bytes(1))
+            header = fixture.subrecord("HEDR", struct.pack("<fII", 1.7, 2, fixture.TELEPORT_DOOR + 1))
+            master = fixture.record("TES4", 0, header, 1)
+            master += fixture.group(int.from_bytes(b"DOOR", "little"), 0,
+                                    fixture.record("DOOR", fixture.TELEPORT_DOOR, door))
             (root / "Skyrim.esm").write_bytes(master)
             source = (root / "fixture" / fixture.PLUGIN_NAME).read_bytes()
             output = root / "generated"
@@ -192,10 +264,82 @@ class TestWorldFixture(unittest.TestCase):
                                      neighbor["vertices"][target[link["neighbor_edge"]]])
                     actual_seams.add(tuple(sorted((names[cell_id], names[neighbor_id]))))
             self.assertEqual(actual_seams, {tuple(sorted(pair)) for pair in manifest["seams"]})
+            for endpoint in manifest["door_route"]:
+                cell_id = next(cell["form_id"] for cell in manifest["cells"]
+                               if cell["editor_id"] == endpoint["cell"])
+                exits = candidates[cell_id]["exits"]
+                self.assertEqual([exit["reference_id"] for exit in exits], [endpoint["reference_id"]])
+                self.assertIsNotNone(exits[0]["polygon"])
             emitted, _ = read_records((output / "generated-navmesh.esp").read_bytes())
+            parents = {(kind, form_id): (flags, payload) for kind, form_id, flags, payload, _ in emitted
+                       if kind in (b"WRLD", b"CELL")}
+            self.assertEqual(sum(kind == b"WRLD" for kind, _ in parents), 2)
+            self.assertEqual(sum(kind == b"CELL" for kind, _ in parents), 2)
+            for (kind, _), (flags, payload) in parents.items():
+                self.assertEqual(flags, 0x4400 if kind == b"CELL" else 0x4000)
+                self.assertEqual(payload, b"")
             self.assertEqual(sum(entry[0] == b"NAVM" for entry in emitted), len(manifest["cells"]))
             self.assertIn(b"NAVI", {entry[0] for entry in emitted})
+            # Decode the actual ESP door tables and reciprocal XNDP associations,
+            # independently of candidate JSON and the production plugin reader.
+            references = {form_id: (flags, dict(subrecords(payload)), placement)
+                          for kind, form_id, flags, payload, placement in emitted if kind == b"REFR"}
+            expected_doors = {int(endpoint["reference_id"], 16) for endpoint in manifest["door_route"]}
+            self.assertEqual(set(references), expected_doors)
+            portals = {}
+            for kind, form_id, _, payload, placement in emitted:
+                if kind != b"NAVM":
+                    continue
+                mesh = dict(subrecords(payload))[b"NVNM"]
+                self.assertEqual(struct.unpack_from("<II", mesh), (12, 0xA5E9A03C))
+                vertices = struct.unpack_from("<I", mesh, 16)[0]
+                triangle_at = 20 + vertices * 12
+                triangles = struct.unpack_from("<I", mesh, triangle_at)[0]
+                links_at = triangle_at + 4 + triangles * 16
+                links = struct.unpack_from("<I", mesh, links_at)[0]
+                door_at = links_at + 4 + links * 10
+                doors = struct.unpack_from("<I", mesh, door_at)[0]
+                for index in range(doors):
+                    triangle, crc, reference = struct.unpack_from("<HII", mesh, door_at + 4 + index * 10)
+                    self.assertEqual(crc, 0xE48B73F3)
+                    self.assertLess(triangle, triangles)
+                    self.assertTrue(struct.unpack_from("<H", mesh, triangle_at + 4 + triangle * 16 + 12)[0] & 0x400)
+                    self.assertNotIn(reference, portals)
+                    portals[reference] = (form_id, triangle, placement[-1][1])
+                    self.assertEqual(struct.unpack("<IHH", references[reference][1][b"XNDP"]),
+                                     (form_id, triangle, 0))
+            self.assertEqual(set(portals), expected_doors)
+            original_records, _ = read_records(source)
+            for kind, form_id, flags, payload, placement in original_records:
+                if form_id not in expected_doors:
+                    continue
+                actual_flags, actual_fields, actual_placement = references[form_id]
+                emitted_payload = next(data for record_kind, identity, _, data, _ in emitted
+                                       if record_kind == b"REFR" and identity == form_id)
+                self.assertEqual(subrecords(emitted_payload)[-1][0], b"DATA")
+                self.assertEqual(actual_flags, flags)
+                self.assertEqual(actual_placement, placement)
+                self.assertEqual({key: value for key, value in actual_fields.items() if key != b"XNDP"},
+                                 dict(subrecords(payload)))
+                endpoint = next(point for point in manifest["door_route"] if int(point["reference_id"], 16) == form_id)
+                owner = next(cell["form_id"] for cell in manifest["cells"] if cell["editor_id"] == endpoint["cell"])
+                self.assertEqual(portals[form_id][2], int(owner, 16))
             self.assertEqual(source, (root / "fixture" / fixture.PLUGIN_NAME).read_bytes())
+            # Loading the generated patch must retain the full source parent data.
+            order = root / "with-patch.txt"
+            order.write_text((root / "fixture/load-order.txt").read_text()
+                             + str(output / "generated-navmesh.esp") + "\n")
+            reloaded = subprocess.run([str(EXE), "--data", str(root), "--load-order", str(order),
+                                       "--list-cells", "--output", str(root / "catalog")],
+                                      capture_output=True, text=True, timeout=90)
+            self.assertEqual(reloaded.returncode, 0, reloaded.stdout + reloaded.stderr)
+            catalog = json.loads((root / "catalog/cells.json").read_text())
+            catalog_cells = catalog["cells"]
+            for endpoint in manifest["door_route"]:
+                persistent = next(cell for cell in catalog_cells
+                                  if cell["editor_id"] == endpoint["worldspace"] + "Persistent")
+                self.assertFalse(persistent["interior"])
+                self.assertEqual(persistent["coordinates"], [0, 0])
 
 
 if __name__ == "__main__":

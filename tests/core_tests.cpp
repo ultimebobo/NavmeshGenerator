@@ -1418,8 +1418,44 @@ namespace
                 geometry.scene.renderFallbackTriangleProvenance[1].sourceTriangle == 41);
     }
 
+    void TestPersistentWorldCellIndex()
+    {
+        using namespace navmesh::skyrim;
+        // Placeholder coordinates must not claim the terrain tile, regardless
+        // of which CELL the resolver enumerates first.
+        for (const bool persistentFirst : {false, true})
+        {
+            ResolvedLoadOrder order;
+            order.cells = {{.id = 1, .exteriorCoordinates = std::array<std::int32_t, 2>{0, 0}},
+                           {.id = 2, .exteriorCoordinates = std::array<std::int32_t, 2>{0, 0}}};
+            order.cells[1].references.push_back({.id = 3, .position = {1024, 1024, 0}});
+            order.records = {
+                {.type = "CELL", .formId = 1, .worldspaceFormId = 100},
+                {.type = "CELL", .formId = 2, .worldspaceFormId = 100, .raw = PluginRecord{.flags = 0x400}},
+                {.type = "REFR", .formId = 3, .cellFormId = 2, .worldspaceFormId = 100}};
+            order.records.back().winning = {
+                .formId = 3, .cellFormId = 2, .worldspaceFormId = 100, .position = navmesh::core::Vec3{1024, 1024, 0}};
+            if (persistentFirst)
+            {
+                std::reverse(order.cells.begin(), order.cells.end());
+            }
+            const auto &terrain = order.cells[persistentFirst ? 1 : 0];
+            const auto &container = order.cells[persistentFirst ? 0 : 1];
+            const CellImpactIndex index(order);
+            const auto geometry = index.GeometryCell(terrain);
+            Require(geometry.references.size() == 1 && geometry.references.front().id == 3);
+            Require(index.GeometryCell(container).references.empty());
+            const auto neighbors = index.Neighbors(terrain, 1);
+            Require(neighbors.size() == 1 && neighbors.front()->id == terrain.id);
+            const auto footprint =
+                index.IntersectingCells(order.records.back().winning, {{1000, 1000, -10}, {1100, 1100, 10}});
+            Require(footprint.size() == 1 && footprint.front()->id == terrain.id);
+        }
+    }
+
     void TestAffectedCells()
     {
+        TestPersistentWorldCellIndex();
         using namespace navmesh::skyrim;
         using navmesh::core::Cell;
         ResolvedLoadOrder order;

@@ -267,6 +267,7 @@ namespace
         Put32(subtype, 1);
         subtype.insert(subtype.end(), {'H', 'E', 'L', 'O'});
         Sub(reference, "PDTO", subtype);
+        Sub(reference, "DATA", Bytes(24));
         Bytes source;
         Record(source, "TES4", 0, {});
         Record(source, "REFR", 0x200, reference);
@@ -293,6 +294,28 @@ namespace
         assert(script.data[script.data.size() - 1] == 1);
         assert(Get32(copied[0].raw->subrecords[2].data, 4) == 0x02000800);
         assert(copied[0].raw->subrecords[3].data == subtype);
+        const auto &copiedFields = copied[0].raw->subrecords;
+        assert(copiedFields[copiedFields.size() - 2].type == "XNDP");
+        assert(copiedFields.back().type == "DATA" && copiedFields.back().data == Bytes(24));
+        const auto identity = [](std::uint32_t id) -> std::optional<std::uint32_t> { return id; };
+        Bytes replaced;
+        assert(detail::RewriteReferenceNavigation(*copied[0].raw, identity, NavmeshDoorAssociation{0x02000901, 8},
+                                                  false, false, replaced, error));
+        Bytes expectedReplacement = rewritten;
+        // The association is the only field changed; placement must remain last.
+        constexpr std::size_t placementBytes = 6 + 24;
+        constexpr std::size_t associationBytes = 6 + 8;
+        const auto associationAt = expectedReplacement.size() - placementBytes - 8;
+        expectedReplacement[associationAt] = 1;
+        expectedReplacement[associationAt + 4] = 8;
+        assert(replaced == expectedReplacement);
+        Bytes cleared;
+        assert(
+            detail::RewriteReferenceNavigation(*copied[0].raw, identity, std::nullopt, false, false, cleared, error));
+        Bytes expectedCleared = rewritten;
+        expectedCleared.erase(expectedCleared.end() - placementBytes - associationBytes,
+                              expectedCleared.end() - placementBytes);
+        assert(cleared == expectedCleared);
         auto unknown = raw;
         unknown.subrecords.push_back({.type = "ZZZZ", .data = Bytes{1}});
         assert(!detail::RewriteReferenceNavigation(unknown, rebase, std::nullopt, false, false, rewritten, error));

@@ -129,7 +129,8 @@ persistent references stored in a distant parent CELL are bucketed by their
 world position. Worldspace identities keep overlapping coordinate grids separate.
 Interiors remain independent targets.
 
-Persistent worldspace CELL containers can carry placeholder grid coordinates.
+Persistent worldspace CELL containers can carry placeholder grid coordinates;
+the spatial index excludes those coordinates from terrain ownership and neighbor queries.
 They supply placed geometry through physical bucketing and are reported as
 `skipped_persistent_cell` when selected; they do not receive generated NAVM or
 authored border constraints. The ordinary terrain CELL at that position remains

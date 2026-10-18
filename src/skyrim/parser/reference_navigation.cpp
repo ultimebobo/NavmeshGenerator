@@ -27,6 +27,17 @@ namespace
         std::memcpy(bytes.data() + offset, &value, sizeof(value));
     }
 
+    /// Encode the output-local NAVM identity and triangle at the REFR's navigation-field position.
+    void AppendDoorAssociation(Bytes &output, const navmesh::skyrim::NavmeshDoorAssociation &association)
+    {
+        output.insert(output.end(), {'X', 'N', 'D', 'P', 8, 0});
+        const auto start = output.size();
+        output.resize(start + 8);
+        Set32(output, start, association.navmeshId);
+        output[start + 4] = static_cast<std::uint8_t>(association.triangle);
+        output[start + 5] = static_cast<std::uint8_t>(association.triangle >> 8);
+    }
+
     bool RebaseAt(Bytes &bytes, std::size_t offset, const ReferenceFormIdRebaser &rebase)
     {
         if (offset > bytes.size() || bytes.size() - offset < 4)
@@ -205,8 +216,16 @@ bool navmesh::skyrim::detail::RewriteReferenceNavigation(const PluginRecord &sou
         error = "A live door reference must contain exactly one base-object field.";
         return false;
     }
+    bool associationWritten = false;
     for (const auto &sub : source.subrecords)
     {
+        // Preserve an authored navigation slot, or insert before the final DATA
+        // placement field when the reference receives its first association.
+        if (association && !associationWritten && (sub.type == "XNDP" || sub.type == "DATA"))
+        {
+            AppendDoorAssociation(output, *association);
+            associationWritten = true;
+        }
         if (sub.type == "XNDP")
         {
             continue;
@@ -227,14 +246,9 @@ bool navmesh::skyrim::detail::RewriteReferenceNavigation(const PluginRecord &sou
         const auto header = sub.encodedBytes.size() - sub.data.size();
         std::copy(bytes.begin(), bytes.end(), output.begin() + start + header);
     }
-    if (association)
+    if (association && !associationWritten)
     {
-        output.insert(output.end(), {'X', 'N', 'D', 'P', 8, 0});
-        const auto start = output.size();
-        output.resize(start + 8);
-        Set32(output, start, association->navmeshId);
-        output[start + 4] = static_cast<std::uint8_t>(association->triangle);
-        output[start + 5] = static_cast<std::uint8_t>(association->triangle >> 8);
+        AppendDoorAssociation(output, *association);
     }
     return true;
 }
