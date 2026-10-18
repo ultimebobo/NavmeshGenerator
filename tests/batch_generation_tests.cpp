@@ -114,6 +114,90 @@ namespace
         assert(candidate.topology.valid);
     }
 
+    void TestIndependentStackedSeamPartitions()
+    {
+        using namespace navmesh::core;
+        for (const bool vertical : {true, false})
+        {
+            std::array<CandidateNavMesh, 2> candidates{Floor(0, 0, 0), Floor(4096, 0, 0)};
+            auto roof = Floor(4096, 0, 400, true);
+            // The landing fits the test agent's diameter, while every roof
+            // partition is narrower. Its tiny middle interval belongs only upstairs.
+            for (auto &candidate : candidates)
+            {
+                for (auto &vertex : candidate.mesh.vertices)
+                {
+                    vertex.y *= 96.0F / 4096;
+                }
+                RefreshCandidateTopology(candidate);
+            }
+            for (auto &vertex : roof.mesh.vertices)
+            {
+                vertex.y *= 96.0F / 4096;
+            }
+            roof.mesh.vertices.push_back({4096, 48.25F, 400});
+            roof.mesh.polygons[2].vertices = {4, 2, 5};
+            roof.mesh.polygons.push_back({.vertices = {5, 2, 3}});
+            roof.polygonSourceTriangles.push_back(7);
+            roof.polygonContributingTriangles.push_back({7, 8});
+            roof.regions[0].polygons.push_back(3);
+            auto upperLeft = Floor(0, 0, 400);
+            for (auto &vertex : upperLeft.mesh.vertices)
+            {
+                vertex.y *= 96.0F / 4096;
+            }
+            AppendFloor(candidates[0], std::move(upperLeft));
+            AppendFloor(candidates[1], std::move(roof));
+            if (!vertical)
+            {
+                for (auto &candidate : candidates)
+                {
+                    for (auto &vertex : candidate.mesh.vertices)
+                    {
+                        std::swap(vertex.x, vertex.y);
+                    }
+                    for (auto &face : candidate.mesh.polygons)
+                    {
+                        std::swap(face.vertices[1], face.vertices[2]);
+                    }
+                    RefreshCandidateTopology(candidate);
+                }
+            }
+            const AABB next =
+                vertical ? AABB{{4096, 0, -100}, {8192, 4096, 1000}} : AABB{{0, 4096, -100}, {4096, 8192, 1000}};
+            std::array<GeneratedCellCandidate, 2> cells{
+                {{1, 1, {{0, 0, -100}, {4096, 4096, 1000}}, &candidates[0]}, {2, 1, next, &candidates[1]}}};
+            assert(StitchGeneratedCandidates(cells) == 4);
+            VerifyPortals(cells);
+            for (const auto &candidate : candidates)
+            {
+                std::size_t floorLinks{}, roofLinks{};
+                for (const auto &link : candidate.borderLinks)
+                {
+                    const auto &face = candidate.mesh.polygons[link.polygon];
+                    const auto a = candidate.mesh.vertices[face.vertices[link.edge]];
+                    const auto b = candidate.mesh.vertices[face.vertices[(link.edge + 1) % 3]];
+                    if (a.z == 0)
+                    {
+                        ++floorLinks;
+                        assert(b.z == 0 && std::hypot(b.x - a.x, b.y - a.y) == 96);
+                        assert(candidate.polygonSourceTriangles[link.polygon] == 7);
+                    }
+                    else
+                    {
+                        ++roofLinks;
+                        assert(a.z == 400 && b.z == 400);
+                        assert(std::hypot(b.x - a.x, b.y - a.y) < 64);
+                        assert(candidate.polygonSourceTriangles[link.polygon] == 11);
+                    }
+                }
+                assert(floorLinks == 1 && roofLinks == 3);
+            }
+            assert(StitchGeneratedCandidates(cells) == 0);
+            VerifyPortals(cells);
+        }
+    }
+
     void TestCandidateIslandRemoval()
     {
         using namespace navmesh::core;
@@ -488,6 +572,7 @@ void TestGeneratedBatchTopology()
     TestCandidateIslandRemoval();
     TestTeleportEnclosure();
     TestGeneratedLandingSeams();
+    TestIndependentStackedSeamPartitions();
     // Batch interiors retain a supported floor even without any authored NAVM,
     // exterior boundary or door anchor, under every partitioning strategy.
     Scene interior;

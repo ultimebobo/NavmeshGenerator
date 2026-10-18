@@ -345,6 +345,8 @@ isolated interiors and exterior borders awaiting generated neighbors. Only untou
 cells supply authored border edges; batch stitching provisionally preserves unpaired seams
 and unanchored components. The complete generated set supplies common
 seam partitions, compatible shared heights and reciprocal generated triangle indices.
+Partition endpoints come only from overlapping, height-compatible floor groups;
+contours on unrelated stacked surfaces cannot subdivide a crossing below them.
 Height correction is shared in proportion to each seam triangle's interior depth,
 limiting deformation of thin clipped floors. Subdivision centers interpolate the
 adjusted triangle corners to keep the repair continuous.

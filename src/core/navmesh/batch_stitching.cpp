@@ -110,14 +110,74 @@ namespace
         std::vector<PortalPlan> portals;
     };
 
-    /// Intersect both seam partitions before choosing nearest compatible stacked-floor pairs.
-    void PlanSeam(StitchPlan &plan, std::span<GeneratedCellCandidate> cells, std::size_t left, std::size_t right,
-                  bool vertical, float boundary)
+    /// Seam edges that can compete for the same crossing; unrelated height layers stay independent.
+    struct SeamLayer
+    {
+        std::vector<SeamEdge> left, right;
+    };
+
+    /** Group overlapping edges by possible climb-compatible matches before subdividing.
+     * Compatibility uses the full linear height-difference range, including a zero
+     * crossing between endpoints. Nearest-floor assignment still happens per interval;
+     * grouping only determines which endpoints can constrain that interval's partition.
+     */
+    std::map<std::size_t, SeamLayer> CompatibleSeamLayers(const std::vector<SeamEdge> &left,
+                                                          const std::vector<SeamEdge> &right, float maximumHeightGap)
+    {
+        std::vector<std::size_t> parent(left.size() + right.size());
+        for (std::size_t index{}; index < parent.size(); ++index)
+        {
+            parent[index] = index;
+        }
+        const auto root = [&](std::size_t index)
+        {
+            while (parent[index] != index)
+            {
+                parent[index] = parent[parent[index]];
+                index = parent[index];
+            }
+            return index;
+        };
+        for (std::size_t l{}; l < left.size(); ++l)
+        {
+            const auto &a = left[l];
+            for (std::size_t r{}; r < right.size(); ++r)
+            {
+                const auto &b = right[r];
+                const auto first = std::max(std::min(a.start, a.end), std::min(b.start, b.end));
+                const auto last = std::min(std::max(a.start, a.end), std::max(b.start, b.end));
+                if (last <= first || (a.end - a.start) * (b.end - b.start) >= 0)
+                {
+                    continue;
+                }
+                const auto firstGap = PointAt(a, first).z - PointAt(b, first).z;
+                const auto lastGap = PointAt(a, last).z - PointAt(b, last).z;
+                const auto crosses = std::min(firstGap, lastGap) <= 0 && std::max(firstGap, lastGap) >= 0;
+                if (crosses || std::min(std::abs(firstGap), std::abs(lastGap)) <= maximumHeightGap)
+                {
+                    parent[root(left.size() + r)] = root(l);
+                }
+            }
+        }
+        std::map<std::size_t, SeamLayer> layers;
+        for (std::size_t index{}; index < left.size(); ++index)
+        {
+            layers[root(index)].left.push_back(left[index]);
+        }
+        for (std::size_t index{}; index < right.size(); ++index)
+        {
+            layers[root(left.size() + index)].right.push_back(right[index]);
+        }
+        return layers;
+    }
+
+    /// Intersect one compatible layer's partitions before choosing nearest floor pairs.
+    void PlanSeamLayer(StitchPlan &plan, std::span<GeneratedCellCandidate> cells, std::size_t left, std::size_t right,
+                       bool vertical, float boundary, const std::vector<SeamEdge> &leftEdges,
+                       const std::vector<SeamEdge> &rightEdges)
     {
         const auto &a = *cells[left].candidate;
         const auto &b = *cells[right].candidate;
-        const auto leftEdges = Boundary(a, vertical, boundary);
-        const auto rightEdges = Boundary(b, vertical, boundary);
         std::vector<float> partitions;
         for (const auto *edges : {&leftEdges, &rightEdges})
         {
@@ -207,6 +267,25 @@ namespace
                 const auto end = endpoint(last);
                 plan.portals.push_back({left, right, leftEdges[l].index, rightEdges[r].index, start, end,
                                         leftEdges[l].end > leftEdges[l].start});
+            }
+        }
+    }
+
+    /// Partition each compatible floor independently so elevated scenery cannot narrow a lower crossing.
+    void PlanSeam(StitchPlan &plan, std::span<GeneratedCellCandidate> cells, std::size_t left, std::size_t right,
+                  bool vertical, float boundary)
+    {
+        const auto &a = *cells[left].candidate;
+        const auto &b = *cells[right].candidate;
+        const auto maximumHeightGap = std::min(a.profile.stepHeight, b.profile.stepHeight) +
+                                      std::max(a.profile.weldTolerance, b.profile.weldTolerance);
+        const auto layers =
+            CompatibleSeamLayers(Boundary(a, vertical, boundary), Boundary(b, vertical, boundary), maximumHeightGap);
+        for (const auto &[_, layer] : layers)
+        {
+            if (!layer.left.empty() && !layer.right.empty())
+            {
+                PlanSeamLayer(plan, cells, left, right, vertical, boundary, layer.left, layer.right);
             }
         }
     }

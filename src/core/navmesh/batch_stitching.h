@@ -23,6 +23,8 @@ namespace navmesh::core
      * @param cells Complete generated exterior set with unique worldspace/bounds ownership.
      * Every candidate remains present even when a neighbor has no surviving floor.
      * Each pass plans all interval intersections before editing either mesh.
+     * Partitions are shared only among overlapping edges that can compete for a
+     * climb-compatible crossing; endpoints on unrelated height layers do not split portals.
      * Linking repeats until corner welding exposes no new compatible intervals;
      * established portal endpoints remain pinned through subsequent refinement. Shared heights
      * are welded within both movement profiles' climb limits, sharing height correction
