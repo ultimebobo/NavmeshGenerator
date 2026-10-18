@@ -366,28 +366,11 @@ namespace
         std::map<std::string, std::set<std::uint32_t>> targetsBySource;
         for (const auto &record : resolved.records)
         {
-            if (record.type != "NAVM" || !record.raw || !record.navm || !record.navm->supported ||
-                (record.raw->flags & 0x20U) ||
+            if (record.type != "NAVM" || (record.raw && (record.raw->flags & 0x20U)) ||
                 std::any_of(replacedRecords.begin(), replacedRecords.end(),
                             [&](const auto *replaced) { return replaced->formId == record.formId; }))
             {
                 continue;
-            }
-            const auto &data = record.raw->decodedPayload;
-            const auto start = static_cast<std::size_t>(record.navm->trailingData.offset);
-            const auto size = static_cast<std::size_t>(record.navm->trailingData.size);
-            if (start > data.size() || size > data.size() - start || size < 4)
-            {
-                continue;
-            }
-            const auto count = Get32(data, start);
-            if (!count)
-            {
-                continue;
-            }
-            if (count > (size - 4) / 10)
-            {
-                return false;
             }
             auto targets = targetsBySource.find(record.winning.plugin);
             if (targets == targetsBySource.end())
@@ -427,6 +410,28 @@ namespace
                     }
                 }
                 targets = targetsBySource.emplace(record.winning.plugin, std::move(localTargets)).first;
+            }
+            if (targets->second.empty())
+            {
+                continue;
+            }
+            // A file that can reference a replacement must have inspectable connection
+            // tables. Unknown layouts cannot prove the absence of stale incoming links.
+            if (!record.raw || !record.navm || !record.navm->supported)
+            {
+                return false;
+            }
+            const auto &data = record.raw->decodedPayload;
+            const auto start = static_cast<std::size_t>(record.navm->trailingData.offset);
+            const auto size = static_cast<std::size_t>(record.navm->trailingData.size);
+            if (start > data.size() || size > data.size() - start || size < 4)
+            {
+                return false;
+            }
+            const auto count = Get32(data, start);
+            if (count > (size - 4) / 10)
+            {
+                return false;
             }
             bool incoming{};
             for (std::uint32_t index{}; index < count; ++index)
@@ -1072,6 +1077,25 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             std::max_element(item.cell->navMeshes.begin(), item.cell->navMeshes.end(),
                              [](const auto &a, const auto &b) { return a.polygons.size() < b.polygons.size(); });
         generatedMeshes.emplace(primary->id, item.candidate->mesh);
+    }
+    // The neutral scene contains only decoded meshes. Check the winning record
+    // inventory too, so a partial scene cannot leave overlapping authored navigation.
+    for (const auto &record : resolved.records)
+    {
+        if (record.type != "NAVM" || !record.cellFormId || !byCell.contains(*record.cellFormId) ||
+            (record.raw && (record.raw->flags & 0x20U)))
+        {
+            continue;
+        }
+        const auto &meshes = byCell.at(*record.cellFormId)->cell->navMeshes;
+        if (!record.raw || !record.navm || !record.navm->supported ||
+            std::none_of(meshes.begin(), meshes.end(), [&](const auto &mesh) { return mesh.id == record.formId; }))
+        {
+            error = std::format("Selected CELL {:08X} contains NAVM {:08X} without supported geometry; "
+                                "all live NAVMs must be replaceable together.",
+                                *record.cellFormId, record.formId);
+            return false;
+        }
     }
     std::vector<const ResolvedRecord *> records;
     std::map<std::uint32_t, const ResolvedRecord *> neighborRecords;

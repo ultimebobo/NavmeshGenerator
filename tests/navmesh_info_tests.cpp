@@ -403,6 +403,79 @@ namespace
         assert(!std::filesystem::exists(root / "disconnected" / "generated-navmesh.esp"));
     }
 
+    void TestUnsupportedNavigationClosure(const std::filesystem::path &root)
+    {
+        std::filesystem::create_directories(root);
+        for (const unsigned variant : {0U, 1U, 2U})
+        {
+            const bool sameCell = variant != 1;
+            Bytes navm, children, cells, plugin;
+            Sub(navm, "NVNM", Geometry(0x100));
+            Record(children, "NAVM", 0x200, navm);
+            if (sameCell)
+            {
+                auto unsupported = Geometry(0x100);
+                unsupported[0] = 13;
+                navm.clear();
+                if (variant != 2)
+                {
+                    Sub(navm, "NVNM", unsupported);
+                }
+                Record(children, "NAVM", 0x201, navm);
+            }
+            Bytes temporary;
+            Group(temporary, 0x100, 9, children);
+            Record(cells, "CELL", 0x100, {});
+            Group(cells, 0x100, 6, temporary);
+            if (!sameCell)
+            {
+                // A different layout version can retain incoming triangle references.
+                auto unsupported = Geometry(0x101);
+                unsupported[0] = 13;
+                unsupported[66] = 0;
+                unsupported[67] = 0;
+                unsupported[72] = 1;
+                unsupported[76] = 1;
+                Bytes incoming;
+                Put32(incoming, 0);
+                Put32(incoming, 0x200);
+                Put16(incoming, 0);
+                unsupported.insert(unsupported.begin() + 80, incoming.begin(), incoming.end());
+                navm.clear();
+                Sub(navm, "NVNM", unsupported);
+                children.clear();
+                Record(children, "NAVM", 0x201, navm);
+                temporary.clear();
+                Group(temporary, 0x101, 9, children);
+                Record(cells, "CELL", 0x101, {});
+                Group(cells, 0x101, 6, temporary);
+            }
+            Record(plugin, "TES4", 0, {});
+            Group(plugin, 0x4C4C4543, 0, cells);
+            const auto source = root / (variant == 0   ? "Mixed.esm"
+                                        : variant == 1 ? "UnknownNeighbor.esm"
+                                                       : "Missing.esm");
+            Write(source, plugin);
+            const auto resolved = ResolveLoadOrder({.dataDirectory = root, .plugins = {source}});
+            assert(resolved.cells.front().navMeshes.size() == 1);
+            assert(variant == 2 ? resolved.diagnostics.empty()
+                                : resolved.diagnostics.size() == 1 &&
+                                      resolved.diagnostics.front().kind == DiagnosticKind::UnsupportedVersion);
+            navmesh::core::CandidateNavMesh candidate;
+            candidate.mesh = resolved.cells.front().navMeshes.front();
+            std::filesystem::path output;
+            std::string error;
+            for (const bool copy : {false, true})
+            {
+                const auto directory = root / (source.stem().string() + (copy ? "-copy" : "-patch"));
+                assert(!WriteNavmeshOverrides(directory, {source}, resolved, {{&resolved.cells.front(), &candidate}},
+                                              output, error, copy ? source.filename().string() : ""));
+                assert(!error.empty());
+                assert(!std::filesystem::exists(directory / (copy ? source.filename() : "generated-navmesh.esp")));
+            }
+        }
+    }
+
     void TestSourceCopy(const std::filesystem::path &root, bool light = false)
     {
         std::filesystem::create_directories(root);
@@ -624,6 +697,7 @@ void TestNavmeshInfoExport()
     TestAuxiliaryMetadata();
     TestReferenceSafety(root);
     TestReplacedLedge(root / "traversal");
+    TestUnsupportedNavigationClosure(root / "unsupported");
     TestSourceCopy(root);
     TestSourceCopy(root / "light-source", true);
 }

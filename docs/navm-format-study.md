@@ -91,7 +91,12 @@ read back and compared with the serialized geometry. Every consuming external
 edge is checked against its table, and emitted destinations must contain the
 referenced triangle.
 
-The generated candidate must be nonempty, topologically valid, and stay within
+Every live NAVM in a selected CELL must have supported geometry, including cells
+that also contain supported NAVMs. An unknown live NAVM layout in a file whose
+master/self table can reference a replaced identity also rejects export: its
+incoming triangle dependencies cannot be ruled out safely.
+
+The generated candidate must be topologically valid and stay within
 the selected exterior cell when applicable, apart from bounded extensions at
 matched authored border portal endpoints. Unresolved source dependencies are
 rejected. An uncovered CELL receives a new plugin-owned NAVM identity, a fresh
@@ -160,6 +165,14 @@ and endpoint coordinates; new or moved edges must agree with their reciprocal ed
 This verifies the exported record graph; runtime movement and
 AI behavior still require game testing. The layouts follow
 [xEdit's Skyrim record definitions](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsTES5.pas).
+
+A winning generated plugin must win for the complete navigation patch, including
+neighbor NAVMs and door references. NAVM identities are separate records: winning
+one mesh does not suppress other meshes in the same CELL or repair incoming
+triangle references by itself. These structural checks reduce conflict hazards;
+they do not certify engine stability, saved-game pathing state, dynamic geometry,
+or quest-specific movement on regenerated floors. Generate from the complete
+active input snapshot and repeat generation when that snapshot changes.
 
 ### Navigation information map
 

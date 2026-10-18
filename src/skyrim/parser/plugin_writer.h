@@ -32,6 +32,9 @@ namespace navmesh::skyrim
      * Cells without any winning NAVM receive a plugin-owned identity and temporary
      * CELL child placement with a serialized PathingCell type tag for Creation Kit loading;
      * unsupported existing records cannot be treated as uncovered.
+     * Every live NAVM in a selected CELL must have supported geometry. Unknown live NAVM
+     * layouts in files able to reference replaced identities reject export because incoming
+     * triangle dependencies cannot be ruled out, even without a matched border.
      * Authored incoming links to replaced geometry are removed from all source NAVMs;
      * matched borders receive fresh reciprocal links. Unrelated portals are retained.
      * Bounded authored neighbor vertex edits are checked against the input snapshot,
