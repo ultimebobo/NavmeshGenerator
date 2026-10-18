@@ -212,7 +212,7 @@ MO2 configuration or profile files.
 
 Split MO2 layouts are supported: when `ModOrganizer.ini` has a relative `base_directory`, profile/mod/overwrite paths resolve from that directory (for example, a sibling `MODS` tree), while `gamePath` resolves to the configured stock game directory.
 
-The direct reader currently resolves its fixture-tested full/light identities and override chains, and reports missing masters/cycles/duplicates. Its deliberately narrow coverage is documented in [the parser evaluation](parser-library-evaluation.md).
+The direct reader currently resolves its fixture-tested full/light identities and override chains, and reports missing masters/cycles/duplicates. File-local FormID prefixes index the containing plugin's master table; indices at or beyond its end name that plugin, matching [xEdit's identity conversion](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbImplementation.pas). An unresolved-reference diagnostic names the containing file, the reference's hexadecimal source-local FormID, the containing record's source-local and load-order identities, and the missing master; it does not mean the target object belongs to that file or is absent from it. Null or unresolved base identities supply no base object. Its deliberately narrow coverage is documented in [the parser evaluation](parser-library-evaluation.md).
 
 ## Vortex input
 

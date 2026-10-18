@@ -146,6 +146,8 @@ namespace navmesh::skyrim
         std::vector<RecordOrigin> origins;
         std::optional<std::uint32_t> cellFormId;
         std::optional<std::uint32_t> worldspaceFormId;
+        /// Source-local base identities from Read; ResolveLoadOrder converts them to global IDs,
+        /// preserving nulls and replacing unresolved dependencies with null after a diagnostic.
         std::vector<std::uint32_t> referencedFormIds;
         std::optional<std::array<std::int32_t, 2>> exteriorCoordinates;
         bool persistent{};
@@ -245,6 +247,8 @@ namespace navmesh::skyrim
     /// @param input Data directory and plugins in load order, plus optional progress callback.
     /// @param reader Plugin reader implementation; defaults to the direct reader.
     /// @return Winning records, cells, and explicit diagnostics for unsupported input.
+    /// File-local master indices at or beyond the master count name the containing plugin;
+    /// null references remain null. Missing-master diagnostics identify hexadecimal source-local IDs.
     /// References include valid model-local base bounds and reciprocal teleport arrival positions;
     /// Missing or deleted return links supply no arrival anchor; initially disabled quest doors retain theirs.
     [[nodiscard]] ResolvedLoadOrder ResolveLoadOrder(const LoadOrderInput &input,

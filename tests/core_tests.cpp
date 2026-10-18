@@ -2872,6 +2872,7 @@ namespace
 void TestBorderCavityRegressions();
 void TestNavmeshInfoExport();
 void TestNavmeshCover();
+void TestFormIdResolution();
 
 int main(int argc, char **argv)
 {
@@ -2882,6 +2883,12 @@ int main(int argc, char **argv)
     _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 #endif
+    if (argc == 2 && std::string_view(argv[1]) == "--form-ids-only")
+    {
+        TestFormIdResolution();
+        TestResolvedLoadOrder();
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--unused-exterior-only")
     {
         TestTeleportInputResolution();
@@ -3010,6 +3017,7 @@ int main(int argc, char **argv)
     TestGeometryNeighborhoodCulling();
     TestAffectedCells();
     TestResolvedLoadOrder();
+    TestFormIdResolution();
     TestTeleportInputResolution();
     TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();

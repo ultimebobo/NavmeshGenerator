@@ -1704,6 +1704,32 @@ class BatchRebuild(unittest.TestCase):
                 portals += 1
         self.assertGreater(portals, 0)
 
+    def test_file_local_self_indices_survive_navigation_export(self):
+        reference = (sub("NAME", struct.pack("<I", 0x04000600)) +
+                     sub("XNDP", struct.pack("<IHH", 0x04000200, 0, 0)) +
+                     sub("DATA", struct.pack("<6f", 2048, 2048, 0, 0, 0, 0)))
+        self.write_baseline({0: navm_with_door(0, 0x04000500)},
+                            {0: record("REFR", 0x500, reference)}, cell_count=1)
+        baseline = self.root / "Baseline.esm"
+        baseline.write_bytes(baseline.read_bytes() + record("DOOR", 0x600, b""))
+        (self.root / "plugins.txt").write_text("Baseline.esm\n")
+        original = baseline.read_bytes()
+        for scope, extra, filename in [
+            ("patch", ["--generate-plugin"], "generated-navmesh.esp"),
+            ("copy", ["--copy-plugin"], "Baseline.esm"),
+        ]:
+            with self.subTest(scope=scope):
+                output = self.run_cli("--rebuild-plugin", "Baseline.esm", *extra, output=scope)
+                report = json.loads((output / "batch-report.json").read_text())
+                self.assertEqual(report["input_diagnostics"], [])
+                records = read_records(output / filename)
+                payload = next(payload for kind, form, _, payload in records
+                               if kind == "REFR" and form == 0x500)
+                fields = dict(read_subrecords(payload))
+                self.assertEqual(struct.unpack("<I", fields[b"NAME"]), (0x600,))
+                self.assert_door_navigation(output / filename)
+                self.assertEqual(baseline.read_bytes(), original)
+
     def test_door_navigation_preserves_winner_and_cached_candidates(self):
         references = {x: record("REFR", 0x500 + x,
                                 sub("NAME", struct.pack("<I", 0x600)) +

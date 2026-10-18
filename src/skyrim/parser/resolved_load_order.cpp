@@ -6,7 +6,9 @@
 #include <cstring>
 #include <cmath>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <zlib.h>
@@ -50,6 +52,13 @@ namespace
         std::transform(s.begin(), s.end(), s.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return s;
+    }
+    /// Mark diagnostic identities as hexadecimal so file-local and load-order IDs are unambiguous.
+    std::string HexFormId(std::uint32_t id)
+    {
+        std::ostringstream text;
+        text << "0x" << std::uppercase << std::hex << std::setw(8) << std::setfill('0') << id;
+        return text.str();
     }
     bool IndexedRecordType(const std::string &type)
     {
@@ -736,9 +745,13 @@ namespace navmesh::skyrim
         }
         const auto resolve = [&](std::size_t owner, std::uint32_t raw) -> std::optional<std::uint32_t>
         {
+            if (raw == 0)
+            {
+                return 0;
+            }
             const auto hi = raw >> 24;
-            // A file's FormID prefix indexes its master table from zero. New
-            // records use the index immediately after the last master.
+            // File-local indices address the TES4 master table. Indices at or beyond
+            // its end belong to the containing file, matching xEdit's FileFileIDtoLoadOrderFileID.
             std::size_t target = owner;
             if (hi < sources[owner].masters.size())
             {
@@ -749,15 +762,19 @@ namespace navmesh::skyrim
                 }
                 target = it->second;
             }
-            else if (hi != sources[owner].masters.size())
-            {
-                return std::nullopt;
-            }
             if (sources[target].light)
             {
                 return 0xFE000000U | (light[target] << 12) | (raw & 0xFFFU);
             }
             return full[target] << 24 | (raw & 0xFFFFFFU);
+        };
+        // Resolution fails only when a declared master is absent; this says nothing
+        // about whether the target record exists in the reader's bounded record index.
+        const auto unresolvedReason = [&](std::size_t owner, std::uint32_t raw)
+        {
+            const auto slot = raw >> 24;
+            return "master '" + sources[owner].masters.at(slot) + "' at source-local slot " + HexFormId(slot) +
+                   " is absent from the load order.";
         };
         std::unordered_map<std::uint32_t, std::size_t> winners;
         for (std::size_t i = 0; i < sources.size(); ++i)
@@ -789,11 +806,13 @@ namespace navmesh::skyrim
             for (auto &sourceRecord : records)
             {
                 auto record = std::move(sourceRecord);
+                const auto sourceFormId = record.formId;
                 const auto global = resolve(i, record.formId);
                 if (!global)
                 {
                     result.diagnostics.push_back({DiagnosticKind::UnresolvedFormId, sources[i].path.filename().string(),
-                                                  "Cannot resolve FormID " + std::to_string(record.formId) + "."});
+                                                  "Cannot resolve source-local FormID " + HexFormId(sourceFormId) +
+                                                      " in " + record.type + ": " + unresolvedReason(i, sourceFormId)});
                     continue;
                 }
                 record.formId = *global;
@@ -811,10 +830,13 @@ namespace navmesh::skyrim
                     const auto resolvedReference = resolve(i, reference);
                     if (!resolvedReference)
                     {
-                        result.diagnostics.push_back({DiagnosticKind::UnresolvedFormId,
-                                                      sources[i].path.filename().string(),
-                                                      "Cannot resolve referenced FormID " + std::to_string(reference) +
-                                                          " in " + record.type + "."});
+                        result.diagnostics.push_back(
+                            {DiagnosticKind::UnresolvedFormId, sources[i].path.filename().string(),
+                             "Cannot resolve referenced source-local FormID " + HexFormId(reference) + " in " +
+                                 record.type + " " + HexFormId(sourceFormId) + " (load-order FormID " +
+                                 HexFormId(record.formId) + "): " + unresolvedReason(i, reference)});
+                        // Unresolved source-local IDs must never alias unrelated global records.
+                        reference = 0;
                     }
                     else
                     {

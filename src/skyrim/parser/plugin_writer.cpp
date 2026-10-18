@@ -220,11 +220,8 @@ namespace
                                               std::uint32_t raw)
     {
         const auto index = static_cast<std::size_t>(raw >> 24);
-        if (index > source.masters.size())
-        {
-            return std::nullopt;
-        }
-        const auto &owner = index == source.masters.size() ? source.name : source.masters[index];
+        // Match load-order resolution: indices outside the master table name the source file.
+        const auto &owner = index >= source.masters.size() ? source.name : source.masters[index];
         const auto it = std::find_if(outputMasters.begin(), outputMasters.end(),
                                      [&](const auto &master) { return SameName(master, owner); });
         if (it == outputMasters.end())
