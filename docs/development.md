@@ -64,6 +64,7 @@ binary or in the debug build directory; `NAVMESH_TEST_EXE` can select another pa
 xmake f -m release
 xmake build NavmeshGenerator
 python tools/test_batch_rebuild.py ./build/windows/x64/release/NavmeshGenerator.exe
+python tools/test_create_test_world.py ./build/windows/x64/release/NavmeshGenerator.exe
 python tools/test_bsa_index.py
 xmake build navmesh-bsa-probe
 python tools/test_native_bsa.py ./build/windows/x64/release/navmesh-bsa-probe.exe
