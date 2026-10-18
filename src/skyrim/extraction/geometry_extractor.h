@@ -127,7 +127,9 @@ namespace navmesh::skyrim
     /// Landscape rock assets are tagged as navigation obstacles while retaining their collision geometry.
     /// Furniture, containers and STAT assets in the clutter directory retain supported collision as obstacles
     /// without supplying walkable floors. Supported meshes, convex hulls, boxes and tessellated capsules follow
-    /// shape/chunk transforms, active T-body transforms, collision-target ancestry and the placed reference.
+    /// shape/chunk transforms, active T-body transforms, non-root collision-target ancestry and the placed reference.
+    /// The placed reference replaces the NIF root transform. Render shapes and fire bounds include their own
+    /// local transform and non-root ancestors, resolved by block identity rather than node name.
     /// Ordinary body translation/rotation are inactive. Shared shapes retain distinct placements.
     /// Degenerate hulls, invalid dimensions and unsupported primitives supply no collision; skin radii are not expanded.
     /// Bodies with nonphysical Skyrim layers or without physical contact response supply no solid geometry;
@@ -141,8 +143,11 @@ namespace navmesh::skyrim
     /// obstacle-only world volumes; runtime input provenance is retained in scene sources.
     /// Inventory and other BOS-only indexed base classes supply geometry only for effective
     /// runtime placements; indexing them does not enable ordinary plugin clutter geometry.
-    /// Operable DOOR models are excluded from permanent support and obstruction;
-    /// exterior teleport thresholds with valid bounds and reciprocal arrival metadata supply obstacle-only
+    /// Operable DOOR models are excluded from permanent support and obstruction.
+    /// ACTI passages exclude animated panel branches from collision and display while retaining fixed siblings.
+    /// Paired Open/Close sequences identify panels, as do behavior-driven door/gate/portcullis assets with
+    /// changing transform keys. External runtime graphs are not evaluated or assigned an inferred pose.
+    /// Exterior teleport thresholds with valid bounds and reciprocal arrival metadata supply obstacle-only
     /// placed OBND volumes, separating same-space floors without reading authored NAVM or the door model.
     /// Static frames and thresholds remain eligible, and exit metadata is handled by callers.
     [[nodiscard]] GeometryExtraction ExtractGeometry(const std::filesystem::path &dataDirectory, const core::Cell &cell,

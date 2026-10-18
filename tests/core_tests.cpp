@@ -2909,6 +2909,7 @@ void TestBorderCavityRegressions();
 void TestNavmeshInfoExport();
 void TestNavmeshCover();
 void TestFormIdResolution();
+void TestOperablePassages();
 
 int main(int argc, char **argv)
 {
@@ -2919,6 +2920,7 @@ int main(int argc, char **argv)
     _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 #endif
+    TestOperablePassages();
     if (argc == 2 && std::string_view(argv[1]) == "--form-ids-only")
     {
         TestFormIdResolution();

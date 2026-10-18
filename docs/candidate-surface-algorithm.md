@@ -25,8 +25,8 @@ placements retain their existing exclusion policy. Extraction triangulates close
 `bhkConvexVerticesShape` vertex hulls and boxes, and tessellates capsule sides
 and hemispherical ends, including through list and shape-transform wrappers.
 Shape and compressed-chunk transforms apply in Havok space; active `bhkRigidBodyT`
-transforms precede conversion to model units and the collision target's complete
-node ancestry, then the placed-reference transform. Ordinary `bhkRigidBody`
+transforms precede conversion to model units and the collision target's non-root
+node ancestry, then the placed-reference transform, which replaces the NIF root transform. Ordinary `bhkRigidBody`
 translation and rotation are inactive. Shared shapes retain each distinct placement.
 Convex skin radii are not expanded; degenerate hulls and invalid primitive dimensions
 supply no collision. Without supported collision these obstacles
@@ -64,6 +64,14 @@ the reciprocal arrival position on the accessible side. Missing or invalid retur
 metadata supplies no boundary volume. This policy uses geometry and teleport
 records independently of authored NAVM. Static door frames, thresholds and
 adjoining floors remain eligible geometry.
+Stateful ACTI passages use the same open-traversal policy for their movable parts:
+animated panel branches supply neither permanent collision nor display fallback,
+while fixed frame and threshold siblings remain eligible. Paired Open/Close NIF
+sequences identify panels without relying on model names; behavior-graph assets
+with door, gate or portcullis names use their changing transform controllers.
+Descendant collision and render shapes follow the panel policy. Containers and
+furniture keep their ordinary obstacle policy. External HKX state graphs are not
+evaluated, so extraction omits moving panels rather than guessing a parked pose.
 Collision-impact selection compares threshold volumes at their historical
 placement/base-record versions and includes destination entrances when return-side
 teleport metadata changes.

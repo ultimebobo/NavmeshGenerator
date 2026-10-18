@@ -4,6 +4,7 @@
 #include "core/geometry/convex_hull.h"
 
 #include <NifFile.hpp>
+#include <Animation.hpp>
 #include <bhk.hpp>
 #include <algorithm>
 #include <array>
@@ -48,6 +49,19 @@ namespace
             path.erase(0, std::string_view("meshes/").size());
         }
         return path;
+    }
+
+    /// Behavior-driven passage assets can keep their state names outside the NIF in an HKX graph.
+    [[nodiscard]] bool IsPassageAsset(const std::string &path)
+    {
+        const auto name = std::filesystem::path(NormalizedModelPath(path)).stem().string();
+        return name.find("door") != std::string::npos || name.find("gate") != std::string::npos ||
+               name.find("portcullis") != std::string::npos;
+    }
+
+    [[nodiscard]] bool IsAnimatedAsset(const std::string &path)
+    {
+        return ("/" + NormalizedModelPath(path)).find("/animated/") != std::string::npos;
     }
 
     /// Only persistent static fire placements may supply a permanent navigation exclusion.
@@ -191,8 +205,183 @@ namespace
         navmesh::core::AABB hearthBedBounds;
         std::vector<std::string> collisionShapeTypes;
         bool nonSolidCollision{};
+        bool operablePartsExcluded{};
+        bool operablePassage{};
         std::string version;
     };
+
+    using OperableNodes = std::unordered_set<const nifly::NiAVObject *>;
+
+    [[nodiscard]] std::string AnimationStateName(std::string name)
+    {
+        const auto first = name.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos)
+        {
+            return {};
+        }
+        name = name.substr(first, name.find_last_not_of(" \t\r\n") - first + 1);
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+        return name;
+    }
+
+    /// A direct controller target is authoritative; name-only links require a unique matching scene object.
+    [[nodiscard]] const nifly::NiAVObject *SequenceTarget(const nifly::NiHeader &header,
+                                                          const nifly::ControllerLink &link)
+    {
+        if (const auto *controller = header.GetBlock<nifly::NiTransformController>(link.controllerRef))
+        {
+            if (const auto *target = header.GetBlock<nifly::NiAVObject>(controller->targetRef))
+            {
+                return target;
+            }
+        }
+        const nifly::NiAVObject *target{};
+        for (std::uint32_t block{}; block < header.GetNumBlocks(); ++block)
+        {
+            const auto *object = header.GetBlock<nifly::NiAVObject>(block);
+            if (object && !link.nodeName.get().empty() && object->name.get() == link.nodeName.get())
+            {
+                if (target)
+                {
+                    return nullptr;
+                }
+                target = object;
+            }
+        }
+        return target;
+    }
+
+    /// Missing channels and constant keys do not make a fixed frame an operable panel.
+    [[nodiscard]] bool HasTransformMotion(const nifly::NiTransformData &data)
+    {
+        const auto changes = [](const auto &keys)
+        {
+            for (std::uint32_t index = 1; index < keys.GetNumKeys(); ++index)
+            {
+                if (!(keys.GetKey(index).value == keys.GetKey(0).value))
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        for (std::size_t index = 1; index < data.quaternionKeys.size(); ++index)
+        {
+            const auto &first = data.quaternionKeys.front().value;
+            const auto &value = data.quaternionKeys[index].value;
+            // Opposite quaternion signs encode the same orientation.
+            const bool same = first.w == value.w && first.x == value.x && first.y == value.y && first.z == value.z;
+            const bool opposite =
+                first.w == -value.w && first.x == -value.x && first.y == -value.y && first.z == -value.z;
+            if (!same && !opposite)
+            {
+                return true;
+            }
+        }
+        return changes(data.translations) || changes(data.scales) || changes(data.xRotations) ||
+               changes(data.yRotations) || changes(data.zRotations);
+    }
+
+    /** Identify movable passage branches without evaluating external runtime behavior graphs.
+     * Paired Open/Close sequences identify operable activators independently of asset names. Behavior-driven
+     * door/gate assets instead expose direct transform controllers. Only animated targets are excluded;
+     * fixed frame and threshold siblings remain physical geometry in their authored model coordinates.
+     */
+    [[nodiscard]] OperableNodes FindOperableNodes(const nifly::NifFile &nif, bool passageAsset)
+    {
+        const auto &header = nif.GetHeader();
+        OperableNodes result;
+        bool behaviorDriven{};
+        const auto hasMotion = [&](const auto &interpolatorRef)
+        {
+            const auto *interpolator = header.GetBlock<nifly::NiTransformInterpolator>(interpolatorRef);
+            const auto *data = interpolator ? header.GetBlock(interpolator->dataRef) : nullptr;
+            return data && HasTransformMotion(*data);
+        };
+        for (std::uint32_t block{}; block < header.GetNumBlocks(); ++block)
+        {
+            behaviorDriven = behaviorDriven || header.GetBlock<nifly::BSBehaviorGraphExtraData>(block) != nullptr;
+            const auto *manager = header.GetBlock<nifly::NiControllerManager>(block);
+            if (!manager)
+            {
+                continue;
+            }
+            bool hasOpen{}, hasClose{};
+            for (auto sequenceRef = manager->controllerSequenceRefs.cbegin();
+                 sequenceRef != manager->controllerSequenceRefs.cend(); ++sequenceRef)
+            {
+                if (const auto *sequence = header.GetBlock(*sequenceRef))
+                {
+                    const auto name = AnimationStateName(sequence->name.get());
+                    hasOpen = hasOpen || name == "open";
+                    hasClose = hasClose || name == "close";
+                }
+            }
+            if (!hasOpen || !hasClose)
+            {
+                continue;
+            }
+            for (auto sequenceRef = manager->controllerSequenceRefs.cbegin();
+                 sequenceRef != manager->controllerSequenceRefs.cend(); ++sequenceRef)
+            {
+                const auto *sequence = header.GetBlock(*sequenceRef);
+                if (!sequence || (AnimationStateName(sequence->name.get()) != "open" &&
+                                  AnimationStateName(sequence->name.get()) != "close"))
+                {
+                    continue;
+                }
+                for (auto linkAt = sequence->controlledBlocks.cbegin(); linkAt != sequence->controlledBlocks.cend();
+                     ++linkAt)
+                {
+                    const auto &link = *linkAt;
+                    if (!hasMotion(link.interpolatorRef))
+                    {
+                        continue;
+                    }
+                    if (const auto *target = SequenceTarget(header, link))
+                    {
+                        result.insert(target);
+                    }
+                }
+            }
+        }
+        if (behaviorDriven && passageAsset)
+        {
+            for (std::uint32_t block{}; block < header.GetNumBlocks(); ++block)
+            {
+                const auto *controller = header.GetBlock<nifly::NiTransformController>(block);
+                if (controller && hasMotion(controller->interpolatorRef))
+                {
+                    if (const auto *target = header.GetBlock<nifly::NiAVObject>(controller->targetRef))
+                    {
+                        result.insert(target);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    /// A panel may own collision/render descendants rather than attaching geometry to its controller target.
+    [[nodiscard]] bool IsOperablePart(const nifly::NifFile &nif, nifly::NiAVObject *object,
+                                      const OperableNodes &operableNodes)
+    {
+        if (operableNodes.empty())
+        {
+            return false;
+        }
+        std::unordered_set<const nifly::NiAVObject *> ancestors;
+        while (object && ancestors.insert(object).second)
+        {
+            if (operableNodes.contains(object))
+            {
+                return true;
+            }
+            object = nif.GetParentNode(object);
+        }
+        return false;
+    }
 
     /** Enclose every possible model placement, including continuous translation and rotation ranges.
      * Support vertices already include NIF/Havok transforms or exclusion bounds in model-local Skyrim units.
@@ -244,6 +433,27 @@ namespace
         const nifly::bhkRigidBody *body{};
         nifly::Matrix4 target;
     };
+
+    /** Resolve geometry into placed-model coordinates by block identity, including the object itself.
+     * Skyrim replaces the model root's local transform with the REFR transform. Only descendants
+     * contribute NIF transforms; unnamed and duplicate-named ancestors are valid. Cycles supply no geometry.
+     */
+    [[nodiscard]] std::optional<nifly::Matrix4> ModelSpaceTransform(const nifly::NifFile &nif,
+                                                                    nifly::NiAVObject *object)
+    {
+        nifly::Matrix4 transform;
+        std::unordered_set<const nifly::NiAVObject *> ancestors;
+        while (object && object != nif.GetRootNode())
+        {
+            if (!ancestors.insert(object).second)
+            {
+                return std::nullopt;
+            }
+            transform = object->transform.ToMatrix() * transform;
+            object = nif.GetParentNode(object);
+        }
+        return transform;
+    }
 
     /// Rotate an xyzw quaternion and translate without changing the input coordinate units.
     [[nodiscard]] nifly::Vector3 ApplyHavokTransform(const nifly::QuaternionXYZW &q, const nifly::Vector4 &translation,
@@ -617,7 +827,7 @@ namespace
 
     /// Decode each reachable shape placement. The active path prevents cycles without discarding shared instances.
     void LoadPackedCollision(const nifly::NifFile &nif, TriangleGeometry &result, std::vector<std::string> &shapeTypes,
-                             bool &nonSolidCollision)
+                             bool &nonSolidCollision, const OperableNodes &operableNodes, bool &operablePartsExcluded)
     {
         const auto &header = nif.GetHeader();
         std::function<void(nifly::bhkShape *, CollisionTransform, std::vector<std::uint32_t>)> visit =
@@ -722,6 +932,11 @@ namespace
             {
                 continue;
             }
+            if (IsOperablePart(nif, header.GetBlock(collision->targetRef), operableNodes))
+            {
+                operablePartsExcluded = true;
+                continue;
+            }
             const auto *body =
                 dynamic_cast<nifly::bhkRigidBody *>(header.GetBlock<nifly::NiObject>(collision->bodyRef));
             if (!body)
@@ -733,20 +948,12 @@ namespace
                 nonSolidCollision = true;
                 continue;
             }
-            // Collision follows the target's complete node hierarchy, including unnamed and duplicate-named nodes.
-            CollisionTransform transform{.body = body};
-            auto *target = header.GetBlock(collision->targetRef);
-            std::unordered_set<const nifly::NiAVObject *> ancestors;
-            while (target && ancestors.insert(target).second)
-            {
-                auto local = target->transform.ToMatrix();
-                transform.target = local * transform.target;
-                target = nif.GetParentNode(target);
-            }
-            if (target)
+            const auto target = ModelSpaceTransform(nif, header.GetBlock(collision->targetRef));
+            if (!target)
             {
                 continue;
             }
+            CollisionTransform transform{.body = body, .target = *target};
             visit(header.GetBlock(body->shapeRef), transform, {});
         }
     }
@@ -768,15 +975,14 @@ namespace
         {
             return;
         }
-        nifly::MatTransform parentTransform;
-        parentTransform.Clear();
-        if (const auto *parent = nif.GetParentNode(shape))
+        const auto transform = ModelSpaceTransform(nif, shape);
+        if (!transform)
         {
-            nif.GetNodeTransformToGlobal(parent->name.get(), parentTransform);
+            return;
         }
         for (auto &vertex : vertices)
         {
-            vertex = parentTransform.ApplyTransform(shape->transform.ApplyTransform(vertex));
+            vertex = *transform * vertex;
         }
         for (const auto &triangle : triangles)
         {
@@ -972,7 +1178,8 @@ namespace
         return bounds;
     }
 
-    [[nodiscard]] NifGeometry LoadNif(const std::filesystem::path &path, bool includeRender, bool includeHearth)
+    [[nodiscard]] NifGeometry LoadNif(const std::filesystem::path &path, bool includeRender, bool includeHearth,
+                                      bool operableActivator, bool passageAsset)
     {
         NifGeometry result;
         nifly::NifFile nif;
@@ -981,7 +1188,10 @@ namespace
             return result;
         }
         result.version = nif.GetHeader().GetVersion().String();
-        LoadPackedCollision(nif, result.collision, result.collisionShapeTypes, result.nonSolidCollision);
+        const auto operableNodes = operableActivator ? FindOperableNodes(nif, passageAsset) : OperableNodes{};
+        result.operablePassage = !operableNodes.empty();
+        LoadPackedCollision(nif, result.collision, result.collisionShapeTypes, result.nonSolidCollision, operableNodes,
+                            result.operablePartsExcluded);
         if (includeHearth)
         {
             result.hearthBedBounds = FindHearthBedBounds(nif);
@@ -993,24 +1203,28 @@ namespace
         result.fireExclusion = BuildFireExclusion(nif);
         for (auto *shape : nif.GetShapes())
         {
+            if (IsOperablePart(nif, shape, operableNodes))
+            {
+                result.operablePartsExcluded = true;
+                continue;
+            }
             std::vector<nifly::Vector3> vertices;
             std::vector<nifly::Triangle> triangles;
             if (!nif.GetVertsForShape(shape, vertices) || !shape->GetTriangles(triangles))
             {
                 continue;
             }
-            nifly::MatTransform nodeTransform;
-            nodeTransform.Clear();
-            if (const auto *parentNode = nif.GetParentNode(shape); parentNode != nullptr)
+            const auto transform = ModelSpaceTransform(nif, shape);
+            if (!transform)
             {
-                nif.GetNodeTransformToGlobal(parentNode->name.get(), nodeTransform);
+                continue;
             }
             const auto base = static_cast<std::uint32_t>(result.render.vertices.size());
             result.render.shapes.push_back(shape->name.get());
             result.render.vertices.reserve(result.render.vertices.size() + vertices.size());
             for (const auto &vertex : vertices)
             {
-                const auto transformed = nodeTransform.ApplyTransform(vertex);
+                const auto transformed = *transform * vertex;
                 result.render.vertices.push_back({transformed.x, transformed.y, transformed.z});
             }
             for (const auto &triangle : triangles)
@@ -1193,7 +1407,7 @@ namespace
         std::replace(path.begin(), path.end(), '/', '\\');
         path.insert(path.begin(), '\\');
         return (!IsFireEffect(reference) && path.find("\\effects\\") != std::string::npos) ||
-               path.find("\\animated\\") != std::string::npos ||
+               (IsAnimatedAsset(reference.modelPath) && reference.baseRecordType != "ACTI") ||
                (!IsFireEffect(reference) && path.find("\\fx\\") != std::string::npos);
     }
 
@@ -1356,7 +1570,8 @@ namespace navmesh::skyrim
             return found != models.end() && !found->second.value->version.empty();
         }
         std::shared_ptr<const NifGeometry> Model(const std::filesystem::path &path, bool includeRender,
-                                                 bool includeHearth, const std::string &key)
+                                                 bool includeHearth, bool operableActivator, bool passageAsset,
+                                                 const std::string &key)
         {
             std::lock_guard lock(mutex);
             if (auto found = models.find(key); found != models.end())
@@ -1365,7 +1580,8 @@ namespace navmesh::skyrim
                 ++statistics.modelHits;
                 return found->second.value;
             }
-            auto value = std::make_shared<const NifGeometry>(LoadNif(path, includeRender, includeHearth));
+            auto value = std::make_shared<const NifGeometry>(
+                LoadNif(path, includeRender, includeHearth, operableActivator, passageAsset));
             ++statistics.modelsDecoded;
             std::size_t shapeBytes = value->collisionShapeTypes.capacity() * sizeof(std::string);
             for (const auto &shape : value->collisionShapeTypes)
@@ -1448,8 +1664,14 @@ namespace navmesh::skyrim
                    (IsHearthAsset(relative.generic_string()) ? ":hearth" : "");
         };
         output.archiveSearchComplete = ExtractBsaModels(
-            dataDirectory, cacheDirectory, cell, assets, [&](const auto &relative)
-            { return snapshotOwned && cache.impl_->ContainsReadableModel(cachedKey(relative)); },
+            dataDirectory, cacheDirectory, cell, assets,
+            [&](const auto &relative)
+            {
+                const auto key = cachedKey(relative);
+                return snapshotOwned && (cache.impl_->ContainsReadableModel(key) ||
+                                         cache.impl_->ContainsReadableModel(key + ":operable-activator") ||
+                                         cache.impl_->ContainsReadableModel(key + ":operable-activator:passage"));
+            },
             [&](const auto &requested)
             { return cache.impl_->ExtractArchives(requested, dataDirectory, cacheDirectory, assets); });
         const auto totalReferences = cell.references.size();
@@ -1522,11 +1744,26 @@ namespace navmesh::skyrim
             const auto modelPath = assets && looseWinner != assets->looseModels.end() ? looseWinner->second
                                    : std::filesystem::exists(loosePath)               ? loosePath
                                                                                       : cachedPath;
-            const auto modelIdentity = snapshotOwned && modelPath == cachedPath
-                                           ? cachedKey(relativePath)
-                                           : ModelKey(modelPath, includeRender) + (hearthAsset ? ":hearth" : "");
-            const auto model = cache.impl_->Model(modelPath, includeRender, hearthAsset, modelIdentity);
+            const bool operableActivator = reference.baseRecordType == "ACTI";
+            const auto modelIdentity =
+                (snapshotOwned && modelPath == cachedPath
+                     ? cachedKey(relativePath)
+                     : ModelKey(modelPath, includeRender) + (hearthAsset ? ":hearth" : "")) +
+                (operableActivator
+                     ? (IsPassageAsset(reference.modelPath) ? ":operable-activator:passage" : ":operable-activator")
+                     : "");
+            const auto model = cache.impl_->Model(modelPath, includeRender, hearthAsset, operableActivator,
+                                                  IsPassageAsset(reference.modelPath), modelIdentity);
             const auto &nifGeometry = *model;
+            if (operableActivator && IsAnimatedAsset(reference.modelPath) && !nifGeometry.version.empty() &&
+                !nifGeometry.operablePassage)
+            {
+                report.failure = "excluded animated activator without an identified operable passage";
+                output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
+                ++output.modelsExcluded;
+                output.references.push_back(std::move(report));
+                continue;
+            }
             if (hearthAsset && !reference.envelope &&
                 (reference.baseRecordType == "STAT" || reference.baseRecordType == "MSTT") &&
                 nifGeometry.hearthBedBounds.IsValid() &&
@@ -1543,6 +1780,14 @@ namespace navmesh::skyrim
                                : !nifGeometry.collision.triangles.empty() ? nifGeometry.collision
                                                                           : nifGeometry.render;
             const bool hasCollision = !fireEffect && !nifGeometry.collision.triangles.empty();
+            if (mesh.triangles.empty() && nifGeometry.operablePartsExcluded)
+            {
+                report.failure = "excluded operable passage panels; no fixed geometry remains";
+                output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
+                ++output.modelsExcluded;
+                output.references.push_back(std::move(report));
+                continue;
+            }
             if (!fireEffect && !hasCollision && nifGeometry.nonSolidCollision)
             {
                 report.failure = "excluded non-solid Havok collision; render fallback is forbidden";
@@ -1711,7 +1956,8 @@ namespace navmesh::skyrim
             const auto &supportSource = output.scene.geometrySources[supportSourceIndex];
             output.scene.coverage.push_back(
                 {core::GeometryCoverage::Found, supportSource,
-                 fireEffect     ? "fire navigation exclusion derived from visible fuel or flame bounds"
+                 nifGeometry.operablePartsExcluded ? "fixed passage geometry loaded; operable panels excluded"
+                 : fireEffect   ? "fire navigation exclusion derived from visible fuel or flame bounds"
                  : hasCollision ? "Havok collision loaded; render mesh retained as display-only fallback"
                                 : "render NIF loaded as low-confidence fallback; no supported collision"});
         }

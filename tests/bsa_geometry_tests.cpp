@@ -270,7 +270,9 @@ namespace
                 capsule->radius1 = radius;
                 capsule->radius2 = radius;
                 // A node rotates the Havok X-axis into model Z, as in tree skeleton collision.
-                auto *target = nif.GetRootNode();
+                nifly::MatTransform targetTransform;
+                targetTransform.Clear();
+                auto *target = nif.AddNode("CapsuleTarget", targetTransform, nif.GetRootNode());
                 target->transform.rotation[0] = {0, 0, -1};
                 target->transform.rotation[1] = {0, 1, 0};
                 target->transform.rotation[2] = {1, 0, 0};
@@ -319,12 +321,13 @@ namespace
         nif.Create({nifly::V20_2_0_7, 12, 130});
         nif.GetRootNode()->transform.translation = {100, 200, 0};
         nif.GetRootNode()->transform.scale = 2;
+        auto *ancestor = nif.AddNode("CollisionAncestor", nif.GetRootNode()->transform, nif.GetRootNode());
         nifly::MatTransform nodeTransform;
         nodeTransform.Clear();
         nodeTransform.translation = {32, 16, 0};
         nodeTransform.rotation[0] = {0, -1, 0};
         nodeTransform.rotation[1] = {1, 0, 0};
-        auto *target = nif.AddNode("CollisionTarget", nodeTransform, nif.GetRootNode());
+        auto *target = nif.AddNode("CollisionTarget", nodeTransform, ancestor);
         auto box = std::make_unique<nifly::bhkBoxShape>();
         box->dimensions = {32 / units, 16 / units, 64 / units};
         const auto boxId = nif.GetHeader().AddBlock(std::move(box));
@@ -399,6 +402,62 @@ namespace
             const auto vertex = chunks.scene.mesh.vertices[i * 3];
             assert(std::abs(vertex.x - (i == 0 ? 4 : -4) * units) < 0.01F);
             assert(std::abs(vertex.y - 3 * units) < 0.01F);
+        }
+    }
+
+    void CheckPlacedModelTransforms(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        constexpr float units = 69.99125F;
+        WriteCollisionModel(root / "meshes/placement-floor.nif", 512, 0);
+        nifly::NifFile nif;
+        nif.Create({nifly::V20_2_0_7, 12, 130});
+        // A root rotation would turn this side wall across the corridor and disconnect the entrance.
+        auto &rootTransform = nif.GetRootNode()->transform;
+        rootTransform.rotation[0] = {0, -1, 0};
+        rootTransform.rotation[1] = {1, 0, 0};
+        nifly::MatTransform targetTransform;
+        targetTransform.Clear();
+        targetTransform.translation = {256, 0, 128};
+        auto *target = nif.AddNode("WallTarget", targetTransform, nif.GetRootNode());
+        auto box = std::make_unique<nifly::bhkBoxShape>();
+        box->dimensions = {8 / units, 512 / units, 128 / units};
+        AttachCollision(nif, target, nif.GetHeader().AddBlock(std::move(box)));
+        const std::vector<nifly::Vector3> vertices = {{0, -512, -128}, {0, 512, -128}, {0, 512, 128}, {0, -512, 128}};
+        const std::vector<nifly::Triangle> faces = {{0, 1, 2}, {0, 2, 3}};
+        auto *display = nif.CreateShapeFromData("WallDisplay", &vertices, &faces, nullptr);
+        assert(display);
+        display->transform = targetTransform;
+        assert(nif.Save(root / "meshes/placement-wall.nif") == 0);
+        core::Cell cell;
+        cell.references = {
+            {.id = 1, .recordType = "REFR", .modelPath = "placement-floor.nif", .baseRecordType = "STAT"},
+            {.id = 2, .recordType = "REFR", .modelPath = "placement-wall.nif", .baseRecordType = "STAT"}};
+        for (const bool navigationOnly : {false, true})
+        {
+            const auto geometry = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+            assert(geometry.collisionModelsLoaded == 2);
+            if (!navigationOnly)
+            {
+                const auto &mesh = geometry.scene.renderFallbackMesh;
+                assert(mesh.vertices.size() == vertices.size());
+                core::AABB bounds;
+                for (const auto &vertex : mesh.vertices)
+                {
+                    bounds.Expand(vertex);
+                }
+                assert(bounds.min.x == 256 && bounds.max.x == 256);
+                assert(bounds.min.y == -512 && bounds.max.y == 512 && bounds.min.z == 0 && bounds.max.z == 256);
+            }
+            for (const auto partitioning :
+                 {core::RegionPartitioningAlgorithm::Watershed, core::RegionPartitioningAlgorithm::Monotone,
+                  core::RegionPartitioningAlgorithm::Layers})
+            {
+                const auto candidate = core::RecastCandidateGenerator{}.Generate(
+                    geometry.scene, {}, std::nullopt, {{.referenceId = 3, .position = {0, -384, 0}}}, partitioning);
+                assert(candidate.topology.valid && candidate.regions.size() == 1 && candidate.exits[0].polygon);
+                assert(HasNavigationAt(candidate, {0, -384, 0}) && HasNavigationAt(candidate, {0, 384, 0}));
+            }
         }
     }
 
@@ -601,6 +660,8 @@ namespace
         auto *bed = nif.CreateShapeFromData("L2_CoalsBed", &fuel, &faces, nullptr);
         assert(bed);
         bed->transform.translation = {16, 8, 0};
+        auto *fuelParent = nif.AddNode("FuelParent", nif.GetRootNode()->transform, nif.GetRootNode());
+        nif.SetParentNode(bed, fuelParent);
         const std::vector<nifly::Vector3> glow = {{-512, -512, 0}, {512, -512, 0}, {512, 512, 512}};
         const std::vector<nifly::Triangle> glowFaces = {{0, 1, 2}};
         assert(nif.CreateShapeFromData("glow", &glow, &glowFaces, nullptr));
@@ -736,7 +797,8 @@ namespace
         nifly::MatTransform parentTransform;
         parentTransform.Clear();
         parentTransform.translation = {16, 8, 0};
-        auto *parent = nif.AddNode("FuelParent", parentTransform, nif.GetRootNode());
+        auto *ancestor = nif.AddNode("FuelAncestor", nif.GetRootNode()->transform, nif.GetRootNode());
+        auto *parent = nif.AddNode("FuelParent", parentTransform, ancestor);
         assert(parent);
         nif.SetParentNode(bed, parent);
         const std::vector<nifly::Vector3> flames = {{-512, -512, 0}, {512, -512, 0}, {0, 512, 512}};
@@ -1008,6 +1070,7 @@ void TestNativeBsaGeometry()
     CheckFurnitureAndFire(root);
     CheckFixedClutter(root);
     CheckCollisionShapes(root);
+    CheckPlacedModelTransforms(root);
     CheckCollisionEligibility(root);
     CheckFireFootprints(root);
     CheckHearthFireBounds(root);
