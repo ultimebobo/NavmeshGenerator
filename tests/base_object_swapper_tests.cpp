@@ -115,6 +115,128 @@ namespace
         return order.cells.front().references.front();
     }
 
+    void TestConfigSyntax(const std::filesystem::path &root)
+    {
+        auto order = Fixture();
+        const auto diagnostics =
+            skyrim::ApplyBaseObjectSwaps(order, Input("\xEF\xBB\xBF; comment\r\n0x200~Base.esm|Base20\r\n"
+                                                      "[ Forms ] ; base swaps\r\nBase10|Base30\r\n"
+                                                      "[ Transforms ] # properties\r\n0x200~Base.esm|scale(2)\r\n"));
+        assert(diagnostics.empty());
+        assert(First(order).baseObjectId == 20);
+        assert(First(order).scale == 2);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(
+            order, Input("[Forms] ; first\nBase10|Base20\n[Transforms]\nBase10|scale(2)\n"
+                         "[ Forms ] # repeat\nBase10|Base30\n[Transforms|Cell0] ; conditional\nBase10|scale(3)\n"));
+        assert(First(order).baseObjectId == 30 && First(order).scale == 3);
+
+        for (const auto &text : {"; comment\n[Forms ; missing bracket\nBase10|Base20\n", "; comment\ninvalid entry\n",
+                                 "[Forms]\nBase10|Base20|unsupported(1)\n"})
+        {
+            auto input = Input(text);
+            input.configs.front().path = root / "Data" / "Broken_SWAP.ini";
+            order = Fixture();
+            bool failed{};
+            try
+            {
+                (void)skyrim::ApplyBaseObjectSwaps(order, input);
+            }
+            catch (const std::runtime_error &error)
+            {
+                failed = true;
+                const auto expected = input.configs.front().path.generic_string() + ":2:";
+                assert(std::string(error.what()).starts_with(expected));
+            }
+            assert(failed);
+            assert(order.runtimePlacements.empty());
+        }
+    }
+
+    void TestIniEnumeration()
+    {
+        for (const auto &text : {"[Forms]\nBase10|Base20\nBase10|Base30\nbase10|base20\n",
+                                 "[Forms]\nBase10|Base20\n[forms]\nBase10|Base30\n",
+                                 "[Forms]\rBase10|Base20 = ignored value\rBase10|Base30 = another value\r"})
+        {
+            auto order = Fixture();
+            const auto diagnostics = skyrim::ApplyBaseObjectSwaps(order, Input(text));
+            assert(diagnostics.empty());
+            assert(First(order).baseObjectId == 30);
+            assert(!First(order).envelope);
+        }
+        auto order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Custom]\n0x200~Base.esm|Base20\n"
+                                                        "[Custom|Cell0]\nBase10|posR(50,0,0)\n"));
+        assert(First(order).baseObjectId == 20 && First(order).position.x == 150);
+
+        order = Fixture();
+        auto &base = order.records[3];
+        assert(base.formId == 10);
+        base.editorId = "ABCD";
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nABCD|Base20\n"));
+        assert(First(order).baseObjectId == 20);
+
+        order = Fixture();
+        const auto diagnostics = skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10 |Base20\n"));
+        assert(!diagnostics.empty());
+        assert(order.runtimePlacements.empty());
+    }
+
+    void TestLookupFallthroughAndConditions()
+    {
+        auto order = Fixture();
+        const auto diagnostics = skyrim::ApplyBaseObjectSwaps(
+            order, Input("[Forms]\nBase10|Base30\nBase10|Base20,0xFFFF~Base.esm|posR(50,0,0)\n"));
+        assert(!diagnostics.empty());
+        std::set<std::uint32_t> alternatives;
+        for (const auto &reference : order.cells.front().references)
+        {
+            alternatives.insert(reference.baseObjectId);
+            assert(reference.envelope);
+            assert(reference.position.x == (reference.baseObjectId == 20 ? 150 : 100));
+        }
+        assert(alternatives == std::set<std::uint32_t>({20, 30}));
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base30\nBase10|Base20,Cell0\n"));
+        alternatives.clear();
+        for (const auto &reference : order.cells.front().references)
+        {
+            alternatives.insert(reference.baseObjectId);
+        }
+        assert(alternatives == std::set<std::uint32_t>({20, 30}));
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20\n[Forms|Base20]\nBase10|Base30\n"));
+        assert(First(order).baseObjectId == 20 && !First(order).envelope);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20\n"
+                                                        "Base10,0xFFFF~Base.esm,Base30|Base20,Base30\n"));
+        assert(First(order).baseObjectId == 20 && !First(order).envelope);
+    }
+
+    void TestPropertyAliasesAndChanceBounds()
+    {
+        auto order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order,
+                                           Input("[Transforms]\nBase10|pos(200 , 100, 0),rot(0,0,90 ),scaleR(2 )\n"));
+        assert(First(order).position.x == 200 && First(order).scale == 2);
+        assert(std::abs(First(order).rotation.z - std::numbers::pi_v<float> / 2) < 0.0001F);
+        assert(!First(order).envelope);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20|NONE|chance(150)\n"
+                                                        "Base10|Base30|NONE|chance(-1)\n"));
+        assert(First(order).baseObjectId == 20 && !First(order).envelope);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20\nBase10|Base10|flags(0)\n"));
+        assert(First(order).baseObjectId == 10 && !First(order).envelope);
+    }
+
     void TestPrecedenceAndUnits()
     {
         auto order = Fixture();
@@ -395,6 +517,10 @@ void TestBaseObjectSwapper()
     std::filesystem::create_directories(root);
     WriteModel(root / "meshes" / "Solid.nif");
     TestPrecedenceAndUnits();
+    TestConfigSyntax(root);
+    TestIniEnumeration();
+    TestLookupFallthroughAndConditions();
+    TestPropertyAliasesAndChanceBounds();
     TestAdditionalBasesRequireRuntimePlacement(root);
     TestRandomOutcomes(root);
     TestMovementAndRemoval(root);

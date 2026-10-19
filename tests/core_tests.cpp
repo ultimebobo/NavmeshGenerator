@@ -112,7 +112,7 @@ namespace
         Require(std::any_of(malformed.diagnostics.begin(), malformed.diagnostics.end(), [](const auto &d)
                             { return d.kind == navmesh::skyrim::DiagnosticKind::UnsupportedVersion; }));
 
-        WritePlugin(root / "BadCompression.esp", {}, false, { { "CELL", 0x203, { 0, 0, 0, 0 } } });
+        WritePlugin(root / "BadCompression.esp", {}, false, { { "CELL", 0x203, { 1, 0, 0, 0 } } });
         std::fstream badCompressedFile(root / "BadCompression.esp", std::ios::in | std::ios::out | std::ios::binary); badCompressedFile.seekp(24 + 8); badCompressedFile.write(reinterpret_cast<const char*>(&compressedFlag), sizeof(compressedFlag)); badCompressedFile.close();
         const auto badCompression =
             navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {"BadCompression.esp"}});

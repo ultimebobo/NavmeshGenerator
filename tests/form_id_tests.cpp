@@ -8,7 +8,9 @@
 #include <cassert>
 #include <chrono>
 #include <fstream>
+#include <sstream>
 #include <tuple>
+#include <zlib.h>
 
 namespace
 {
@@ -69,6 +71,80 @@ namespace
         std::ofstream output(path, std::ios::binary);
         output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         assert(output.good());
+    }
+
+    void TestCompressedRecordBoundaries(const std::filesystem::path &root)
+    {
+        const auto compressed = [](const Bytes &payload)
+        {
+            Bytes result;
+            Put32(result, static_cast<std::uint32_t>(payload.size()));
+            auto length = compressBound(static_cast<uLong>(payload.size()));
+            result.resize(4 + length);
+            assert(compress(result.data() + 4, &length, payload.data(), static_cast<uLong>(payload.size())) == Z_OK);
+            result.resize(4 + length);
+            return result;
+        };
+        Bytes bytes;
+        Record(bytes, "TES4", 0, {});
+        const auto append = [&](std::uint32_t id, const Bytes &payload, bool deleted = false)
+        {
+            Bytes record;
+            Record(record, "CELL", id, payload);
+            record[10] = 4; // Compressed record flag.
+            record[8] = deleted ? 0x20 : 0;
+            bytes.insert(bytes.end(), record.begin(), record.end());
+        };
+        append(0x800, {0, 0, 0, 0}, true);
+        append(0x801, compressed({}));
+        Bytes payload;
+        Subrecord(payload, "EDID", {'P', 'a', 'y', 'l', 'o', 'a', 'd', 0});
+        append(0x802, compressed(payload));
+        append(0x803, {0, 0, 0});
+        append(0x804, {1, 0, 0, 0});
+        append(0x805, {0xFF, 0xFF, 0xFF, 0xFF});
+        auto truncated = compressed(payload);
+        truncated.pop_back();
+        append(0x806, truncated);
+        auto wrongSize = compressed(payload);
+        ++wrongSize.front();
+        append(0x807, wrongSize);
+        append(0x808, {});
+        const auto path = root / "Compression.esp";
+        std::ofstream output(path, std::ios::binary);
+        output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        output.close();
+
+        for (const bool includeReferences : {false, true})
+        {
+            const auto resolved = ResolveLoadOrder(
+                {.dataDirectory = root, .plugins = {path}, .indexReferencesAndNavmeshes = includeReferences});
+            assert(resolved.records.size() == 9);
+            assert(resolved.diagnostics.size() == 6);
+            for (const auto id : {0x800U, 0x801U})
+            {
+                const auto *record = resolved.FindWinning(id);
+                assert(record && record->raw && record->raw->compressed);
+                assert(record->raw->decodedPayload.empty() && record->raw->subrecords.empty());
+                assert(!record->raw->filePayload.empty());
+            }
+            assert(resolved.FindWinning(0x800)->winning.deleted);
+            assert(resolved.FindWinning(0x802)->editorId == "Payload");
+            for (std::uint32_t id = 0x803; id <= 0x808; ++id)
+            {
+                std::ostringstream identity;
+                identity << "CELL 0x00000" << std::uppercase << std::hex << id << " at file offset ";
+                const auto failure =
+                    std::find_if(resolved.diagnostics.begin(), resolved.diagnostics.end(), [&](const auto &diagnostic)
+                                 { return diagnostic.message.starts_with(identity.str()); });
+                assert(failure != resolved.diagnostics.end());
+                assert(failure->plugin == "Compression.esp" && failure->kind == DiagnosticKind::DecompressionFailure);
+                if (id == 0x803 || id == 0x808)
+                {
+                    assert(failure->message.find("lacks its uncompressed-size prefix") != std::string::npos);
+                }
+            }
+        }
     }
 
     void TestFileLocalIndices(const std::filesystem::path &root)
@@ -158,5 +234,6 @@ void TestFormIdResolution()
     std::filesystem::create_directories(root);
     TestFileLocalIndices(root);
     TestMissingMasterIdentity(root);
+    TestCompressedRecordBoundaries(root);
     std::filesystem::remove_all(root);
 }

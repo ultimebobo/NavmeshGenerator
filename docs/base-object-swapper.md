@@ -1,7 +1,8 @@
 # Base Object Swapper inputs
 
 NavmeshGenerator automatically imports Base Object Swapper (BOS) configurations
-for inspection and generation. The offline interpretation targets BOS v3.5.0.
+for inspection and generation. The offline interpretation targets the
+[audited BOS source release](https://github.com/powerof3/BaseObjectSwapper/tree/v3.5.0).
 BOS replaces existing references' base objects and properties during game
 initialization; these changes can exist entirely in INI files without ESP
 placement overrides.
@@ -29,7 +30,7 @@ overlays. Terrain-only runs retain the BOS input audit but omit object collision
 
 ## Rule interpretation
 
-The importer resolves editor IDs, resolved hexadecimal FormIDs, and
+The importer resolves editor IDs, `0x`-prefixed resolved hexadecimal FormIDs, and
 plugin-qualified local FormIDs against active full and light plugin identities.
 Owning-plugin prefixes are independent of the plugin supplying the winning
 override. The indexed bound-object types include static, movable, furniture,
@@ -45,15 +46,21 @@ static, movable-static, activator, tree, flora, furniture and container extracti
 Furniture and containers remain obstacle-only; persistent fire exclusions use
 the same envelopes for uncertain placements and cannot be fitted to a single hearth pose.
 
-Supported sections are `Forms`, `References`, `Properties` and `Transforms`.
-Conditional `Forms`, `Properties` and `Transforms` sections are supported.
-As in BOS, a conditional `References` section is interpreted as base properties,
-not reference swaps. Source/replacement sets follow BOS's unique assignment
+`Forms` selects base swaps, while unconditional `Properties` and `Transforms`
+select property rules. Other unconditional sections select reference swaps;
+conditional sections other than `Forms` select base properties, as in BOS.
+Source/replacement sets follow BOS's unique assignment
 branch; invalid undersized replacement sets are skipped with a diagnostic.
 Repeated sections are grouped in first-occurrence order. Reference swaps precede
-conditional base swaps and unconditional base swaps. Valid properties attached
-to the selected swap precede separate property rules; otherwise reference
-properties precede conditional base properties and general base properties.
+conditional base swaps and unconditional base swaps. Section names are trimmed,
+text after a section's closing bracket is ignored, and entries before any named
+section use reference-swap semantics, matching BOS's SimpleIni interpretation.
+Repeated sections retain their first spelling, and duplicate case-insensitive
+keys retain their first position. INI values after `=` are ignored. Whitespace
+inside identity fields remains significant; physical INI line endings preserve
+source line evidence.
+Valid properties attached to the selected swap precede separate property rules;
+otherwise reference properties precede conditional base properties and general base properties.
 Each selected property bundle stands alone rather than merging fields from
 different rules. Unconditional candidates are visited in reverse insertion
 order, while conditional groups use reverse condition-key order. These contracts
@@ -74,6 +81,11 @@ their runtime collision effects are outside the offline visibility model.
 Base replacements refresh model path and classification. Encoded plugin winners
 and override histories remain unchanged; runtime placement evidence is stored
 separately with the contributing configuration and line.
+Chance values above the always-pass threshold pass unconditionally; negative
+values never pass. A random replacement list containing an unresolved numeric
+identity or a known non-bound form retains lower-priority swap outcomes, because
+the runtime lookup can fail before selecting a replacement. Known forms outside
+the supported condition classes do not match filters.
 
 ## Conservative geometry
 
@@ -103,10 +115,13 @@ Conservatism is limited to indexed references and supported, available model
 collision. Missing models follow the existing warning policy; unreadable
 collision evidence stops affected-cell selection. MergeMapper identities,
 dynamic/save-only references and later script-driven changes are not emulated.
-Malformed or unrepresentable entries stop input processing with file/line
-evidence. Unavailable source or replacement identities produce diagnostics and
-are skipped, matching unavailable game inputs; they should be reviewed before
-using output. Unknown section/property syntax is rejected explicitly.
+Malformed or unrepresentable entries stop input processing with the winning
+source path and line. Unavailable source or replacement identities produce
+diagnostics and should be reviewed before using output. Invalid entries and
+unrecognized property syntax are rejected explicitly rather than silently
+discarded. This stricter failure policy, supported record/collision coverage,
+conservative outcome envelopes and unavailable runtime state are deliberate
+limits of offline interpretation; full runtime equivalence is not claimed.
 
 ## Selection, caches and outputs
 
@@ -129,6 +144,7 @@ the generated navigation and regenerate when they change; the plugin does not
 bake BOS placement edits into REFR overrides. Copy-plugin output uses the same
 effective geometry and existing dependency checks.
 
-Synthetic C++ and CLI regressions cover precedence, transforms, full/light IDs,
+Synthetic C++ and CLI regressions cover INI enumeration, identity syntax,
+precedence, transforms, chance bounds, failed-lookup fallthrough, full/light IDs,
 removal, movement, conservative volumes, selection, cache identity and discovery
 through direct Data, MO2 configurations/overwrite and Vortex deployed files.

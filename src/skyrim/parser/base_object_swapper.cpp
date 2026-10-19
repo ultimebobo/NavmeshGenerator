@@ -39,7 +39,7 @@ namespace navmesh::skyrim
             for (;;)
             {
                 const auto end = text.find(separator, begin);
-                result.push_back(Trim(text.substr(begin, end - begin)));
+                result.push_back(text.substr(begin, end - begin));
                 if (end == std::string::npos)
                 {
                     return result;
@@ -79,9 +79,10 @@ namespace navmesh::skyrim
 
         float Number(const std::string &text)
         {
+            const auto numeric = Trim(text);
             std::size_t consumed{};
-            const auto value = std::stof(text, &consumed);
-            if (consumed != text.size() || !std::isfinite(value))
+            const auto value = std::stof(numeric, &consumed);
+            if (consumed != numeric.size() || !std::isfinite(value))
             {
                 throw std::runtime_error("Expected a finite BOS numeric value: " + text);
             }
@@ -90,9 +91,10 @@ namespace navmesh::skyrim
 
         std::uint32_t Hex(const std::string &text)
         {
+            const auto numeric = Trim(text);
             std::size_t consumed{};
-            const auto value = std::stoull(text, &consumed, 16);
-            if (consumed != text.size() || value > UINT32_MAX)
+            const auto value = std::stoull(numeric, &consumed, 16);
+            if (consumed != numeric.size() || value > UINT32_MAX)
             {
                 throw std::runtime_error("Invalid BOS FormID or flag: " + text);
             }
@@ -101,8 +103,8 @@ namespace navmesh::skyrim
 
         bool IsHex(const std::string &text)
         {
-            const auto begin = Lower(text).starts_with("0x") ? 2U : 0U;
-            return begin < text.size() &&
+            constexpr auto begin = 2U;
+            return Lower(text).starts_with("0x") && begin < text.size() &&
                    std::all_of(
                        text.begin() + begin, text.end(), [](unsigned char value) { return std::isxdigit(value) != 0; });
         }
@@ -168,7 +170,8 @@ namespace navmesh::skyrim
                 }
                 const auto name = Trim(text.substr(begin, open - begin));
                 const auto arguments = Split(text.substr(open + 1, close - open - 1), ',');
-                if (name == "posA" || name == "posR" || name == "rotA" || name == "rotR")
+                if (name == "pos" || name == "posA" || name == "posR" || name == "rot" || name == "rotA" ||
+                    name == "rotR")
                 {
                     if (arguments.size() != 3)
                     {
@@ -199,7 +202,7 @@ namespace navmesh::skyrim
                         result.position = point;
                     }
                 }
-                else if (name == "scale" || name == "scaleA")
+                else if (name == "scale" || name == "scaleA" || name == "scaleR")
                 {
                     if (arguments.size() != 1)
                     {
@@ -248,6 +251,8 @@ namespace navmesh::skyrim
             std::string conditionKey, evidence;
             bool leveled{};
             bool randomAssignment{};
+            /// A selected unresolved or non-bound replacement lets BOS try lower-priority swaps.
+            bool lookupMayFail{};
         };
 
         using RuleMap = std::unordered_map<std::uint32_t, std::vector<Rule>>;
@@ -262,11 +267,41 @@ namespace navmesh::skyrim
             std::size_t lineNumber{};
         };
 
-        /// SimpleIni merges repeated sections and visits them in first-occurrence order.
-        std::vector<ConfigEntry> ConfigEntries(const std::string &contents)
+        /// Normalize physical INI line endings without changing diagnostic line numbers.
+        std::string IniNewlines(const std::string &contents)
         {
-            std::istringstream stream(contents);
-            std::vector<std::vector<ConfigEntry>> sections;
+            std::string result;
+            result.reserve(contents.size());
+            for (std::size_t index{}; index < contents.size(); ++index)
+            {
+                if (contents[index] == '\r')
+                {
+                    result += '\n';
+                    if (index + 1 < contents.size() && contents[index + 1] == '\n')
+                    {
+                        ++index;
+                    }
+                }
+                else
+                {
+                    result += contents[index];
+                }
+            }
+            return result;
+        }
+
+        /// SimpleIni merges repeated sections and visits them in first-occurrence order.
+        /// Sectionless keys belong to the unnamed section, which BOS interprets as reference swaps.
+        std::vector<ConfigEntry> ConfigEntries(const BaseObjectSwapConfig &config)
+        {
+            std::istringstream stream(IniNewlines(config.contents));
+            struct Section
+            {
+                std::string name;
+                std::vector<ConfigEntry> entries;
+                std::set<std::string> keys;
+            };
+            std::vector<Section> sections;
             std::map<std::string, std::size_t> indices;
             std::string section, line;
             std::size_t lineNumber{}, current{};
@@ -282,26 +317,42 @@ namespace navmesh::skyrim
                 {
                     continue;
                 }
-                if (line.front() == '[' && line.back() == ']')
+                if (line.front() == '[')
                 {
-                    section = line.substr(1, line.size() - 2);
+                    const auto close = line.find(']');
+                    if (close == std::string::npos)
+                    {
+                        const auto source = config.path.empty() ? config.name : config.path.generic_string();
+                        throw std::runtime_error(source + ":" + std::to_string(lineNumber) +
+                                                 ": Unterminated BOS section header");
+                    }
+                    // SimpleIni trims the section name and ignores text after its closing bracket.
+                    section = Trim(line.substr(1, close - 1));
                     const auto [found, inserted] = indices.emplace(Lower(section), sections.size());
                     if (inserted)
                     {
-                        sections.emplace_back();
+                        sections.push_back({section});
                     }
                     current = found->second;
                     continue;
                 }
                 if (sections.empty())
                 {
-                    throw std::runtime_error("BOS entry outside a section at line " + std::to_string(lineNumber));
+                    indices.emplace("", 0);
+                    sections.emplace_back();
                 }
-                sections[current].push_back({section, line, lineNumber});
+                // BOS visits unique case-insensitive keys, using their first spelling and load position.
+                // INI values after '=' are not part of the rule supplied to BOS.
+                line = Trim(line.substr(0, line.find('=')));
+                if (!line.empty() && sections[current].keys.insert(Lower(line)).second)
+                {
+                    sections[current].entries.push_back({sections[current].name, line, lineNumber});
+                }
             }
             std::vector<ConfigEntry> result;
-            for (auto &entries : sections)
+            for (auto &sectionEntries : sections)
             {
+                auto &entries = sectionEntries.entries;
                 result.insert(result.end(), std::make_move_iterator(entries.begin()),
                               std::make_move_iterator(entries.end()));
             }
@@ -362,21 +413,18 @@ namespace navmesh::skyrim
 
         float ParseChance(const std::string &text)
         {
-            if (text.empty() || Lower(text) == "none")
+            const auto modifier = Trim(text);
+            if (modifier.empty() || Lower(modifier) == "none")
             {
                 return 100;
             }
-            const auto open = text.find('(');
-            const auto close = text.find(')');
-            if (!text.starts_with("chance") || open == std::string::npos || close != text.size() - 1)
+            const auto open = modifier.find('(');
+            const auto close = modifier.find(')');
+            if (!modifier.starts_with("chance") || open == std::string::npos || close != modifier.size() - 1)
             {
                 throw std::runtime_error("Invalid BOS chance modifier");
             }
-            const auto chance = Number(Split(text.substr(open + 1, close - open - 1), ',').front());
-            if (chance < 0 || chance > 100)
-            {
-                throw std::runtime_error("BOS chance must be a percentage");
-            }
+            const auto chance = Number(Split(modifier.substr(open + 1, close - open - 1), ',').front());
             return chance;
         }
 
@@ -410,20 +458,20 @@ namespace navmesh::skyrim
             Rules result;
             for (const auto &config : input.configs)
             {
-                for (const auto &entry : ConfigEntries(config.contents))
+                for (const auto &entry : ConfigEntries(config))
                 {
                     const auto &section = entry.section;
                     const auto &line = entry.line;
                     const auto evidence = config.name + ":" + std::to_string(entry.lineNumber);
+                    const auto source = config.path.empty() ? config.name : config.path.generic_string();
                     try
                     {
                         const auto sectionParts = Split(section, '|');
-                        const bool property = sectionParts[0] == "Transforms" || sectionParts[0] == "Properties" ||
-                                              (sectionParts.size() > 1 && sectionParts[0] == "References");
-                        if (!property && sectionParts[0] != "Forms" && sectionParts[0] != "References")
-                        {
-                            throw std::runtime_error("Unsupported BOS section: " + section);
-                        }
+                        // BOS routes every conditional non-Forms section to base properties;
+                        // unconditional sections other than Forms/Transforms/Properties are reference swaps.
+                        const bool property = sectionParts.size() > 1
+                                                  ? sectionParts[0] != "Forms"
+                                                  : sectionParts[0] == "Transforms" || sectionParts[0] == "Properties";
                         const auto fields = Split(line, '|');
                         if (fields.size() < 2 || fields.size() > (property ? 3U : 4U))
                         {
@@ -440,10 +488,14 @@ namespace navmesh::skyrim
                         for (const auto &name : sourceNames)
                         {
                             const auto id = identities.Find(name);
-                            if (!id || !resolved.FindWinning(*id))
+                            if (!id || !*id)
                             {
                                 diagnostics.push_back(evidence + ": source is unavailable: " + name);
                                 continue;
+                            }
+                            if (!resolved.FindWinning(*id))
+                            {
+                                diagnostics.push_back(evidence + ": source is unavailable: " + name);
                             }
                             sourceIds.insert(*id);
                         }
@@ -467,18 +519,20 @@ namespace navmesh::skyrim
                             {
                                 const auto id = identities.Find(name);
                                 const auto *base = id ? resolved.FindWinning(*id) : nullptr;
-                                if (!base)
+                                if (!id || !*id)
                                 {
                                     diagnostics.push_back(evidence + ": replacement is unavailable: " + name);
                                     continue;
                                 }
-                                if (base->type == "REFR" || base->type == "ACHR" || base->type == "CELL" ||
-                                    base->type == "WRLD" || base->type == "NAVM" || base->type == "LAND")
-                                {
-                                    throw std::runtime_error("Replacement is not a supported base object: " + name);
-                                }
                                 if (!replacementIds.insert(*id).second)
                                 {
+                                    continue;
+                                }
+                                if (!base || base->type == "REFR" || base->type == "ACHR" || base->type == "CELL" ||
+                                    base->type == "WRLD" || base->type == "NAVM" || base->type == "LAND")
+                                {
+                                    diagnostics.push_back(evidence + ": replacement base is unavailable: " + name);
+                                    rule.lookupMayFail = true;
                                     continue;
                                 }
                                 // Leveled swaps depend on runtime level and may produce no replacement.
@@ -512,14 +566,14 @@ namespace navmesh::skyrim
                                 rule.chance = 100;
                             }
                         }
-                        auto &destination = property                          ? result.properties
-                                            : sectionParts[0] == "References" ? result.references
-                                                                              : result.forms;
+                        auto &destination = property                     ? result.properties
+                                            : sectionParts[0] == "Forms" ? result.forms
+                                                                         : result.references;
                         for (const auto id : sourceIds)
                         {
                             if (!property && sourceNames.size() == 1 && fields[1].find(',') == std::string::npos &&
                                 rule.replacements.size() == 1 && rule.replacements.front() == id &&
-                                !rule.properties.Valid())
+                                (fields.size() < 3 || fields[2].empty() || Lower(fields[2]) == "none"))
                             {
                                 continue;
                             }
@@ -528,7 +582,7 @@ namespace navmesh::skyrim
                     }
                     catch (const std::exception &error)
                     {
-                        throw std::runtime_error(evidence + ": " + error.what());
+                        throw std::runtime_error(source + ":" + std::to_string(entry.lineNumber) + ": " + error.what());
                     }
                 }
             }
@@ -557,6 +611,10 @@ namespace navmesh::skyrim
                 return owner.worldspaceFormId == identity || (world && world->winning.parentWorldFormId == identity)
                            ? Match::Yes
                            : Match::No;
+            }
+            if (record && record->type != "LCTN" && record->type != "REGN" && record->type != "KYWD")
+            {
+                return Match::No;
             }
             const auto *cell = owner.cellFormId ? resolved.FindWinning(*owner.cellFormId) : nullptr;
             if (cell && Lower(cell->editorId) == Lower(name))
@@ -632,7 +690,7 @@ namespace navmesh::skyrim
             std::vector<const Rule *> result;
             for (const auto *rule : rules)
             {
-                if (properties && !rule->properties.Valid())
+                if (rule->chance < 0 || (properties && !rule->properties.Valid()))
                 {
                     continue;
                 }
@@ -642,7 +700,7 @@ namespace navmesh::skyrim
                     continue;
                 }
                 result.push_back(rule);
-                if (match == Match::Yes && rule->chance >= 100 && !rule->leveled)
+                if (match == Match::Yes && rule->chance >= 100 && !rule->leveled && !rule->lookupMayFail)
                 {
                     return result;
                 }
@@ -843,7 +901,7 @@ namespace navmesh::skyrim
             }
         }
         core::ContentHash hash;
-        hash.Add("bos-v3.5/conservative-envelope-v1");
+        hash.Add("bos-v3.5/conservative-envelope-v2");
         for (const auto &[logicalName, path] : winners)
         {
             if (!ConfigName(path))

@@ -40,7 +40,10 @@ namespace navmesh::skyrim
      * Exact rules preserve ordinary support geometry. Uncertain outcomes retain every possible
      * collider as obstruction envelopes and never introduce speculative walkable surfaces.
      * Runtime changes remain separate from encoded plugin records and their override history.
-     * @throws std::runtime_error for malformed or unrepresentable navigation inputs.
+     * INI enumeration follows BOS's first-spelling sections and unique case-insensitive keys.
+     * Sectionless and custom unconditional sections use reference swaps; conditional non-Forms sections use properties.
+     * Unknown runtime state and failing replacement lookups retain conservative alternatives.
+     * @throws std::runtime_error for malformed or unrepresentable navigation inputs, with source path and line.
      */
     [[nodiscard]] std::vector<std::string> ApplyBaseObjectSwaps(ResolvedLoadOrder &resolved,
                                                                 const BaseObjectSwapInput &input);

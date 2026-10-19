@@ -239,7 +239,8 @@ namespace navmesh::skyrim
         /// Read just the TES4 range; validates declared length and master subrecords before returning metadata.
         bool ReadMetadata(const std::filesystem::path &path, std::vector<std::string> &masters, bool &isLight,
                           std::vector<Diagnostic> &diagnostics) const override;
-        /// Read loss-aware records with immutable shared payload ranges and explicit failures.
+        /// Read loss-aware records with immutable shared payload ranges, accepting empty compressed payloads.
+        /// Decode failures identify the file-local FormID and record offset while retaining encoded input.
         bool Read(const std::filesystem::path &path, std::vector<ResolvedRecord> &records,
                   std::vector<std::string> &masters, bool &isLight, std::vector<Diagnostic> &diagnostics,
                   bool includeReferencesAndNavmeshes = true) const override;

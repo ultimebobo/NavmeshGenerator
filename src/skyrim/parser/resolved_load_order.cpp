@@ -75,7 +75,7 @@ namespace
     bool DecodePayload(const std::vector<std::uint8_t> &fileBytes, std::size_t begin, std::size_t end, bool compressed,
                        std::vector<std::uint8_t> &decoded, std::string &error)
     {
-        if (!Has(fileBytes, begin, end - begin))
+        if (end < begin || !Has(fileBytes, begin, end - begin))
         {
             error = "record payload extends outside the plugin";
             return false;
@@ -85,16 +85,23 @@ namespace
             decoded.assign(fileBytes.begin() + begin, fileBytes.begin() + end);
             return true;
         }
-        if (!Has(fileBytes, begin, 4))
+        if (end - begin < 4)
         {
             error = "compressed record lacks its uncompressed-size prefix";
             return false;
         }
         const auto expected = U32(fileBytes, begin);
-        if (expected == 0 || expected > kMaxDecodedRecordSize)
+        if (expected > kMaxDecodedRecordSize)
         {
-            error = "compressed record declares an unsafe uncompressed size";
+            error = "compressed record declares an unsafe uncompressed size of " + std::to_string(expected) + " bytes";
             return false;
+        }
+        // A zero-size prefix represents an empty record, including prefix-only payloads.
+        // Keep its encoded bytes and header flags for override identity and lossless copying.
+        if (expected == 0)
+        {
+            decoded.clear();
+            return true;
         }
         decoded.resize(expected);
         auto actual = static_cast<uLongf>(expected);
@@ -602,6 +609,8 @@ namespace navmesh::skyrim
                         r.raw->filePayload = std::vector<std::uint8_t>(b.begin() + payload, b.begin() + next);
                         std::vector<std::uint8_t> decoded;
                         std::string error;
+                        const auto recordEvidence = [&]()
+                        { return kind + " " + HexFormId(r.formId) + " at file offset " + std::to_string(p) + ": "; };
                         const bool decodedOk =
                             !r.raw->compressed || DecodePayload(b, payload, next, true, decoded, error);
                         r.raw->decodedPayload =
@@ -610,11 +619,11 @@ namespace navmesh::skyrim
                         {
                             diagnostics.push_back({r.raw->compressed ? DiagnosticKind::DecompressionFailure
                                                                      : DiagnosticKind::MalformedInput,
-                                                   plugin, kind + " " + error});
+                                                   plugin, recordEvidence() + error});
                         }
                         else if (!ParseSubrecords(*r.raw, r, nullptr, error))
                         {
-                            diagnostics.push_back({DiagnosticKind::MalformedInput, plugin, kind + " " + error});
+                            diagnostics.push_back({DiagnosticKind::MalformedInput, plugin, recordEvidence() + error});
                         }
                         else if (r.navm && !r.navm->supported)
                         {

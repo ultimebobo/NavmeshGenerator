@@ -935,6 +935,64 @@ class BatchRebuild(unittest.TestCase):
             plugin.write(record("STAT", 0x800, sub("EDID", b"FixtureBase\0") + sub("MODL", b"Solid.nif\0")))
         (self.root / "plugins.txt").write_text("Baseline.esm\n")
 
+    def test_empty_compressed_records_in_unrelated_plugin(self):
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        plugin = self.root / "EmptyRecords.esp"
+        plugin.write_bytes(record("TES4", 0, header)
+                           + record("CELL", 0x800, bytes(4), 0x40020)
+                           + record("CELL", 0x801, bytes(4) + zlib.compress(b""), 0x40000))
+        with (self.root / "plugins.txt").open("a") as manifest:
+            manifest.write("EmptyRecords.esp\n")
+        output = self.root / "compressed-records"
+        completed = subprocess.run(
+            [str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
+             "--rebuild-plugin", "Patch.esp", "--generate-plugin", "--terrain-only",
+             "--output", str(output), "--asset-cache", str(self.root / "cache")],
+            capture_output=True, text=True, timeout=90)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertNotIn("unsafe uncompressed size", completed.stderr)
+        self.assertTrue((output / "generated-navmesh.esp").exists())
+
+    def test_bos_section_syntax_and_error_source(self):
+        self.bos_fixture()
+        config = self.root / "Placement_SWAP.ini"
+        for text in ["; comment\n[ Transforms ] ; movement\n0x801~Baseline.esm|posA(9000,1000,0)\n",
+                     "; comment\n0x801~Baseline.esm|FixtureBase|posA(9000,1000,0)\n"]:
+            with self.subTest(text=text):
+                config.write_text(text, encoding="utf-8-sig")
+                output = self.run_cli("--rebuild-load-order", terrain_only=False)
+                bos = json.loads((output / "bos-input.json").read_text())
+                self.assertEqual(bos["placements"][0]["alternatives"][0]["position"], [9000, 1000, 0])
+        for text in ["; comment\n[Transforms ; missing bracket\n", "; comment\ninvalid entry\n"]:
+            with self.subTest(text=text):
+                config.write_text(text)
+                completed = subprocess.run(
+                    [str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
+                     "--cell-formid", "100", "--output", str(self.root / "invalid-bos")],
+                    capture_output=True, text=True, timeout=90)
+                self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
+                self.assertIn(f"BOS input resolution failed: {config.as_posix()}:2:", completed.stderr)
+
+    def test_bos_enumeration_and_failed_lookup_fallthrough(self):
+        self.bos_fixture()
+        with (self.root / "Baseline.esm").open("ab") as plugin:
+            plugin.write(record("STAT", 0x820, sub("EDID", b"ABCD\0") + sub("MODL", b"Solid.nif\0")))
+        config = self.root / "Compatibility_SWAP.ini"
+        config.write_bytes(b"[Transforms]\r0x801~Baseline.esm|pos(1100,1000,0)=ignored\r"
+                           b"[transforms] ; repeated section\r0x801~Baseline.esm|pos(1200,1000,0)\r"
+                           b"0x801~baseline.esm|pos(1100,1000,0)=duplicate\r")
+        output = self.run_cli("--cell-formid", "100", output="bos-enumeration")
+        bos = json.loads((output / "bos-input.json").read_text())
+        self.assertEqual(bos["placements"][0]["alternatives"][0]["position"], [1200, 1000, 0])
+
+        config.write_text("[Custom]\n0x801~Baseline.esm|FixtureBase|pos(1100,1000,0)\n"
+                          "0x801~Baseline.esm|ABCD,0xFFFF~Baseline.esm|pos(1200,1000,0)\n")
+        output = self.run_cli("--cell-formid", "100", output="bos-fallthrough")
+        bos = json.loads((output / "bos-input.json").read_text())
+        alternatives = bos["placements"][0]["alternatives"]
+        self.assertEqual({tuple(value["position"]) for value in alternatives}, {(1100, 1000, 0), (1200, 1000, 0)})
+        self.assertTrue(all(value["conservative"] for value in alternatives))
+
     def test_bos_base_index_does_not_expand_unmodified_geometry(self):
         self.bos_fixture()
         baseline_output = self.run_cli("--cell-formid", "100", terrain_only=False, output="static-only")

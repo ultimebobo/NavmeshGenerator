@@ -35,6 +35,12 @@ The parser layer is responsible for reading a Bethesda plugin file directly from
 
 The current POC keeps this intentionally narrow and reports unsupported record layouts explicitly rather than pretending the parser understands the whole format.
 
+Compressed records with a zero decoded-size prefix represent empty payloads,
+including prefix-only records; their encoded bytes and header flags remain intact.
+Nonempty payloads require bounded zlib decoding to the declared size. Compressed
+prefixes must fit inside their record, and decode failures identify the plugin,
+file-local FormID and record byte offset.
+
 ## 2. Skyrim extraction
 
 Model extraction owns the furniture and fire navigation policies. Supported
