@@ -133,7 +133,7 @@ namespace
         assert(First(order).baseObjectId == 30 && First(order).scale == 3);
 
         for (const auto &text : {"; comment\n[Forms ; missing bracket\nBase10|Base20\n", "; comment\ninvalid entry\n",
-                                 "[Forms]\nBase10|Base20|unsupported(1)\n"})
+                                 "[Forms]\nBase10|Base20|posA(1,2)\n"})
         {
             auto input = Input(text);
             input.configs.front().path = root / "Data" / "Broken_SWAP.ini";
@@ -235,6 +235,45 @@ namespace
         order = Fixture();
         (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20\nBase10|Base10|flags(0)\n"));
         assert(First(order).baseObjectId == 10 && !First(order).envelope);
+    }
+
+    void TestUnknownProperties()
+    {
+        for (const auto *section : {"Properties", "Transforms"})
+        {
+            auto order = Fixture();
+            const auto diagnostics = skyrim::ApplyBaseObjectSwaps(
+                order, Input(std::string("[") + section + "]\nBase10|PosA(9000,0,0),unknown(not-a-number)\n"));
+            assert(diagnostics.empty());
+            assert(order.runtimePlacements.empty());
+            assert(First(order).position.x == 100);
+
+            order = Fixture();
+            (void)skyrim::ApplyBaseObjectSwaps(
+                order, Input(std::string("[") + section +
+                             "]\nBase10|PosA(9000,0,0),posR(50,0,0),unknown(a,b),scale(2),Unknown()\n"));
+            assert(First(order).position.x == 150);
+            assert(First(order).scale == 2);
+            assert(!First(order).envelope);
+
+            order = Fixture();
+            (void)skyrim::ApplyBaseObjectSwaps(
+                order, Input(std::string("[") + section + "]\nBase10|posR(50,0,0)\nBase10|PosA(9000,0,0)\n"));
+            assert(First(order).position.x == 150);
+        }
+
+        auto order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20|PosA(9000,0,0)\n"
+                                                        "[Transforms]\nBase10|posR(50,0,0)\n"));
+        assert(First(order).baseObjectId == 20);
+        assert(First(order).position.x == 150);
+
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20|PosA(9000,0,0),scale(2)\n"
+                                                        "[Transforms]\nBase10|posR(50,0,0)\n"));
+        assert(First(order).baseObjectId == 20);
+        assert(First(order).position.x == 100);
+        assert(First(order).scale == 2);
     }
 
     void TestPrecedenceAndUnits()
@@ -521,6 +560,7 @@ void TestBaseObjectSwapper()
     TestIniEnumeration();
     TestLookupFallthroughAndConditions();
     TestPropertyAliasesAndChanceBounds();
+    TestUnknownProperties();
     TestAdditionalBasesRequireRuntimePlacement(root);
     TestRandomOutcomes(root);
     TestMovementAndRemoval(root);

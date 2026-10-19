@@ -151,7 +151,8 @@ namespace navmesh::skyrim
             }
         };
 
-        /// Split properties at closing parentheses; commas inside a vector are component separators.
+        /// Split at closing parentheses and ignore unknown case-sensitive names, matching BOS.
+        /// Commas inside a vector are component separators.
         Properties ParseProperties(const std::string &text)
         {
             Properties result;
@@ -220,10 +221,6 @@ namespace navmesh::skyrim
                     {
                         (name == "flags" ? result.setFlags : result.clearFlags) |= Hex(argument);
                     }
-                }
-                else
-                {
-                    throw std::runtime_error("Unsupported BOS property: " + name);
                 }
                 begin = close + 1;
                 while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])))

@@ -41,6 +41,7 @@ namespace navmesh::skyrim
      * collider as obstruction envelopes and never introduce speculative walkable surfaces.
      * Runtime changes remain separate from encoded plugin records and their override history.
      * INI enumeration follows BOS's first-spelling sections and unique case-insensitive keys.
+     * Property names are case-sensitive; unknown names are ignored without discarding recognized properties.
      * Sectionless and custom unconditional sections use reference swaps; conditional non-Forms sections use properties.
      * Unknown runtime state and failing replacement lookups retain conservative alternatives.
      * @throws std::runtime_error for malformed or unrepresentable navigation inputs, with source path and line.

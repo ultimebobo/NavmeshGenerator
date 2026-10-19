@@ -973,6 +973,20 @@ class BatchRebuild(unittest.TestCase):
                 self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
                 self.assertIn(f"BOS input resolution failed: {config.as_posix()}:2:", completed.stderr)
 
+    def test_bos_unknown_properties_preserve_valid_properties(self):
+        self.bos_fixture()
+        config = self.root / "Placement_SWAP.ini"
+        for text in ["[Transforms]\n0x801~Baseline.esm|PosA(9000,0,0),posR(100,0,0),unknown(value)\n",
+                     "[Properties]\n0x801~Baseline.esm|posR(100,0,0)\n"
+                     "0x801~Baseline.esm|PosA(9000,0,0)\n",
+                     "[References]\n0x801~Baseline.esm|FixtureBase|PosA(9000,0,0)\n"
+                     "[Transforms]\n0x801~Baseline.esm|posR(100,0,0)\n"]:
+            with self.subTest(text=text):
+                config.write_text(text)
+                output = self.run_cli("--cell-formid", "100", terrain_only=False)
+                bos = json.loads((output / "bos-input.json").read_text())
+                self.assertEqual(bos["placements"][0]["alternatives"][0]["position"], [1100, 1000, 0])
+
     def test_bos_enumeration_and_failed_lookup_fallthrough(self):
         self.bos_fixture()
         with (self.root / "Baseline.esm").open("ab") as plugin:

@@ -118,8 +118,10 @@ dynamic/save-only references and later script-driven changes are not emulated.
 Malformed or unrepresentable entries stop input processing with the winning
 source path and line. Unavailable source or replacement identities produce
 diagnostics and should be reviewed before using output. Invalid entries and
-unrecognized property syntax are rejected explicitly rather than silently
-discarded. This stricter failure policy, supported record/collision coverage,
+malformed recognized properties are rejected explicitly. Property names are
+case-sensitive; unknown names are ignored, while recognized properties in the
+same bundle still apply, matching BOS. This stricter failure policy for malformed
+inputs, supported record/collision coverage,
 conservative outcome envelopes and unavailable runtime state are deliberate
 limits of offline interpretation; full runtime equivalence is not claimed.
 
