@@ -14,7 +14,7 @@ Discovery reads loose files at the top level of effective Data. It follows BOS's
 case-sensitive `.ini` extension and `_SWAP` filename substring checks, followed
 by lexical filename ordering. It does not recurse into subdirectories or read
 configuration files from BSAs. See the upstream
-[configuration discovery](https://github.com/powerof3/CLibUtil/blob/master/include/CLIBUtil/distribution.hpp).
+[configuration discovery](https://github.com/powerof3/CLibUtil/blob/aca80148853a8c0cb3e3cab3eaa20f1886cc99e7/include/CLIBUtil/distribution.hpp).
 
 MO2 discovery includes game Data, enabled mods in provider priority, and overwrite.
 Mods containing only configurations participate without an associated plugin.
@@ -35,6 +35,11 @@ plugin-qualified local FormIDs against active full and light plugin identities.
 Owning-plugin prefixes are independent of the plugin supplying the winning
 override. The indexed bound-object types include static, movable, furniture,
 door, activator, inventory and leveled-item bases.
+Qualified IDs follow BOS's call to
+[pinned runtime lookup](https://github.com/powerof3/CommonLibSSE/blob/3adc3270274f954caebc165ddcc7a3969596eb1e/src/RE/T/TESDataHandler.cpp):
+the supplied unsigned ID is added to the plugin prefix without masking or range
+rejection. An oversized ID can resolve to another plugin's record or to no record;
+the importer follows that result rather than guessing an intended compacted ID.
 
 Record indexing and geometry eligibility are separate. Ordinary plugin placements
 of the additional inventory, leveled-item, light, hazard and idle-marker classes
@@ -49,6 +54,8 @@ the same envelopes for uncertain placements and cannot be fitted to a single hea
 `Forms` selects base swaps, while unconditional `Properties` and `Transforms`
 select property rules. Other unconditional sections select reference swaps;
 conditional sections other than `Forms` select base properties, as in BOS.
+Sources first attempt a whole-field identity lookup; only failed swap-source
+lookups expand comma-separated source sets. Property sources use a single lookup.
 Source/replacement sets follow BOS's unique assignment
 branch; invalid undersized replacement sets are skipped with a diagnostic.
 Repeated sections are grouped in first-occurrence order. Reference swaps precede
@@ -57,14 +64,31 @@ text after a section's closing bracket is ignored, and entries before any named
 section use reference-swap semantics, matching BOS's SimpleIni interpretation.
 Repeated sections retain their first spelling, and duplicate case-insensitive
 keys retain their first position. INI values after `=` are ignored. Whitespace
-inside identity fields remains significant; physical INI line endings preserve
+within plugin names and editor IDs is preserved; physical INI line endings preserve
 source line evidence.
+INI parsing follows BOS's pinned SimpleIni grammar, including whitespace spanning
+the start of a section, the section pointer retained after an incomplete header,
+and termination at an embedded null. Incomplete headers and entries without a
+rule payload produce source diagnostics. Extra pipe fields are ignored, and
+conditional sections retain their priority even with an empty filter list.
+Rules with unavailable sources or no usable replacement cannot affect indexed
+placements, so their property and chance payloads are not parsed.
 Valid properties attached to the selected swap precede separate property rules;
 otherwise reference properties precede conditional base properties and general base properties.
 Each selected property bundle stands alone rather than merging fields from
 different rules. Unconditional candidates are visited in reverse insertion
 order, while conditional groups use reverse condition-key order. These contracts
-follow the upstream [rule manager](https://github.com/powerof3/BaseObjectSwapper/blob/master/src/Manager.cpp).
+follow the upstream [rule manager](https://github.com/powerof3/BaseObjectSwapper/blob/v3.5.0/src/Manager.cpp).
+
+Property tokens follow BOS's regex splitting and ordered, case-sensitive substring
+searches for position, rotation, scale and flags. Modifier letters anywhere in a
+token select relative transforms, absolute scale or cleared flags. Unmatched
+vector and scale patterns retain BOS's default zero values; unknown tokens are
+ignored. Numeric conversions accept a leading number with trailing text. Ranges
+use the leading endpoint fields and ignore additional slash fields; conservative
+envelopes enclose finite endpoints in either order. These contracts follow
+[property parsing](https://github.com/powerof3/BaseObjectSwapper/blob/v3.5.0/src/ObjectProperties.cpp)
+and the [pinned conversions](https://github.com/libxse/commonlib-shared/blob/0e0796f81e61e4ef4c5110f9b64ca058eb0eb459/include/REX/STRING.h).
 
 Positions use Skyrim world units. Absolute and relative component transforms
 follow BOS; rotations are expressed in degrees in the INI and converted to the
@@ -73,7 +97,7 @@ multiplies that percentage, including integer quantization. Conversions exceedin
 the runtime integer field use its entire representable scale envelope. The importer follows
 BOS interpretation even when a writer supplies an apparent scale factor to
 `scaleA`; it does not guess corrections to the writer's intent. See upstream
-[property application](https://github.com/powerof3/BaseObjectSwapper/blob/master/src/ObjectProperties.cpp).
+[property application](https://github.com/powerof3/BaseObjectSwapper/blob/v3.5.0/src/ObjectProperties.cpp).
 
 Initially-disabled and deleted flags control effective reference visibility.
 Other flag changes retain possible collision as conservative obstruction because
@@ -82,7 +106,13 @@ Base replacements refresh model path and classification. Encoded plugin winners
 and override histories remain unchanged; runtime placement evidence is stored
 separately with the contributing configuration and line.
 Chance values above the always-pass threshold pass unconditionally; negative
-values never pass. A random replacement list containing an unresolved numeric
+values never pass. Chance text without the case-sensitive `chance` marker and a
+parenthesized value retains BOS's always-pass default, including bare numeric
+fields; changing such text to an explicit chance expression can change gameplay.
+Chance seeds undergo runtime numeric conversion even though the importer does
+not sample them. Non-finite chance values follow BOS's comparison behavior;
+non-finite transforms that cannot supply collision bounds remain unrepresentable.
+A random replacement list containing an unresolved numeric
 identity or a known non-bound form retains lower-priority swap outcomes, because
 the runtime lookup can fail before selecting a replacement. Known forms outside
 the supported condition classes do not match filters.
@@ -101,7 +131,7 @@ immediate parent worldspace. Positive filters are alternatives; any matching
 negative filter excludes the rule. Location ancestry, region membership and
 runtime keywords are treated as unresolved conditions. Both applicable and
 inapplicable paths remain possible, with a conservative diagnostic. See
-[upstream condition evaluation](https://github.com/powerof3/BaseObjectSwapper/blob/master/src/ConditionalData.cpp).
+[upstream condition evaluation](https://github.com/powerof3/BaseObjectSwapper/blob/v3.5.0/src/ConditionalData.cpp).
 
 For uncertain placements, supported model-local collision is enclosed across
 the position range and maximum scale. Variable rotations use an enclosing
@@ -115,15 +145,18 @@ Conservatism is limited to indexed references and supported, available model
 collision. Missing models follow the existing warning policy; unreadable
 collision evidence stops affected-cell selection. MergeMapper identities,
 dynamic/save-only references and later script-driven changes are not emulated.
-Malformed or unrepresentable entries stop input processing with the winning
-source path and line. Unavailable source or replacement identities produce
-diagnostics and should be reviewed before using output. Invalid entries and
-malformed recognized properties are rejected explicitly. Property names are
-case-sensitive; unknown names are ignored, while recognized properties in the
-same bundle still apply, matching BOS. This stricter failure policy for malformed
-inputs, supported record/collision coverage,
+Inputs whose effective collision cannot be represented stop processing with the
+winning source path and line. Failed runtime numeric conversions and empty numeric
+fields that cause undefined BOS accesses are diagnosed rather than assigned a
+guessed value. Unavailable source or replacement identities produce diagnostics
+and should be reviewed before using output. Supported record/collision coverage,
 conservative outcome envelopes and unavailable runtime state are deliberate
 limits of offline interpretation; full runtime equivalence is not claimed.
+
+Armor ground collision uses its world-model fields, with the female model as
+fallback when the male model is absent. Binary armor-addon IDs are never decoded
+as paths. A BOS placement with distinct male and female ground models retains
+both as conservative obstruction because runtime sex extra data is not evaluated.
 
 ## Selection, caches and outputs
 

@@ -1586,8 +1586,20 @@ namespace navmesh::skyrim
                 ++statistics.modelHits;
                 return found->second.value;
             }
-            auto value = std::make_shared<const NifGeometry>(
-                LoadNif(path, includeRender, includeHearth, operableActivator, passageAsset));
+            std::shared_ptr<const NifGeometry> value;
+            try
+            {
+                value = std::make_shared<const NifGeometry>(
+                    LoadNif(path, includeRender, includeHearth, operableActivator, passageAsset));
+            }
+            catch (const std::bad_alloc &)
+            {
+                throw std::runtime_error("Memory allocation failed while decoding NIF '" +
+                                         navmesh::core::PathToUtf8(path) +
+                                         "'. Close other applications, lower Working memory budget and Generation "
+                                         "workers, then retry. If the same NIF still fails, inspect that model for "
+                                         "corrupt or unsupported data.");
+            }
             ++statistics.modelsDecoded;
             std::size_t shapeBytes = value->collisionShapeTypes.capacity() * sizeof(std::string);
             for (const auto &shape : value->collisionShapeTypes)

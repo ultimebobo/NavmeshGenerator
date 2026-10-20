@@ -416,6 +416,7 @@ namespace navmesh::skyrim
                 else
                 {
                     BaseRecord record{.type = type};
+                    std::string femaleArmorModel;
                     const auto payload = DecompressNavMesh(buffer, dataStart, dataEnd, header->flags);
                     if (payload)
                     {
@@ -435,9 +436,15 @@ namespace navmesh::skyrim
                                 record.editorId = navmesh::skyrim::DecodePluginText(
                                     TrimNulls(ReadAscii(*payload, subDataStart, subSize)));
                             }
-                            else if (subType == "MODL")
+                            else if ((subType == "MODL" && record.type != "ARMO") ||
+                                     (subType == "MOD2" && record.type == "ARMO"))
                             {
                                 record.modelPath = navmesh::skyrim::DecodePluginText(
+                                    TrimNulls(ReadAscii(*payload, subDataStart, subSize)));
+                            }
+                            else if (subType == "MOD4" && record.type == "ARMO")
+                            {
+                                femaleArmorModel = navmesh::skyrim::DecodePluginText(
                                     TrimNulls(ReadAscii(*payload, subDataStart, subSize)));
                             }
                             else if (record.type == "DOOR" && subType == "FNAM" && subSize >= 1)
@@ -459,6 +466,10 @@ namespace navmesh::skyrim
                             }
                             subOffset = subDataEnd;
                         }
+                    }
+                    if (record.type == "ARMO" && record.modelPath.empty())
+                    {
+                        record.modelPath = std::move(femaleArmorModel);
                     }
                     baseRecords[header->formId] = std::move(record);
                 }

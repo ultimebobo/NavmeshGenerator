@@ -110,12 +110,19 @@ exceed it. Separate-volume inspection staging may require a compressed copy.
 Legacy caches in old output directories are retained; they are not migrated or
 deleted automatically. Requested plugin copies still contain the complete source.
 
-The working-memory setting controls cache retention and admission estimates,
-rather than enforcing a process RAM cap. Resolved records, run-scoped BSA directory indexes, and compact candidate
+The working-memory setting determines how much decoded geometry is cached and
+how many generation tasks can run together, based on their estimated memory use.
+Total RAM use can exceed this setting because resolved records, run-scoped BSA directory indexes, and compact candidate
 meshes and compact source joins required for global seam refinement/writing remain resident; unusually
 large vertical-span workloads can exceed the admission estimate. A task exceeding
 the estimated work budget runs alone. Plugin source records are read by byte range;
 complete source buffers are required only for byte-preserving plugin copies.
+Increasing the working-memory budget can retain more decoded geometry and admit
+more concurrent work; it does not cure allocation failures and can increase RAM
+pressure. For an allocation failure, close other applications, reduce the budget
+and worker count, then retry. If decoding still fails for the same NIF, inspect
+the named model for corrupt or unsupported data. NIF allocation failures identify
+the physical model path.
 
 ## Reports and verification
 

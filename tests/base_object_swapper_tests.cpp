@@ -132,26 +132,211 @@ namespace
                          "[ Forms ] # repeat\nBase10|Base30\n[Transforms|Cell0] ; conditional\nBase10|scale(3)\n"));
         assert(First(order).baseObjectId == 30 && First(order).scale == 3);
 
-        for (const auto &text : {"; comment\n[Forms ; missing bracket\nBase10|Base20\n", "; comment\ninvalid entry\n",
-                                 "[Forms]\nBase10|Base20|posA(1,2)\n"})
+        for (const auto &text : {"; comment\n[Forms ; missing bracket\n", "; comment\ninvalid entry\n"})
         {
             auto input = Input(text);
             input.configs.front().path = root / "Data" / "Broken_SWAP.ini";
             order = Fixture();
+            const auto warnings = skyrim::ApplyBaseObjectSwaps(order, input);
+            assert(warnings.size() == 1);
+            assert(warnings.front().starts_with(input.configs.front().path.generic_string() + ":2:"));
+            assert(order.runtimePlacements.empty());
+        }
+
+        {
+            auto input = Input("[Forms]\nBase10|Base20|posA(1,2)\n");
+            input.configs.front().path = root / "Data" / "Broken_SWAP.ini";
+            order = Fixture();
+            const auto warnings = skyrim::ApplyBaseObjectSwaps(order, input);
+            assert(warnings.empty());
+            assert(First(order).baseObjectId == 20);
+            assert(First(order).position.x == 0 && First(order).position.y == 0 && First(order).position.z == 0);
+            assert(!First(order).envelope);
+        }
+    }
+
+    void TestRuntimeCompatibility()
+    {
+        // Unrecognized chance fields keep BOS's always-pass default, including legacy numeric values.
+        for (const auto *chance : {"100", "50", "chanceS(100", "unknown", "chanceS(100)", "chance(100) suffix"})
+        {
+            auto order = Fixture();
+            const auto diagnostics =
+                skyrim::ApplyBaseObjectSwaps(order, Input(std::string("[Forms]\nBase10|Base20|NONE|") + chance + "\n"));
+            assert(diagnostics.empty());
+            assert(First(order).baseObjectId == 20 && !First(order).envelope);
+        }
+
+        auto order = Fixture();
+        const auto diagnostics =
+            skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nAbsentSource|Base20|posA(broken)|chance(broken)\n"
+                                                      "Base10|AbsentReplacement|posA(broken)|chance(broken)\n"
+                                                      "[Properties]\nBase10,Base20|posA(broken)\n"
+                                                      "[Forms]\nBase10|Base20|NONE|100|ignored\n"
+                                                      "[Properties|Cell0|ignored]\nBase10|posR(50,0,0)|100|ignored\n"));
+        assert(diagnostics.size() == 3);
+        assert(First(order).baseObjectId == 20 && First(order).position.x == 150);
+        assert(!First(order).envelope);
+
+        // Runtime lookup adds rather than masks or ORs the ID. Carries can name a record
+        // owned by another plugin; both matching and failed lookups must follow that identity.
+        for (const auto local : {"0x4390", "0x390"})
+        {
+            order = Fixture();
+            order.pluginFormPrefixes["light.esl"] = 0xFE005000;
+            order.cells.front().references.front().id = 0xFE009390;
+            order.records.back().formId = 0xFE009390;
+            order.records.back().winning.formId = 0xFE009390;
+            (void)skyrim::ApplyBaseObjectSwaps(
+                order, Input(std::string("[Transforms]\n") + local + "~Light.esl|posA(300,400,500)\n"));
+            assert(First(order).position.x == (std::string(local) == "0x4390" ? 300 : 100));
+        }
+
+        order = Fixture();
+        order.pluginFormPrefixes["light.esl"] = 0xFE005000;
+        auto replacement = *order.FindWinning(20);
+        replacement.formId = 0xFE009390;
+        order.records.push_back(replacement);
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|0x4390~Light.esl\n"));
+        assert(First(order).baseObjectId == 0xFE009390);
+        assert(!First(order).envelope);
+    }
+
+    void TestPermissivePropertyGrammar()
+    {
+        struct PointCase
+        {
+            const char *text;
+            core::Vec3 expected;
+        };
+        // Expected values follow BOS v3.5.0 ObjectProperties and its pinned REX conversions.
+        for (const auto &test : std::vector<PointCase>{{"posA(1,2)", {0, 0, 0}},
+                                                       {"posR(1,2)", {100, 100, 0}},
+                                                       {"posA", {0, 0, 0}},
+                                                       {"unknown(pos)", {0, 0, 0}},
+                                                       {"prefixposSuffix(10units,20units,30units)", {10, 20, 30}},
+                                                       {"prefixRposSuffix(10,20,30)", {110, 120, 30}},
+                                                       {"rotpos(10,20,30)", {10, 20, 30}},
+                                                       {"pos(1,2,3,4)", {1, 2, 3}},
+                                                       {"pos(1,2,3)rot(4,5,6)", {1, 2, 3}},
+                                                       {"pos(9,9,9),posR(1,2,3)", {101, 102, 3}},
+                                                       {",pos(1,2,3), unknown text", {1, 2, 3}},
+                                                       {"pos(1,2,3),postext", {0, 0, 0}}})
+        {
+            auto order = Fixture();
+            (void)skyrim::ApplyBaseObjectSwaps(order, Input(std::string("[Properties]\nBase10|") + test.text + "\n"));
+            const auto &reference = First(order);
+            assert(reference.position.x == test.expected.x && reference.position.y == test.expected.y &&
+                   reference.position.z == test.expected.z);
+            assert(reference.rotation.x == 0 && reference.rotation.y == 0 && reference.rotation.z == 0);
+            assert(!reference.envelope);
+        }
+        for (const auto &[text, expected] : std::vector<std::pair<std::string, float>>{{"scale", 0.0F},
+                                                                                       {"scale(2,4)", 2.0F},
+                                                                                       {"prefixAscale(150units)", 1.5F},
+                                                                                       {"scaleA(inf)", 10.0F},
+                                                                                       {"scaleA(-inf)", 0.0F}})
+        {
+            auto order = Fixture();
+            (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Properties]\nBase10|" + text + "\n"));
+            assert(First(order).scale == expected && !First(order).envelope);
+        }
+        for (const auto *text : {"pos(10/20/999,0,0)", "pos(20/10,0,0)"})
+        {
+            auto order = Fixture();
+            (void)skyrim::ApplyBaseObjectSwaps(order, Input(std::string("[Properties]\nBase10|") + text + "\n"));
+            assert(First(order).envelope);
+            assert(First(order).envelope->minimumPosition.x == 10);
+            assert(First(order).envelope->maximumPosition.x == 20);
+        }
+        auto order = Fixture();
+        order.cells.front().references.front().rotation.z = 1;
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Properties]\nBase10|Rrot(0,0,90units)\n"));
+        assert(std::abs(First(order).rotation.z - (1 + std::numbers::pi_v<float> / 2)) < 0.0001F);
+
+        for (const auto *text : {"flags(0xC00)", "prefixCflags(0x800suffix)", "flagsC(-1)"})
+        {
+            order = Fixture();
+            order.cells.front().references.front().initiallyDisabled = true;
+            (void)skyrim::ApplyBaseObjectSwaps(order, Input(std::string("[Properties]\nBase10|") + text + "\n"));
+            assert(!First(order).initiallyDisabled);
+        }
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Properties]\nBase10|flags(0x800suffix),flagsC(0x800)\n"));
+        assert(First(order).initiallyDisabled);
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Properties]\nBase10|unknown text,flags()\n"));
+        assert(order.runtimePlacements.empty());
+    }
+
+    void TestPermissiveIdentityAndChanceGrammar()
+    {
+        for (const auto *source : {"0xAtrail~Base.esm", "0xA,0x1E~Base.esm", "-0xFFFFFFF6~Base.esm"})
+        {
+            auto order = Fixture();
+            (void)skyrim::ApplyBaseObjectSwaps(
+                order, Input(std::string("[Properties]\n") + source + "|posR(1tail,2tail,3tail)\n"));
+            assert(First(order).position.x == 101 && First(order).position.y == 102 && First(order).position.z == 3);
+        }
+        auto order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order,
+                                           Input("[Forms]\n0xA,0x1E~Base.esm|0x14tail~Base.esm|NONE|chance(-1)\n"));
+        assert(order.runtimePlacements.empty());
+        order = Fixture();
+        order.records[3].editorId = "Odd~Editor~Name";
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nOdd~Editor~Name|Base20\n"));
+        assert(First(order).baseObjectId == 20);
+
+        for (const auto *chance : {"chance(100tail,123tail,ignored)", "chance(nan,-1)", "chance(inf,0)",
+                                   ")prefixchance(100)", " chance(100) suffix"})
+        {
+            order = Fixture();
+            (void)skyrim::ApplyBaseObjectSwaps(order,
+                                               Input(std::string("[Forms]\nBase10|Base20|NONE|") + chance + "\n"));
+            assert(First(order).baseObjectId == 20 && !First(order).envelope);
+        }
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20\nBase10|Base30|NONE|chance(-inf)\n"
+                                                        "Base10|Base10|NONE|chance(broken,broken)\n"));
+        assert(First(order).baseObjectId == 20 && !First(order).envelope);
+        for (const auto *text : {"[Forms]\nBase10|Base20|NONE|chance(100,invalid)\n",
+                                 "[Forms]\nBase10,Base30|Base20,Base30|NONE|chance(100,invalid)\n",
+                                 "[Properties]\nBase10|pos(1,invalid,3)\n", "[Properties]\nBase10|pos(inf,0,0)\n"})
+        {
+            order = Fixture();
             bool failed{};
             try
             {
-                (void)skyrim::ApplyBaseObjectSwaps(order, input);
+                (void)skyrim::ApplyBaseObjectSwaps(order, Input(text));
             }
             catch (const std::runtime_error &error)
             {
                 failed = true;
-                const auto expected = input.configs.front().path.generic_string() + ":2:";
-                assert(std::string(error.what()).starts_with(expected));
+                assert(std::string(error.what()).starts_with("test_swap.ini:2:"));
             }
-            assert(failed);
-            assert(order.runtimePlacements.empty());
+            assert(failed && order.runtimePlacements.empty());
         }
+    }
+
+    void TestIniEdgeGrammar()
+    {
+        for (const auto *text : {"[Forms|]\nBase10|Base20\n[Forms]\nBase10|Base30\n", "[ \n Forms ]\nBase10|Base20\n",
+                                 "[Forms]\nBase10|Base20\n[Broken\nBase10|Base30\n"})
+        {
+            auto order = Fixture();
+            (void)skyrim::ApplyBaseObjectSwaps(order, Input(text));
+            assert(First(order).baseObjectId == 20 && !First(order).envelope);
+        }
+        auto order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Properties|]\nBase10|scale(2)\n"
+                                                        "[Properties]\nBase10|scale(3)\n"));
+        assert(First(order).scale == 2 && !First(order).envelope);
+        std::string text = "[Forms]\nBase10|Base20\n";
+        text.push_back('\0');
+        text += "Base10|Base30\n";
+        order = Fixture();
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input(text));
+        assert(First(order).baseObjectId == 20);
     }
 
     void TestIniEnumeration()
@@ -355,6 +540,13 @@ namespace
             base.formId = reference.baseObjectId;
             base.winning.formId = base.formId;
             base.origins = {base.winning};
+            if (base.type == "ARMO")
+            {
+                base.raw = skyrim::PluginRecord{};
+                base.raw->subrecords.push_back(
+                    {.type = "MOD4",
+                     .data = std::vector<std::uint8_t>{'F', 'e', 'm', 'a', 'l', 'e', '.', 'n', 'i', 'f', 0}});
+            }
             order.records.push_back(base);
             auto placed = *order.FindWinning(staticReference.id);
             placed.formId = reference.id;
@@ -380,6 +572,12 @@ namespace
         assert(order.runtimePlacements.empty());
         const auto untouched = skyrim::ExtractGeometry(root, cell, root / "cache");
         assert(untouched.collisionTriangles == 1);
+
+        // An ineffective property must not admit armor through its alternate ground model.
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Properties]\n0x204~Base.esm|Unknown(value)\n"));
+        assert(order.runtimePlacements.empty());
+        const auto ineffective = skyrim::ExtractGeometry(root, cell, root / "cache");
+        assert(ineffective.collisionTriangles == 1);
 
         // A targeted transform admits its additional base without admitting other clutter.
         (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Transforms]\n0x202~Base.esm|posR(50,0,0)\n"));
@@ -557,6 +755,10 @@ void TestBaseObjectSwapper()
     WriteModel(root / "meshes" / "Solid.nif");
     TestPrecedenceAndUnits();
     TestConfigSyntax(root);
+    TestRuntimeCompatibility();
+    TestPermissivePropertyGrammar();
+    TestPermissiveIdentityAndChanceGrammar();
+    TestIniEdgeGrammar();
     TestIniEnumeration();
     TestLookupFallthroughAndConditions();
     TestPropertyAliasesAndChanceBounds();

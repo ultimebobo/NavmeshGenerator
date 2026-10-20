@@ -506,8 +506,16 @@ namespace navmesh::skyrim
                 CheckCancellation();
                 if (geometry.modelsUnreadable || !geometry.archiveSearchComplete)
                 {
-                    throw std::runtime_error(std::format("Cannot determine BOS collision for REFR {:08X}: {}",
-                                                         reference.id, reference.modelPath));
+                    const auto unreadable = std::find_if(
+                        geometry.scene.coverage.begin(), geometry.scene.coverage.end(),
+                        [](const auto &coverage) { return coverage.status == core::GeometryCoverage::Unreadable; });
+                    throw std::runtime_error(
+                        std::format("Cannot determine BOS collision for REFR {:08X} in '{}' (base {:08X} in '{}', BOS "
+                                    "'{}'): {} ({})",
+                                    reference.id, reference.sourcePlugin, reference.baseObjectId, reference.basePlugin,
+                                    reference.inputConfig, reference.modelPath,
+                                    unreadable != geometry.scene.coverage.end() ? unreadable->detail
+                                                                                : "archive model search incomplete"));
                 }
                 if (geometry.modelsMissing)
                 {

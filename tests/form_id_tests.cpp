@@ -291,6 +291,28 @@ namespace
             }
         }
     }
+
+    void TestArmorGroundModels(const std::filesystem::path &root)
+    {
+        Bytes armor;
+        Subrecord(armor, "MOD2", {'M', 'a', 'l', 'e', '.', 'n', 'i', 'f', 0});
+        Subrecord(armor, "MOD4", {'F', 'e', 'm', 'a', 'l', 'e', '.', 'n', 'i', 'f', 0});
+        // An addon FormID is binary even when its bytes resemble a short legacy filename.
+        Subrecord(armor, "MODL", {0x63, 0xE4, 0, 0});
+        Bytes femaleOnly;
+        Subrecord(femaleOnly, "MOD4", {'F', 'e', 'm', 'a', 'l', 'e', '.', 'n', 'i', 'f', 0});
+        Subrecord(femaleOnly, "MODL", {0x63, 0xE4, 0, 0});
+        Bytes addonOnly;
+        Subrecord(addonOnly, "MODL", {0x63, 0xE4, 0, 0});
+        WritePlugin(root / "GroundModels.esm", {}, false,
+                    {{"ARMO", 0x800, armor}, {"ARMO", 0x801, femaleOnly}, {"ARMO", 0x802, addonOnly}});
+        const auto resolved = ResolveLoadOrder({.dataDirectory = root, .plugins = {"GroundModels.esm"}});
+        assert(resolved.diagnostics.empty());
+        assert(resolved.FindWinning(0x800)->modelPath == "Male.nif");
+        assert(resolved.FindWinning(0x801)->modelPath == "Female.nif");
+        assert(!resolved.FindWinning(0x802)->modelPath);
+        assert(resolved.FindWinning(0x800)->raw->subrecords.back().data == Bytes({0x63, 0xE4, 0, 0}));
+    }
 } // namespace
 
 void TestFormIdResolution()
@@ -303,5 +325,6 @@ void TestFormIdResolution()
     TestMissingMasterIdentity(root);
     TestCompressedRecordBoundaries(root);
     TestUnicodeInputs(root);
+    TestArmorGroundModels(root);
     std::filesystem::remove_all(root);
 }

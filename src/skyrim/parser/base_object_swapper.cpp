@@ -1,4 +1,5 @@
 #include "skyrim/parser/base_object_swapper.h"
+#include "skyrim/parser/text_encoding.h"
 #include "core/io/file_path.h"
 
 #include "core/io/content_hash.h"
@@ -12,6 +13,7 @@
 #include <limits>
 #include <map>
 #include <numbers>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -20,12 +22,6 @@ namespace navmesh::skyrim
 {
     namespace
     {
-        std::string Trim(std::string text)
-        {
-            const auto begin = text.find_first_not_of(" \t\r\n");
-            return begin == std::string::npos ? "" : text.substr(begin, text.find_last_not_of(" \t\r\n") - begin + 1);
-        }
-
         std::string Lower(std::string text)
         {
             std::transform(text.begin(), text.end(), text.begin(),
@@ -36,6 +32,10 @@ namespace navmesh::skyrim
         std::vector<std::string> Split(const std::string &text, char separator)
         {
             std::vector<std::string> result;
+            if (text.empty())
+            {
+                return result;
+            }
             std::size_t begin{};
             for (;;)
             {
@@ -82,26 +82,24 @@ namespace navmesh::skyrim
 
         float Number(const std::string &text)
         {
-            const auto numeric = Trim(text);
-            std::size_t consumed{};
-            const auto value = std::stof(numeric, &consumed);
-            if (consumed != numeric.size() || !std::isfinite(value))
-            {
-                throw std::runtime_error("Expected a finite BOS numeric value: " + text);
-            }
-            return value;
+            // REX::STR::TO_NUM accepts the numeric prefix and propagates conversion failures.
+            return std::stof(text);
         }
 
         std::uint32_t Hex(const std::string &text)
         {
-            const auto numeric = Trim(text);
-            std::size_t consumed{};
-            const auto value = std::stoull(numeric, &consumed, 16);
-            if (consumed != numeric.size() || value > UINT32_MAX)
+            // BOS uses Windows unsigned long conversions. Validate the magnitude before
+            // unsigned negation so this identity contract is independent of host long width.
+            const auto value = std::stoull(text, nullptr, 16);
+            const auto sign = text.find_first_not_of(" \t\r\n\f\v");
+            const bool negative = sign != std::string::npos && text[sign] == '-';
+            const auto magnitude = negative ? 0ULL - value : value;
+            if (magnitude > UINT32_MAX)
             {
                 throw std::runtime_error("Invalid BOS FormID or flag: " + text);
             }
-            return static_cast<std::uint32_t>(value);
+            const auto narrowed = static_cast<std::uint32_t>(magnitude);
+            return negative ? 0U - narrowed : narrowed;
         }
 
         bool IsHex(const std::string &text)
@@ -115,16 +113,24 @@ namespace navmesh::skyrim
         Range ParseRange(const std::string &text)
         {
             const auto parts = Split(text, '/');
-            if (parts.size() > 2)
+            if (parts.empty())
             {
-                throw std::runtime_error("Invalid BOS range: " + text);
+                throw std::runtime_error("Cannot interpret an empty BOS numeric range");
             }
-            Range result{Number(parts.front()), Number(parts.back())};
-            if (result.minimum > result.maximum)
+            const auto first = Number(parts.front());
+            const auto second = parts.size() > 1 ? Number(parts[1]) : first;
+            return {first, second};
+        }
+
+        Range EncloseRange(Range range, const std::string &text)
+        {
+            if (!std::isfinite(range.minimum) || !std::isfinite(range.maximum))
             {
-                throw std::runtime_error("Reversed BOS range: " + text);
+                throw std::runtime_error("Cannot represent non-finite BOS transform range: " + text);
             }
-            return result;
+            // Only the first two slash fields reach BOS's sampler. Enclose either endpoint
+            // order without assigning a particular runtime random result.
+            return {std::min(range.minimum, range.maximum), std::max(range.minimum, range.maximum)};
         }
 
         struct PointProperty
@@ -154,8 +160,52 @@ namespace navmesh::skyrim
             }
         };
 
-        /// Split at closing parentheses and ignore unknown case-sensitive names, matching BOS.
-        /// Commas inside a vector are component separators.
+        /// The expressions mirror BOS v3.5.0's searches, including partial tokens and
+        /// commas protected by a following closing parenthesis rather than balanced nesting.
+        const std::regex PropertySeparator{R"(,\s*(?![^()]*\)))"};
+        const std::regex PropertyArgument{R"(\((.*?)\))"};
+        const std::regex PointArguments{R"(\((.*?),(.*?),(.*?)\))"};
+
+        PointProperty ParsePointProperty(const std::string &text, bool rotation)
+        {
+            PointProperty result{};
+            result.relative = text.find('R') != std::string::npos;
+            std::smatch match;
+            if (std::regex_search(text, match, PointArguments))
+            {
+                for (std::size_t component{}; component < result.values.size(); ++component)
+                {
+                    const auto argument = match[component + 1].str();
+                    result.values[component] = EncloseRange(ParseRange(argument), argument);
+                }
+            }
+            // An unmatched transform pattern leaves BOS's default zero vector intact.
+            if (rotation)
+            {
+                const bool sampled = result.Variable();
+                for (auto &range : result.values)
+                {
+                    constexpr auto radians = std::numbers::pi_v<float> / 180.0F;
+                    constexpr auto limit = std::numbers::pi_v<float> * 2;
+                    range.minimum *= radians;
+                    range.maximum *= radians;
+                    if (!std::isfinite(range.minimum) || !std::isfinite(range.maximum))
+                    {
+                        throw std::runtime_error("Cannot represent non-finite BOS rotation: " + text);
+                    }
+                    // BOS clamps every component only when the whole vector is sampled.
+                    if (sampled)
+                    {
+                        range.minimum = std::clamp(range.minimum, -limit, limit);
+                        range.maximum = std::clamp(range.maximum, -limit, limit);
+                    }
+                }
+            }
+            return result;
+        }
+
+        /// Substrings choose the first matching property class; modifier letters anywhere
+        /// in that token control relative transforms, absolute scale and cleared flags.
         Properties ParseProperties(const std::string &text)
         {
             Properties result;
@@ -163,80 +213,40 @@ namespace navmesh::skyrim
             {
                 return result;
             }
-            std::size_t begin{};
-            while (begin < text.size())
+            const std::sregex_token_iterator end;
+            for (auto token = std::sregex_token_iterator(text.begin(), text.end(), PropertySeparator, -1); token != end;
+                 ++token)
             {
-                const auto open = text.find('(', begin);
-                const auto close = text.find(')', open);
-                if (open == std::string::npos || close == std::string::npos)
+                const auto property = token->str();
+                if (property.find("pos") != std::string::npos)
                 {
-                    throw std::runtime_error("Malformed BOS property: " + text.substr(begin));
+                    result.position = ParsePointProperty(property, false);
                 }
-                const auto name = Trim(text.substr(begin, open - begin));
-                const auto arguments = Split(text.substr(open + 1, close - open - 1), ',');
-                if (name == "pos" || name == "posA" || name == "posR" || name == "rot" || name == "rotA" ||
-                    name == "rotR")
+                else if (property.find("rot") != std::string::npos)
                 {
-                    if (arguments.size() != 3)
-                    {
-                        throw std::runtime_error("BOS position/rotation requires three components");
-                    }
-                    PointProperty point{{ParseRange(arguments[0]), ParseRange(arguments[1]), ParseRange(arguments[2])},
-                                        name.ends_with('R')};
-                    if (name.starts_with("rot"))
-                    {
-                        const bool sampled = point.Variable();
-                        for (auto &range : point.values)
-                        {
-                            constexpr auto radians = std::numbers::pi_v<float> / 180.0F;
-                            constexpr auto limit = std::numbers::pi_v<float> * 2;
-                            range.minimum *= radians;
-                            range.maximum *= radians;
-                            // BOS clamps sampled vectors, while exact vectors bypass sampling.
-                            if (sampled)
-                            {
-                                range.minimum = std::clamp(range.minimum, -limit, limit);
-                                range.maximum = std::clamp(range.maximum, -limit, limit);
-                            }
-                        }
-                        result.rotation = point;
-                    }
-                    else
-                    {
-                        result.position = point;
-                    }
+                    result.rotation = ParsePointProperty(property, true);
                 }
-                else if (name == "scale" || name == "scaleA" || name == "scaleR")
+                else if (property.find("scale") != std::string::npos)
                 {
-                    if (arguments.size() != 1)
-                    {
-                        throw std::runtime_error("BOS scale requires one value or range");
-                    }
-                    auto range = ParseRange(arguments[0]);
+                    std::smatch match;
+                    auto range =
+                        std::regex_search(property, match, PropertyArgument) ? ParseRange(match[1].str()) : Range{};
                     range.minimum = std::clamp(range.minimum, 0.0F, 1000.0F);
                     range.maximum = std::clamp(range.maximum, 0.0F, 1000.0F);
-                    result.scale = range;
-                    result.absoluteScale = name == "scaleA";
+                    result.scale = EncloseRange(range, property);
+                    result.absoluteScale = property.find('A') != std::string::npos;
                 }
-                else if (name == "flags" || name == "flagsC")
+                else if (property.find("flags") != std::string::npos)
                 {
-                    for (const auto &argument : arguments)
+                    std::smatch match;
+                    if (std::regex_search(property, match, PropertyArgument))
                     {
-                        (name == "flags" ? result.setFlags : result.clearFlags) |= Hex(argument);
+                        auto &flags = property.find('C') != std::string::npos ? result.clearFlags : result.setFlags;
+                        for (const auto &argument : Split(match[1].str(), ','))
+                        {
+                            flags |= Hex(argument);
+                        }
                     }
-                }
-                begin = close + 1;
-                while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])))
-                {
-                    ++begin;
-                }
-                if (begin < text.size())
-                {
-                    if (text[begin] != ',')
-                    {
-                        throw std::runtime_error("Expected a comma between BOS properties");
-                    }
-                    ++begin;
                 }
             }
             return result;
@@ -249,6 +259,8 @@ namespace navmesh::skyrim
             float chance{100};
             std::vector<std::string> conditions;
             std::string conditionKey, evidence;
+            /// Empty filter lists still belong to conditional priority groups.
+            bool conditional{};
             bool leveled{};
             bool randomAssignment{};
             /// A selected unresolved or non-bound replacement lets BOS try lower-priority swaps.
@@ -292,9 +304,29 @@ namespace navmesh::skyrim
 
         /// SimpleIni merges repeated sections and visits them in first-occurrence order.
         /// Sectionless keys belong to the unnamed section, which BOS interprets as reference swaps.
-        std::vector<ConfigEntry> ConfigEntries(const BaseObjectSwapConfig &config)
+        std::vector<ConfigEntry> ConfigEntries(const BaseObjectSwapConfig &config,
+                                               std::vector<std::string> &diagnostics)
         {
-            std::istringstream stream(IniNewlines(config.contents));
+            auto contents = IniNewlines(config.contents);
+            if (const auto terminator = contents.find('\0'); terminator != std::string::npos)
+            {
+                contents.resize(terminator);
+            }
+            std::vector<std::size_t> lineStarts{0};
+            for (std::size_t offset{}; offset < contents.size(); ++offset)
+            {
+                if (contents[offset] == '\n')
+                {
+                    lineStarts.push_back(offset + 1);
+                }
+            }
+            const auto lineNumber = [&](const char *position)
+            {
+                const auto offset = static_cast<std::size_t>(position - contents.data());
+                return static_cast<std::size_t>(std::upper_bound(lineStarts.begin(), lineStarts.end(), offset) -
+                                                lineStarts.begin());
+            };
+            const auto space = [](char value) { return value == ' ' || value == '\t' || value == '\n'; };
             struct Section
             {
                 std::string name;
@@ -303,51 +335,129 @@ namespace navmesh::skyrim
             };
             std::vector<Section> sections;
             std::map<std::string, std::size_t> indices;
-            std::string section, line;
-            std::size_t lineNumber{}, current{};
-            while (std::getline(stream, line))
+            const auto addEntry = [&](const char *section, const char *key, std::size_t sourceLine)
             {
-                ++lineNumber;
-                if (lineNumber == 1 && line.starts_with("\xEF\xBB\xBF"))
+                const auto [found, inserted] = indices.emplace(Lower(section), sections.size());
+                if (inserted)
                 {
-                    line.erase(0, 3);
+                    sections.push_back({section});
                 }
-                line = Trim(line);
-                if (line.empty() || line.front() == ';' || line.front() == '#')
+                auto &destination = sections[found->second];
+                if (key && *key && destination.keys.insert(Lower(key)).second)
                 {
+                    destination.entries.push_back({destination.name, key, sourceLine});
+                }
+            };
+            auto *cursor = contents.data();
+            if (contents.starts_with("\xEF\xBB\xBF"))
+            {
+                cursor += 3;
+            }
+            // SimpleIni's section pointer refers to the mutable input. Even an incomplete
+            // header changes that pointer; later key/value terminators delimit its name.
+            const char *section = "";
+            while (*cursor)
+            {
+                while (space(*cursor))
+                {
+                    ++cursor;
+                }
+                if (!*cursor)
+                {
+                    break;
+                }
+                if (*cursor == ';' || *cursor == '#')
+                {
+                    while (*cursor && *cursor != '\n')
+                    {
+                        ++cursor;
+                    }
                     continue;
                 }
-                if (line.front() == '[')
+                const auto sourceLine = lineNumber(cursor);
+                if (*cursor == '[')
                 {
-                    const auto close = line.find(']');
-                    if (close == std::string::npos)
+                    ++cursor;
+                    while (space(*cursor))
+                    {
+                        ++cursor;
+                    }
+                    section = cursor;
+                    while (*cursor && *cursor != ']' && *cursor != '\n')
+                    {
+                        ++cursor;
+                    }
+                    if (*cursor != ']')
                     {
                         const auto source = config.path.empty() ? config.name : navmesh::core::PathToUtf8(config.path);
-                        throw std::runtime_error(source + ":" + std::to_string(lineNumber) +
-                                                 ": Unterminated BOS section header");
+                        diagnostics.push_back(source + ":" + std::to_string(sourceLine) +
+                                              ": ignored unterminated BOS section header");
+                        continue;
                     }
-                    // SimpleIni trims the section name and ignores text after its closing bracket.
-                    section = Trim(line.substr(1, close - 1));
-                    const auto [found, inserted] = indices.emplace(Lower(section), sections.size());
-                    if (inserted)
+                    auto *end = cursor;
+                    while (end > section && space(end[-1]))
                     {
-                        sections.push_back({section});
+                        --end;
                     }
-                    current = found->second;
+                    *end = '\0';
+                    ++cursor;
+                    while (*cursor && *cursor != '\n')
+                    {
+                        ++cursor;
+                    }
+                    addEntry(section, nullptr, sourceLine);
                     continue;
                 }
-                if (sections.empty())
+                auto *key = cursor;
+                while (*cursor && *cursor != '=' && *cursor != '\n')
                 {
-                    indices.emplace("", 0);
-                    sections.emplace_back();
+                    ++cursor;
                 }
-                // BOS visits unique case-insensitive keys, using their first spelling and load position.
-                // INI values after '=' are not part of the rule supplied to BOS.
-                line = Trim(line.substr(0, line.find('=')));
-                if (!line.empty() && sections[current].keys.insert(Lower(line)).second)
+                const bool hasValue = *cursor == '=';
+                if (hasValue && key == cursor)
                 {
-                    sections[current].entries.push_back({sections[current].name, line, lineNumber});
+                    while (*cursor && *cursor != '\n')
+                    {
+                        ++cursor;
+                    }
+                    continue;
                 }
+                auto *keyEnd = cursor;
+                while (keyEnd > key && space(keyEnd[-1]))
+                {
+                    --keyEnd;
+                }
+                if (hasValue)
+                {
+                    *keyEnd = '\0';
+                    ++cursor;
+                    while (*cursor && *cursor != '\n' && space(*cursor))
+                    {
+                        ++cursor;
+                    }
+                    auto *value = cursor;
+                    while (*cursor && *cursor != '\n')
+                    {
+                        ++cursor;
+                    }
+                    auto *valueEnd = cursor;
+                    if (*cursor)
+                    {
+                        ++cursor;
+                    }
+                    while (valueEnd > value && space(valueEnd[-1]))
+                    {
+                        --valueEnd;
+                    }
+                    *valueEnd = '\0';
+                }
+                else if (*cursor)
+                {
+                    ++cursor;
+                }
+                *keyEnd = '\0';
+                // BOS visits unique keys in their first load position and ignores INI values.
+                addEntry(section, key, sourceLine);
             }
             std::vector<ConfigEntry> result;
             for (auto &sectionEntries : sections)
@@ -384,19 +494,9 @@ namespace navmesh::skyrim
                     {
                         return std::nullopt;
                     }
-                    const auto prefix = plugin->second;
-                    const auto mask = (prefix >> 24) == 0xFE ? 0xFFFU : 0xFFFFFFU;
-                    const auto local = Hex(parts[0]);
-                    if (local > mask)
-                    {
-                        throw std::runtime_error("BOS qualified FormID exceeds its plugin's local identity range: " +
-                                                 text);
-                    }
-                    return prefix | local;
-                }
-                if (parts.size() != 1)
-                {
-                    throw std::runtime_error("Invalid BOS identity: " + text);
+                    // BOS calls TESDataHandler::LookupFormID, which adds the supplied ID to the
+                    // plugin prefix, including carries into other plugin indices and unsigned wrap.
+                    return plugin->second + Hex(parts[0]);
                 }
                 if (IsHex(text))
                 {
@@ -413,19 +513,29 @@ namespace navmesh::skyrim
 
         float ParseChance(const std::string &text)
         {
-            const auto modifier = Trim(text);
-            if (modifier.empty() || Lower(modifier) == "none")
+            if (text.empty() || Lower(text) == "none")
             {
                 return 100;
             }
-            const auto open = modifier.find('(');
-            const auto close = modifier.find(')');
-            if (!modifier.starts_with("chance") || open == std::string::npos || close != modifier.size() - 1)
+            // BOS leaves its default chance intact unless the text contains "chance"
+            // and a parenthesized value. Bare numeric fields have no runtime effect.
+            std::smatch match;
+            if (text.find("chance") == std::string::npos || !std::regex_search(text, match, PropertyArgument))
             {
-                throw std::runtime_error("Invalid BOS chance modifier");
+                return 100;
             }
-            const auto chance = Number(Split(modifier.substr(open + 1, close - open - 1), ',').front());
-            return chance;
+            const auto options = Split(match[1].str(), ',');
+            if (options.empty())
+            {
+                throw std::runtime_error("Cannot interpret an empty BOS chance value");
+            }
+            const auto chance = Number(options.front());
+            if (options.size() > 1)
+            {
+                // The offline envelope does not sample the seed, but BOS still parses it.
+                (void)std::stoull(options[1]);
+            }
+            return chance < 100 ? chance : 100; // NaN also bypasses BOS's chance test.
         }
 
         /// Enumerate possible leveled outcomes without evaluating runtime level, chance-none or encounter zones.
@@ -458,7 +568,7 @@ namespace navmesh::skyrim
             Rules result;
             for (const auto &config : input.configs)
             {
-                for (const auto &entry : ConfigEntries(config))
+                for (const auto &entry : ConfigEntries(config, diagnostics))
                 {
                     const auto &section = entry.section;
                     const auto &line = entry.line;
@@ -467,23 +577,28 @@ namespace navmesh::skyrim
                     try
                     {
                         const auto sectionParts = Split(section, '|');
+                        const auto &sectionName = sectionParts.empty() ? section : sectionParts.front();
+                        const bool conditional = section.find('|') != std::string::npos;
                         // BOS routes every conditional non-Forms section to base properties;
                         // unconditional sections other than Forms/Transforms/Properties are reference swaps.
-                        const bool property = sectionParts.size() > 1
-                                                  ? sectionParts[0] != "Forms"
-                                                  : sectionParts[0] == "Transforms" || sectionParts[0] == "Properties";
+                        const bool property = conditional ? sectionName != "Forms"
+                                                          : sectionName == "Transforms" || sectionName == "Properties";
                         const auto fields = Split(line, '|');
-                        if (fields.size() < 2 || fields.size() > (property ? 3U : 4U))
+                        if (fields.size() < 2)
                         {
-                            throw std::runtime_error("Invalid BOS entry field count");
+                            diagnostics.push_back(source + ":" + std::to_string(entry.lineNumber) +
+                                                  ": ignored BOS entry without a replacement or properties");
+                            continue;
                         }
                         Rule rule;
                         rule.evidence = evidence;
-                        const auto sourceNames = Split(fields[0], ',');
-                        if (property && sourceNames.size() > 1)
-                        {
-                            throw std::runtime_error("BOS property entries require a single source identity");
-                        }
+                        rule.conditional = conditional;
+                        // BOS attempts the entire source as one identity first. Only a failed
+                        // swap-source lookup expands commas; property sources never expand them.
+                        const auto singleSource = identities.Find(fields[0]);
+                        const bool sourceSet =
+                            !property && (!singleSource || !*singleSource) && fields[0].find(',') != std::string::npos;
+                        const auto sourceNames = sourceSet ? Split(fields[0], ',') : std::vector{fields[0]};
                         std::set<std::uint32_t> sourceIds;
                         for (const auto &name : sourceNames)
                         {
@@ -499,19 +614,18 @@ namespace navmesh::skyrim
                             }
                             sourceIds.insert(*id);
                         }
-                        if (sectionParts.size() == 2)
+                        // An unavailable source cannot affect any indexed placement. Do not interpret
+                        // its property/chance bundle, which BOS also constructs only after source lookup.
+                        if (std::none_of(sourceIds.begin(), sourceIds.end(),
+                                         [&](const auto id) { return resolved.FindWinning(id) != nullptr; }))
+                        {
+                            continue;
+                        }
+                        if (conditional)
                         {
                             rule.conditions = Split(sectionParts[1], ',');
                             rule.conditionKey = config.name + "|" + sectionParts[1];
                         }
-                        else if (sectionParts.size() != 1)
-                        {
-                            throw std::runtime_error("Invalid BOS conditional section");
-                        }
-                        rule.properties =
-                            ParseProperties(fields.size() > (property ? 1U : 2U) ? fields[property ? 1 : 2] : "");
-                        const auto chanceIndex = property ? 2U : 3U;
-                        rule.chance = ParseChance(fields.size() > chanceIndex ? fields[chanceIndex] : "");
                         if (!property)
                         {
                             std::set<std::uint32_t> replacementIds;
@@ -552,7 +666,10 @@ namespace navmesh::skyrim
                             {
                                 continue;
                             }
-                            if (sourceNames.size() > 1 && replacementIds.size() > 1)
+                            std::sort(rule.replacements.begin(), rule.replacements.end());
+                            rule.replacements.erase(std::unique(rule.replacements.begin(), rule.replacements.end()),
+                                                    rule.replacements.end());
+                            if (sourceSet && replacementIds.size() > 1)
                             {
                                 if (replacementIds.size() < sourceIds.size())
                                 {
@@ -563,22 +680,31 @@ namespace navmesh::skyrim
                                 // BOS pairs source sets with unique random replacements at configuration load,
                                 // discarding the entry's per-reference chance for this assignment branch.
                                 rule.randomAssignment = true;
-                                rule.chance = 100;
                             }
-                        }
-                        auto &destination = property                     ? result.properties
-                                            : sectionParts[0] == "Forms" ? result.forms
-                                                                         : result.references;
-                        for (const auto id : sourceIds)
-                        {
-                            if (!property && sourceNames.size() == 1 && fields[1].find(',') == std::string::npos &&
-                                rule.replacements.size() == 1 && rule.replacements.front() == id &&
+                            if (!sourceSet && fields[1].find(',') == std::string::npos &&
+                                rule.replacements.size() == 1 && rule.replacements.front() == *sourceIds.begin() &&
                                 (fields.size() < 3 || fields[2].empty() || Lower(fields[2]) == "none"))
                             {
                                 continue;
                             }
+                        }
+                        // BOS constructs the bundle only after source/replacement lookup succeeds.
+                        rule.properties =
+                            ParseProperties(fields.size() > (property ? 1U : 2U) ? fields[property ? 1 : 2] : "");
+                        const auto chanceIndex = property ? 2U : 3U;
+                        const auto chance = ParseChance(fields.size() > chanceIndex ? fields[chanceIndex] : "");
+                        rule.chance = rule.randomAssignment ? 100 : chance;
+                        auto &destination = property                 ? result.properties
+                                            : sectionName == "Forms" ? result.forms
+                                                                     : result.references;
+                        for (const auto id : sourceIds)
+                        {
                             destination[id].push_back(rule);
                         }
+                    }
+                    catch (const std::bad_alloc &)
+                    {
+                        throw;
                     }
                     catch (const std::exception &error)
                     {
@@ -670,7 +796,7 @@ namespace navmesh::skyrim
             std::vector<const Rule *> group;
             for (auto rule = found->second.rbegin(); rule != found->second.rend(); ++rule)
             {
-                if (rule->conditions.empty() != conditional)
+                if (rule->conditional == conditional)
                 {
                     group.push_back(&*rule);
                 }
@@ -768,6 +894,28 @@ namespace navmesh::skyrim
             }
         }
 
+        /// Runtime armor sex can select a distinct ground mesh. Read it from retained subrecords
+        /// only when a BOS placement needs it, without enlarging every indexed record.
+        std::string AlternateArmorModel(const ResolvedRecord *base)
+        {
+            if (base && base->type == "ARMO" && base->raw)
+            {
+                for (const auto &sub : base->raw->subrecords)
+                {
+                    if (sub.type == "MOD4" && !sub.data.empty())
+                    {
+                        const std::string_view bytes(reinterpret_cast<const char *>(sub.data.data()), sub.data.size());
+                        auto model = DecodePluginText(bytes.substr(0, bytes.find('\0')));
+                        if (!model.empty() && Lower(model) != Lower(base->modelPath.value_or("")))
+                        {
+                            return model;
+                        }
+                    }
+                }
+            }
+            return {};
+        }
+
         std::vector<core::Reference> Alternatives(const core::Reference &original, const ResolvedRecord &owner,
                                                   const Rules &rules, const Identities &identities,
                                                   const ResolvedLoadOrder &resolved)
@@ -827,6 +975,16 @@ namespace navmesh::skyrim
                                                swapChoices.size() > 1 || replacements.size() > 1 ||
                                                chosenProperties.size() > 1;
                         ApplyProperties(reference, property ? property->properties : Properties{}, uncertain);
+                        const auto alternateModel =
+                            !reference.inputConfig.empty() || reference.envelope
+                                ? AlternateArmorModel(resolved.FindWinning(reference.baseObjectId))
+                                : std::string{};
+                        if (!alternateModel.empty())
+                        {
+                            auto alternate = reference;
+                            alternate.modelPath = alternateModel;
+                            result.push_back(std::move(alternate));
+                        }
                         result.push_back(std::move(reference));
                     }
                 }

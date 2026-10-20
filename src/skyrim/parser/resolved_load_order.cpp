@@ -124,6 +124,7 @@ namespace
         std::size_t p = 0;
         std::optional<std::uint32_t> extendedSize;
         std::optional<std::size_t> extendedStart;
+        std::optional<std::string> femaleArmorModel;
         while (p < payload.size())
         {
             if (!Has(payload, p, 6))
@@ -173,9 +174,13 @@ namespace
             {
                 record.name = navmesh::skyrim::DecodePluginText(Trim(Text(payload, data, size)));
             }
-            else if (kind == "MODL")
+            else if ((kind == "MODL" && record.type != "ARMO") || (kind == "MOD2" && record.type == "ARMO"))
             {
                 record.modelPath = navmesh::skyrim::DecodePluginText(Trim(Text(payload, data, size)));
+            }
+            else if (kind == "MOD4" && record.type == "ARMO")
+            {
+                femaleArmorModel = navmesh::skyrim::DecodePluginText(Trim(Text(payload, data, size)));
             }
             else if (kind == "NAME" && (record.type == "REFR" || record.type == "ACHR") && size >= 4)
             {
@@ -267,6 +272,12 @@ namespace
         {
             error = "XXXX extended-size marker has no following subrecord";
             return false;
+        }
+        // Armor ground meshes are separate from the binary MODL addon list. Preserve
+        // distinct sex-specific models for BOS rather than infer runtime extra data.
+        if (record.type == "ARMO" && (!record.modelPath || record.modelPath->empty()))
+        {
+            record.modelPath = femaleArmorModel;
         }
         return true;
     }

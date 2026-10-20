@@ -158,7 +158,8 @@ namespace navmesh::skyrim
         std::vector<std::array<std::uint8_t, 24>> groupHeaders;
         // These model the roadmap record subset without discarding unrecognised fields.
         std::optional<PluginRecord> raw;
-        /// Decoded UTF-8 logical asset path; encoded bytes remain in raw subrecords for lossless copying.
+        /// Decoded UTF-8 logical asset path; armor uses MOD2 with MOD4 fallback, never its binary MODL addon list.
+        /// Encoded bytes remain in raw subrecords for lossless copying.
         std::optional<std::string> modelPath;
         std::optional<std::array<float, 6>> transform;
         std::optional<float> referenceScale;

@@ -997,8 +997,61 @@ class BatchRebuild(unittest.TestCase):
                     [str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
                      "--cell-formid", "100", "--output", str(self.root / "invalid-bos")],
                     capture_output=True, text=True, timeout=90)
-                self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
-                self.assertIn(f"BOS input resolution failed: {config.as_posix()}:2:", completed.stderr)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                self.assertIn(f"{config.as_posix()}:2: ignored", completed.stderr)
+                bos = json.loads((self.root / "invalid-bos" / "bos-input.json").read_text())
+                self.assertEqual(bos["placements"], [])
+
+    def test_bos_runtime_chance_defaults_and_unavailable_sources(self):
+        self.bos_fixture()
+        config = self.root / "Compatibility_SWAP.ini"
+        for chance in ["100", "50", "chanceS(100", "chanceS(100)"]:
+            with self.subTest(chance=chance):
+                config.write_text("[Forms]\nAbsentSource|FixtureBase|posA(broken)|chance(broken)\n"
+                                  "[Transforms]\n0x801~Baseline.esm|posA(1100,1000,0)|" + chance + "\n")
+                output = self.run_cli("--cell-formid", "100", terrain_only=False)
+                bos = json.loads((output / "bos-input.json").read_text())
+                alternatives = bos["placements"][0]["alternatives"]
+                self.assertEqual(len(alternatives), 1)
+                self.assertEqual(alternatives[0]["position"], [1100, 1000, 0])
+                self.assertFalse(alternatives[0]["conservative"])
+                self.assertTrue(any("source is unavailable" in item for item in bos["diagnostics"]))
+
+    def test_bos_armor_uses_ground_models_instead_of_addon_ids(self):
+        self.bos_fixture()
+        (self.root / "meshes" / "Female.nif").write_bytes((self.root / "meshes" / "Solid.nif").read_bytes())
+        with (self.root / "Baseline.esm").open("ab") as plugin:
+            plugin.write(record("ARMO", 0x820, sub("EDID", b"FixtureArmor\0")
+                                + sub("MOD2", b"Solid.nif\0") + sub("MOD4", b"Female.nif\0")
+                                + sub("MODL", bytes([0x63, 0xE4, 0, 0]))))
+        (self.root / "Armor_SWAP.ini").write_text("[Forms]\nFixtureBase|FixtureArmor|NONE|100\n")
+        output = self.run_cli("--rebuild-load-order", "--generate-plugin", terrain_only=False)
+        bos = json.loads((output / "bos-input.json").read_text())
+        alternatives = bos["placements"][0]["alternatives"]
+        self.assertEqual({item["model"] for item in alternatives}, {"Solid.nif", "Female.nif"})
+        self.assertTrue(all(item["conservative"] for item in alternatives))
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["selection_missing_models"], [])
+        self.assertTrue((output / "generated-navmesh.esp").exists())
+
+    def test_bos_oversized_light_id_uses_runtime_addition(self):
+        self.bos_fixture()
+        for index in range(5):
+            header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+            contents = record("TES4", 0, header, 0x200)
+            if index == 4:
+                contents += record("STAT", 0x390, sub("MODL", b"Solid.nif\0"))
+            (self.root / f"Light{index}.esl").write_bytes(contents)
+        (self.root / "plugins.txt").write_text("Baseline.esm\n" + "".join(f"Light{i}.esl\n" for i in range(5)))
+        (self.root / "Identity_SWAP.ini").write_text(
+            "[Forms]\nFixtureBase|0x4390~Light0.esl|posR(100,0,0)|100\n")
+        output = self.run_cli("--cell-formid", "100", terrain_only=False)
+        bos = json.loads((output / "bos-input.json").read_text())
+        alternatives = bos["placements"][0]["alternatives"]
+        self.assertEqual(len(alternatives), 1)
+        self.assertEqual(alternatives[0]["base_id"], 0xFE004390)
+        self.assertEqual(alternatives[0]["position"], [1100, 1000, 0])
+        self.assertFalse(alternatives[0]["conservative"])
 
     def test_bos_unknown_properties_preserve_valid_properties(self):
         self.bos_fixture()
@@ -1013,6 +1066,72 @@ class BatchRebuild(unittest.TestCase):
                 output = self.run_cli("--cell-formid", "100", terrain_only=False)
                 bos = json.loads((output / "bos-input.json").read_text())
                 self.assertEqual(bos["placements"][0]["alternatives"][0]["position"], [1100, 1000, 0])
+
+    def test_bos_permissive_property_grammar(self):
+        self.bos_fixture()
+        config = self.root / "Grammar_SWAP.ini"
+        cases = [
+            ("posA(1,2)", [0, 0, 0], 1),
+            ("prefixRpos(100units,0,0)", [1100, 1000, 0], 1),
+            ("rotpos(1100,1000,0),scale(2,4),unknown text", [1100, 1000, 0], 2),
+            ("pos(1100,1000,0)rot(0,0,90)", [1100, 1000, 0], 1),
+            ("unknown(pos)", [0, 0, 0], 1),
+            ("scale", [1000, 1000, 0], 0),
+            ("prefixAscale(150units)", [1000, 1000, 0], 1.5),
+        ]
+        for properties, position, scale in cases:
+            with self.subTest(properties=properties):
+                config.write_text("[Properties]\n0x801~Baseline.esm|" + properties + "\n")
+                output = self.run_cli("--cell-formid", "100", terrain_only=False)
+                bos = json.loads((output / "bos-input.json").read_text())
+                alternatives = bos["placements"][0]["alternatives"]
+                self.assertEqual(len(alternatives), 1)
+                self.assertEqual(alternatives[0]["position"], position)
+                self.assertEqual(alternatives[0]["rotation_radians"], [0, 0, 0])
+                self.assertEqual(alternatives[0]["scale"], scale)
+                self.assertFalse(alternatives[0]["conservative"])
+        for properties in ["posR(100/200/999,0,0)", "posR(200/100,0,0)"]:
+            with self.subTest(properties=properties):
+                config.write_text("[Properties]\n0x801~Baseline.esm|" + properties + "\n")
+                output = self.run_cli("--cell-formid", "100", terrain_only=False)
+                bos = json.loads((output / "bos-input.json").read_text())
+                envelope = bos["placements"][0]["alternatives"][0]["envelope"]
+                self.assertEqual(envelope["minimum_position"], [1100, 1000, 0])
+                self.assertEqual(envelope["maximum_position"], [1200, 1000, 0])
+
+    def test_bos_ini_edge_grammar_and_export(self):
+        self.bos_fixture()
+        config = self.root / "Grammar_SWAP.ini"
+        for text in ["[ \n Transforms ]\n0x801~Baseline.esm|pos(1100,1000,0)\n",
+                     "[Properties|]\nFixtureBase|pos(1100,1000,0)\n"
+                     "[Properties]\nFixtureBase|pos(1200,1000,0)\n",
+                     "[Properties]\nFixtureBase|pos(1100,1000,0)\n[Broken\nFixtureBase|unknown\n",
+                     "[Properties]\nFixtureBase|pos(1100,1000,0)\n\0FixtureBase|pos(1200,1000,0)\n"]:
+            with self.subTest(text=text):
+                config.write_text(text)
+                output = self.run_cli("--cell-formid", "100", terrain_only=False)
+                bos = json.loads((output / "bos-input.json").read_text())
+                self.assertEqual(bos["placements"][0]["alternatives"][0]["position"], [1100, 1000, 0])
+        config.write_text("[Properties|]\n0x800,0x820~Baseline.esm|prefixRpos(100units,0,0),scale(2,ignored)"
+                          "|chance(nan,123tail,ignored)\n")
+        output = self.run_cli("--rebuild-load-order", "--generate-plugin", terrain_only=False)
+        bos = json.loads((output / "bos-input.json").read_text())
+        self.assertEqual(bos["placements"][0]["alternatives"][0]["position"], [1100, 1000, 0])
+        self.assertTrue((output / "generated-navmesh.esp").exists())
+
+    def test_bos_numeric_failures_keep_source_evidence(self):
+        self.bos_fixture()
+        config = self.root / "Grammar_SWAP.ini"
+        for text in ["[Properties]\nFixtureBase|pos(1,invalid,3)\n",
+                     "[Properties]\nFixtureBase|scale(1)|chance(100,invalid)\n"]:
+            with self.subTest(text=text):
+                config.write_text(text)
+                completed = subprocess.run(
+                    [str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
+                     "--cell-formid", "100", "--output", str(self.root / "invalid-number")],
+                    capture_output=True, text=True, timeout=90)
+                self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
+                self.assertIn(f"BOS input resolution failed: {config.as_posix()}:2:", completed.stderr)
 
     def test_bos_enumeration_and_failed_lookup_fallthrough(self):
         self.bos_fixture()

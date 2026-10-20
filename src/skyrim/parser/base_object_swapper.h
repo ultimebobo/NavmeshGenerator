@@ -41,10 +41,16 @@ namespace navmesh::skyrim
      * collider as obstruction envelopes and never introduce speculative walkable surfaces.
      * Runtime changes remain separate from encoded plugin records and their override history.
      * INI enumeration follows BOS's first-spelling sections and unique case-insensitive keys.
-     * Property names are case-sensitive; unknown names are ignored without discarding recognized properties.
+     * Property classes use BOS's ordered case-sensitive substring searches and regex tokenization.
+     * Unmatched vector/scale patterns use runtime defaults; numeric conversions accept trailing text.
      * Sectionless and custom unconditional sections use reference swaps; conditional non-Forms sections use properties.
      * Unknown runtime state and failing replacement lookups retain conservative alternatives.
-     * @throws std::runtime_error for malformed or unrepresentable navigation inputs, with source path and line.
+     * Runtime-ignored chance text and unavailable source payloads do not invalidate the input snapshot.
+     * INI diagnostics retain physical source lines and runtime section grouping.
+     * Entries without payloads produce diagnostics and do not apply rules.
+     * Qualified IDs use runtime unsigned prefix addition; distinct armor ground models retain both colliders.
+     * @throws std::runtime_error for failed runtime numeric conversions, undefined empty numeric fields,
+     * or unrepresentable effective navigation inputs, with source path and line. Allocation failures propagate.
      */
     [[nodiscard]] std::vector<std::string> ApplyBaseObjectSwaps(ResolvedLoadOrder &resolved,
                                                                 const BaseObjectSwapInput &input);
