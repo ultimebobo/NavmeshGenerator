@@ -109,100 +109,120 @@ namespace
                            { return std::tolower(a) == std::tolower(b); }) != text.end();
     }
 
+    /// Publish the same terminal reason to console and desktop consumers without changing progress.
+    int ReportFailure(const navmesh::app::ProgressCallback &progress, int percent, std::string message, int code)
+    {
+        while (!message.empty() && (message.back() == '\n' || message.back() == '\r'))
+        {
+            message.pop_back();
+        }
+        std::cerr << message << '\n';
+        if (progress)
+        {
+            progress(percent, message);
+        }
+        return code;
+    }
+
+    /// Name the destination and practical checks even when a serializer cannot provide an OS error.
+    std::string WriteFailure(const std::filesystem::path &path)
+    {
+        return std::format(
+            "Cannot write '{}'. Check that its parent folder exists, that you have write permission, "
+            "and that the drive has free space. Close applications locking the file or choose another output folder.",
+            PathUtf8(std::filesystem::absolute(path)));
+    }
+
     /// Validate run-mode combinations and normalize generation prerequisites before performing I/O.
-    int ValidateRunOptions(navmesh::app::Options &options)
+    int ValidateRunOptions(navmesh::app::Options &options, const navmesh::app::ProgressCallback &progress)
     {
         using namespace navmesh::app;
+        const auto fail = [&](const std::string &message, int code)
+        { return ReportFailure(progress, 0, message, code); };
         if (options.mo2.empty() && options.vortex.empty() && options.plugin.empty() && options.loadOrder.empty())
         {
-            std::cerr
-                << "Usage: NavmeshGenerator --mo2 <instance-or-portable-root> --profile <existing-profile> "
-                   "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --cells <identifiers> | "
-                   "--rebuild-plugin <active "
-                   "filename> | --rebuild-load-order] [--generate-plugin] [--copy-plugin] [--skip-existing-navmesh] "
-                   "[--no-triangle-tagging] [--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
-                   "[--cache-budget-mib <MiB>] [--working-memory-mib <MiB>] [--workers <count>] [--estimate-only] "
-                   "--output "
-                   "<dir>\nVortex input: --vortex <Skyrim-installation> [--vortex-plugins "
-                   "<game-application-data-folder>] "
-                   "<operation> --output <dir>\nDeveloper/test override: "
-                   "--data <Data> --load-order <plugins.txt>.\n";
-            return 1;
+            return fail(
+                "Usage: NavmeshGenerator --mo2 <instance-or-portable-root> --profile <existing-profile> "
+                "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --cells <identifiers> | "
+                "--rebuild-plugin <active "
+                "filename> | --rebuild-load-order] [--generate-plugin] [--copy-plugin] [--skip-existing-navmesh] "
+                "[--no-triangle-tagging] [--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
+                "[--cache-budget-mib <MiB>] [--working-memory-mib <MiB>] [--workers <count>] [--estimate-only] "
+                "--output "
+                "<dir>\nVortex input: --vortex <Skyrim-installation> [--vortex-plugins "
+                "<game-application-data-folder>] "
+                "<operation> --output <dir>\nDeveloper/test override: "
+                "--data <Data> --load-order <plugins.txt>.\n",
+                1);
         }
         if ((!options.vortex.empty() &&
              (!options.mo2.empty() || !options.plugin.empty() || !options.loadOrder.empty() || !options.data.empty() ||
               !options.profile.empty() || !options.modsDirectory.empty())) ||
             (!options.vortexPlugins.empty() && options.vortex.empty()))
         {
-            std::cerr << "--vortex selects deployed game input and cannot combine MO2 or developer input options; "
-                         "--vortex-plugins requires --vortex.\n";
-            return 1;
+            return fail("--vortex selects deployed game input and cannot combine MO2 or developer input options; "
+                        "--vortex-plugins requires --vortex.\n",
+                        1);
         }
         if (!options.mo2.empty() && options.profile.empty())
         {
-            std::cerr << "--mo2 requires --profile naming an existing MO2 profile.\n";
-            return 1;
+            return fail("--mo2 requires --profile naming an existing MO2 profile.\n", 1);
         }
         if (options.generatePlugin &&
             (options.listCells || (options.mo2.empty() && options.vortex.empty() && options.loadOrder.empty())))
         {
-            std::cerr << "Plugin generation requires resolved mod-manager/load-order input and a rebuild selection.\n";
-            return 1;
+            return fail("Plugin generation requires resolved mod-manager/load-order input and a rebuild selection.\n",
+                        1);
         }
         if (options.copyPlugin && (options.rebuildScope == RebuildScope::LoadOrder || !options.generatePlugin ||
                                    (options.rebuildScope == RebuildScope::Cell ? options.copySourcePlugin.empty()
                                                                                : options.affectedPlugin.empty())))
         {
-            std::cerr << "--copy-plugin requires Cell or Plugin scope and an active copy source: "
-                         "--copy-plugin-source for Cell scope or --rebuild-plugin for Plugin scope.\n";
-            return 1;
+            return fail("--copy-plugin requires Cell or Plugin scope and an active copy source: "
+                        "--copy-plugin-source for Cell scope or --rebuild-plugin for Plugin scope.\n",
+                        1);
         }
         if (!options.copySourcePlugin.empty() && (!options.copyPlugin || options.rebuildScope != RebuildScope::Cell))
         {
-            std::cerr << "--copy-plugin-source requires --copy-plugin in Cell scope.\n";
-            return 1;
+            return fail("--copy-plugin-source requires --copy-plugin in Cell scope.\n", 1);
         }
         if (options.copyPlugin && options.rebuildScope == RebuildScope::Cell && options.cellSelection.empty() &&
             !options.cellFormId && options.editorId.empty() && !(options.cellX && options.cellY))
         {
-            std::cerr << "Cell copy exports require explicit cell identifiers or complete exterior coordinates.\n";
-            return 1;
+            return fail("Cell copy exports require explicit cell identifiers or complete exterior coordinates.\n", 1);
         }
         if (!options.cellSelection.empty() &&
             (options.rebuildScope != RebuildScope::Cell || ParseCellSelection(options.cellSelection).empty() ||
              options.listCells || !options.cell.empty() || options.cellFormId || !options.editorId.empty() ||
              options.cellX || options.cellY || !options.worldspace.empty()))
         {
-            std::cerr << "--cells requires a nonempty Cell-mode list and cannot combine other selectors or listing.\n";
-            return 1;
+            return fail("--cells requires a nonempty Cell-mode list and cannot combine other selectors or listing.\n",
+                        1);
         }
         const bool batchGeneration = UsesBatchGeneration(options);
         if (options.makeScene &&
             (options.rebuildScope == RebuildScope::LoadOrder || options.listCells || options.estimateOnly))
         {
-            std::cerr
-                << "--make-scene requires Cell or small Plugin scope and cannot combine listing or cost estimation.\n";
-            return 1;
+            return fail(
+                "--make-scene requires Cell or small Plugin scope and cannot combine listing or cost estimation.\n", 1);
         }
         if (options.rebuildScope != RebuildScope::Cell)
         {
             if (options.mo2.empty() && options.vortex.empty() && options.loadOrder.empty())
             {
-                std::cerr << "Batch rebuilding requires MO2, Vortex or --load-order input.\n";
-                return 1;
+                return fail("Batch rebuilding requires MO2, Vortex or --load-order input.\n", 1);
             }
             if (options.listCells || !options.cell.empty() || options.cellFormId || !options.editorId.empty() ||
                 options.cellX || options.cellY || !options.exportGeometry.empty() || !options.exportAnalysis.empty() ||
                 !options.exportScene.empty() || options.sceneBounds)
             {
-                std::cerr << "Batch rebuilding cannot combine cell selectors, listing, scene bounds, or custom export "
-                             "paths.\n";
-                return 1;
+                return fail("Batch rebuilding cannot combine cell selectors, listing, scene bounds, or custom export "
+                            "paths.\n",
+                            1);
             }
             if (options.rebuildScope == RebuildScope::Plugin && options.affectedPlugin.empty())
             {
-                std::cerr << "Select an active plugin filename.\n";
-                return 1;
+                return fail("Select an active plugin filename.\n", 1);
             }
             options.generateCandidate = true;
         }
@@ -210,32 +230,42 @@ namespace
             (options.listCells || (!options.generateCandidate && !options.generatePlugin) ||
              (options.mo2.empty() && options.vortex.empty() && options.loadOrder.empty())))
         {
-            std::cerr << "--skip-existing-navmesh requires generation with resolved mod-manager/load-order input.\n";
-            return 1;
+            return fail("--skip-existing-navmesh requires generation with resolved mod-manager/load-order input.\n", 1);
         }
         if (options.estimateOnly && (!batchGeneration || options.listCells))
         {
-            std::cerr << "--estimate-only requires multi-cell generation, Cell copy, Plugin or Load order scope.\n";
-            return 1;
+            return fail("--estimate-only requires multi-cell generation, Cell copy, Plugin or Load order scope.\n", 1);
         }
         if (options.batchOutput != "auto" && options.batchOutput != "full" && options.batchOutput != "compact" &&
             options.batchOutput != "plugin_only")
         {
-            std::cerr << "--batch-output must be auto, full, compact, or plugin_only.\n";
-            return 1;
+            return fail("--batch-output must be auto, full, compact, or plugin_only.\n", 1);
         }
-        if (options.workers == 0 || options.workers > 64 || options.workingMemoryMiB < 64 ||
-            options.workingMemoryMiB > 1048576 || options.cacheBudgetMiB > 1048576)
+        if (options.workers == 0 || options.workers > 64)
         {
-            std::cerr << "Workers must be between 1 and 64; working memory must be between 64 and 1048576 MiB; cache "
-                         "budget must not exceed 1048576 MiB.\n";
-            return 1;
+            return fail(std::format("Invalid Workers / --workers: {}. Enter a whole number from 1 through 64 in "
+                                    "Advanced settings or the CLI option.",
+                                    options.workers),
+                        1);
+        }
+        if (options.workingMemoryMiB < 64 || options.workingMemoryMiB > 1048576)
+        {
+            return fail(std::format("Invalid Working memory / --working-memory-mib: {}. Enter a value from 64 through "
+                                    "1048576 MiB in Advanced settings or the CLI option.",
+                                    options.workingMemoryMiB),
+                        1);
+        }
+        if (options.cacheBudgetMiB > 1048576)
+        {
+            return fail(std::format("Invalid Cache disk budget / --cache-budget-mib: {}. Enter a value from 0 through "
+                                    "1048576 MiB in Advanced settings or the CLI option.",
+                                    options.cacheBudgetMiB),
+                        1);
         }
         if (options.batchOutput == "plugin_only" && !options.listCells &&
             ((!options.generatePlugin && !options.estimateOnly) || !batchGeneration))
         {
-            std::cerr << "plugin_only output requires batch plugin generation or cost estimation.\n";
-            return 1;
+            return fail("plugin_only output requires batch plugin generation or cost estimation.\n", 1);
         }
         if (options.batchOutput == "auto")
         {
@@ -247,13 +277,15 @@ namespace
             (!options.exportGeometry.empty() || !options.exportAnalysis.empty() || !options.exportScene.empty() ||
              options.sceneBounds))
         {
-            std::cerr << "Multiple-cell and copy exports cannot combine scene bounds or custom export paths.\n";
-            return 1;
+            return fail("Multiple-cell and copy exports cannot combine scene bounds or custom export paths.\n", 1);
         }
         if (options.neighboringCellRadius < 0)
         {
-            std::cerr << "Neighboring-cell radius cannot be negative.\n";
-            return 1;
+            return fail(
+                std::format(
+                    "Invalid Neighboring cells / --neighboring-cell-radius: {}. Enter a nonnegative whole number.",
+                    options.neighboringCellRadius),
+                1);
         }
         if (options.generatePlugin)
         {
@@ -264,13 +296,26 @@ namespace
         {
             navmesh::core::ValidateRecastSettings(options.navigationProfile, options.recastSettings);
         }
-        if (!std::isfinite(options.surfaceSearchRadius) || options.surfaceSearchRadius <= 0 ||
-            !std::isfinite(options.maxSupportDistance) || options.maxSupportDistance < 0 ||
-            !std::isfinite(options.maxSlope) || options.maxSlope < 0 || options.maxSlope >= 90)
+        if (!std::isfinite(options.surfaceSearchRadius) || options.surfaceSearchRadius <= 0)
         {
-            std::cerr << "Analysis settings require a positive search radius, nonnegative support distance, "
-                         "and a slope below 90 degrees; all values must be finite.\n";
-            return 1;
+            return fail(std::format("Invalid Surface search radius / --surface-search-radius: {}. Enter a finite "
+                                    "positive distance in Skyrim units in Advanced settings or the CLI option.",
+                                    options.surfaceSearchRadius),
+                        1);
+        }
+        if (!std::isfinite(options.maxSupportDistance) || options.maxSupportDistance < 0)
+        {
+            return fail(std::format("Invalid Maximum support distance / --max-support-distance: {}. Enter a finite "
+                                    "nonnegative distance in Skyrim units in Advanced settings or the CLI option.",
+                                    options.maxSupportDistance),
+                        1);
+        }
+        if (!std::isfinite(options.maxSlope) || options.maxSlope < 0 || options.maxSlope >= 90)
+        {
+            return fail(std::format("Invalid Analysis slope / --max-slope: {}. Enter a finite angle from 0 up to, but "
+                                    "excluding, 90 degrees in Advanced settings or the CLI option.",
+                                    options.maxSlope),
+                        1);
         }
 
         return 0;
@@ -278,9 +323,15 @@ namespace
 
 } // namespace
 
-int navmesh::app::Run(const Options &input, const ProgressCallback &progress, const CancellationCallback &cancelled)
+/// Run the shared pipeline; the public boundary annotates exceptions with the current processing stage.
+static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh::app::ProgressCallback &progress,
+                              const navmesh::app::CancellationCallback &cancelled)
 {
+    using namespace navmesh::app;
     auto options = input;
+    int lastPercent{};
+    const auto fail = [&](const std::string &message, int code = 2)
+    { return ReportFailure(progress, lastPercent, message, code); };
     std::size_t activeCellIndex{}, inspectionCellCount{1};
     bool processingCellList{};
     const auto update = [&](int percent, std::string_view status)
@@ -293,18 +344,20 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                 const auto overallPercent =
                     30 + static_cast<int>((inspectionSpan * activeCellIndex + inspectionSpan * percent / 100) /
                                           inspectionCellCount);
+                lastPercent = overallPercent;
                 progress(overallPercent,
                          std::format("CELL {}/{}: {}", activeCellIndex + 1, inspectionCellCount, status));
             }
             else
             {
+                lastPercent = percent;
                 progress(percent, status);
             }
         }
     };
     const auto wasCancelled = [&] { return cancelled && cancelled(); };
     update(0, "Validating inputs");
-    if (const auto status = ValidateRunOptions(options); status != 0)
+    if (const auto status = ValidateRunOptions(options, progress); status != 0)
     {
         return status;
     }
@@ -316,11 +369,29 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     std::optional<navmesh::skyrim::Mo2ProfileInput> mo2Input;
     std::optional<navmesh::skyrim::VortexInput> vortexInput;
     navmesh::skyrim::ModelAssetSources modelAssets;
+    bool inputReportWritten{};
+    const auto importFailure = [&](std::string_view manager, const auto &diagnostics)
+    {
+        std::string reason;
+        for (const auto &diagnostic : diagnostics)
+        {
+            reason += std::format("\n{}: {}", diagnostic.plugin, diagnostic.message);
+        }
+        return std::format(
+            "{} import found no usable active plugin inputs.{}\nCheck the selected manager folder, active profile and "
+            "enabled plugins, then rerun.{}",
+            manager, reason,
+            inputReportWritten
+                ? std::format(" Input report: '{}'.",
+                              PathUtf8(std::filesystem::absolute(options.output / "input-report.json")))
+                : " The input report could not be saved; check output-folder permissions and free space.");
+    };
     const auto sharedCacheRoot = options.assetCache.empty()
                                      ? std::filesystem::temp_directory_path() / "NavmeshGenerator" / "assets"
                                      : options.assetCache;
     if (!options.mo2.empty())
     {
+        update(5, "Preparing output folder");
         std::filesystem::create_directories(options.output);
         update(5, "Reading MO2 profile");
         std::cerr << "Importing MO2 profile and virtual-file winners...\n";
@@ -341,11 +412,11 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             mo2Input->diagnostics.push_back({navmesh::skyrim::DiagnosticKind::InvalidPlugin, PathUtf8(options.mo2),
                                              std::string("MO2 import failed: ") + error.what()});
         }
-        if (!navmesh::skyrim::WriteInputReport(options.output / "input-report.json", *mo2Input,
-                                               options.listCells || !UsesBatchGeneration(options) ||
-                                                   options.batchOutput == "full"))
+        if (!(inputReportWritten = navmesh::skyrim::WriteInputReport(
+                  options.output / "input-report.json", *mo2Input,
+                  options.listCells || !UsesBatchGeneration(options) || options.batchOutput == "full")))
         {
-            std::cerr << "Failed to write input-report.json.\n";
+            std::cerr << WriteFailure(options.output / "input-report.json") << '\n';
         }
         update(15, mo2Input->looseAssetCacheUsed ? "MO2 loose-asset cache loaded" : "MO2 loose-asset cache created");
         std::cerr << (mo2Input->looseAssetCacheUsed ? "Using" : "Created") << " MO2 loose-asset cache in "
@@ -357,8 +428,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         if (mo2Input->pluginPaths.empty())
         {
-            std::cerr << "MO2 import found no usable active plugin paths; see input-report.json.\n";
-            return 2;
+            return fail(importFailure("MO2", mo2Input->diagnostics));
         }
         for (const auto &file : mo2Input->looseAssetWinners)
         {
@@ -394,23 +464,26 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         catch (const std::exception &error)
         {
-            std::cerr << "Load-order resolution failed: " << error.what()
-                      << ". See input-report.json for the imported profile inputs.\n";
-            return 2;
+            return fail(std::format("Load-order resolution failed: {}. Check the named plugin and its masters in your "
+                                    "mod manager. Imported inputs: '{}'.",
+                                    error.what(),
+                                    inputReportWritten
+                                        ? PathUtf8(std::filesystem::absolute(options.output / "input-report.json"))
+                                        : "input report unavailable; check output permissions"));
         }
     }
     else if (!options.vortex.empty())
     {
+        update(5, "Preparing output folder");
         std::filesystem::create_directories(options.output);
         update(5, "Reading Vortex deployment");
         std::cerr << "Importing active Vortex deployment...\n";
         vortexInput = navmesh::skyrim::ImportVortexDeployment(options.vortex, options.vortexPlugins);
-        if (!navmesh::skyrim::WriteInputReport(options.output / "input-report.json", *vortexInput,
-                                               options.listCells || !UsesBatchGeneration(options) ||
-                                                   options.batchOutput == "full"))
+        if (!(inputReportWritten = navmesh::skyrim::WriteInputReport(
+                  options.output / "input-report.json", *vortexInput,
+                  options.listCells || !UsesBatchGeneration(options) || options.batchOutput == "full")))
         {
-            std::cerr << "Failed to write input-report.json.\n";
-            return 2;
+            return fail(WriteFailure(options.output / "input-report.json"));
         }
         for (const auto &diagnostic : vortexInput->diagnostics)
         {
@@ -418,8 +491,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         if (vortexInput->pluginPaths.empty())
         {
-            std::cerr << "Vortex import found no usable active deployment; see input-report.json.\n";
-            return 2;
+            return fail(importFailure("Vortex", vortexInput->diagnostics));
         }
         options.data = vortexInput->gameData;
         modelAssets = std::move(vortexInput->assets);
@@ -442,8 +514,12 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         catch (const std::exception &error)
         {
-            std::cerr << "Load-order resolution failed: " << error.what() << ". See input-report.json.\n";
-            return 2;
+            return fail(std::format("Load-order resolution failed: {}. Check the named plugin and its masters in "
+                                    "Vortex, then deploy again. Imported inputs: '{}'.",
+                                    error.what(),
+                                    inputReportWritten
+                                        ? PathUtf8(std::filesystem::absolute(options.output / "input-report.json"))
+                                        : "input report unavailable; check output permissions"));
         }
     }
     else if (!options.loadOrder.empty())
@@ -457,8 +533,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         catch (const std::exception &error)
         {
-            std::cerr << "Developer load-order resolution failed: " << error.what() << "\n";
-            return 2;
+            return fail(std::format(
+                "Cannot resolve load-order manifest '{}': {}. Check the listed plugin paths and required masters.",
+                PathUtf8(options.loadOrder), error.what()));
         }
     }
     else if (!options.listCells && !options.plugin.empty())
@@ -480,8 +557,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         catch (const std::exception &error)
         {
-            std::cerr << "Preview plugin resolution failed: " << error.what() << "\n";
-            return 2;
+            return fail(std::format("Cannot resolve preview plugin '{}': {}. Check the plugin path and required "
+                                    "masters; use mod-manager input for a complete load order.",
+                                    PathUtf8(options.plugin), error.what()));
         }
     }
     if (resolved)
@@ -502,26 +580,35 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                       << " unsupported record variants were recorded in input-report.json/load-order.json.\n";
         }
     }
-    if (resolved && std::any_of(resolved->diagnostics.begin(), resolved->diagnostics.end(),
-                                [](const auto &d)
-                                {
-                                    return d.kind == navmesh::skyrim::DiagnosticKind::MissingMaster ||
-                                           d.kind == navmesh::skyrim::DiagnosticKind::Cycle ||
-                                           d.kind == navmesh::skyrim::DiagnosticKind::InvalidPlugin;
-                                }))
+    if (resolved)
     {
-        return 2;
+        std::string errors;
+        for (const auto &diagnostic : resolved->diagnostics)
+        {
+            if (diagnostic.kind == navmesh::skyrim::DiagnosticKind::MissingMaster ||
+                diagnostic.kind == navmesh::skyrim::DiagnosticKind::Cycle ||
+                diagnostic.kind == navmesh::skyrim::DiagnosticKind::InvalidPlugin)
+            {
+                errors += std::format("\n{}: {}", diagnostic.plugin, diagnostic.message);
+            }
+        }
+        if (!errors.empty())
+        {
+            return fail("Cannot resolve the active load order:" + errors +
+                        "\nEnable or install the named masters and correct invalid plugins or dependency cycles in "
+                        "your mod manager, then rerun. Vortex users must deploy after changes.");
+        }
     }
     if (mo2Input && !navmesh::skyrim::ProfileSnapshotMatches(*mo2Input))
     {
-        std::cerr << "MO2 profile inputs changed while resolving the load order; rerun so the snapshot is coherent.\n";
-        return 2;
+        return fail("MO2 profile inputs changed while resolving the load order; rerun so the snapshot is coherent.\n",
+                    2);
     }
     if (vortexInput && !navmesh::skyrim::VortexSnapshotMatches(*vortexInput))
     {
-        std::cerr << "Vortex deployment or active plugin inputs changed while resolving the load order; rerun after "
-                     "deployment finishes.\n";
-        return 2;
+        return fail("Vortex deployment or active plugin inputs changed while resolving the load order; rerun after "
+                    "deployment finishes.\n",
+                    2);
     }
     update(30, resolved ? "Load order resolved" : "Plugin input ready");
     if (wasCancelled())
@@ -535,16 +622,28 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         if (resolved)
         {
             std::filesystem::create_directories(options.output);
-            navmesh::cli::WriteLoadOrderJson(options.output / "load-order.json", *resolved);
+            if (!navmesh::cli::WriteLoadOrderJson(options.output / "load-order.json", *resolved))
+            {
+                return fail(WriteFailure(options.output / "load-order.json"));
+            }
         }
         const auto cells = resolved ? resolved->cells : navmesh::skyrim::ListCells(options.plugin);
         if (!options.output.empty())
         {
             std::filesystem::create_directories(options.output);
-            navmesh::cli::WriteCellsJson(options.output / "cells.json", cells);
+            if (!navmesh::cli::WriteCellsJson(options.output / "cells.json", cells))
+            {
+                return fail(WriteFailure(options.output / "cells.json"));
+            }
         }
-        update(100, cells.empty() ? "No cells found" : "Cell list complete");
-        return cells.empty() ? 2 : 0;
+        if (cells.empty())
+        {
+            return fail(
+                "No CELL records were found in the selected inputs. Check that the intended plugins are enabled in the "
+                "selected profile; for Vortex, deploy before rerunning List cells / --list-cells.");
+        }
+        update(100, "Cell list complete");
+        return 0;
     }
 
     std::filesystem::create_directories(options.output);
@@ -567,28 +666,33 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             if (!navmesh::skyrim::WriteBaseObjectSwapReport(options.output / "bos-input.json", *bosInputs, *resolved,
                                                             diagnostics))
             {
-                std::cerr << "Cannot write bos-input.json.\n";
-                return 2;
+                return fail(WriteFailure(options.output / "bos-input.json"));
             }
             std::cerr << std::format("BOS: {} configs, {} effective reference changes.\n", bosInputs->configs.size(),
                                      resolved->runtimePlacements.size());
         }
         catch (const std::exception &error)
         {
-            std::cerr << "BOS input resolution failed: " << error.what() << '\n';
-            return 2;
+            return fail(
+                std::format("BOS input resolution failed: {}. Check the named Base Object Swapper configuration "
+                            "in the active Data files, then rerun.",
+                            error.what()));
         }
     }
     if (resolved && (!UsesBatchGeneration(options) || options.batchOutput == "full"))
     {
-        navmesh::cli::WriteLoadOrderJson(options.output / "load-order.json", *resolved);
+        if (!navmesh::cli::WriteLoadOrderJson(options.output / "load-order.json", *resolved))
+        {
+            return fail(WriteFailure(options.output / "load-order.json"));
+        }
     }
     const auto runBatch = [&]()
     {
         if (resolved->plugins.empty())
         {
-            std::cerr << "The load order contains no active plugin inputs.\n";
-            return 2;
+            return fail("The load order contains no active plugin inputs. Enable the intended plugins in the selected "
+                        "profile and rerun; deploy Vortex changes first.",
+                        2);
         }
         std::vector<std::filesystem::path> paths;
         if (mo2Input)
@@ -628,8 +732,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         catch (const std::runtime_error &error)
         {
-            std::cerr << error.what() << '\n';
-            return 2;
+            return fail(std::format("{} Use List cells / --list-cells to export cells.json, then copy an exact CELL "
+                                    "Form ID or editor ID into Cells / --cells.",
+                                    error.what()));
         }
     }
     auto cell = resolved ? std::optional<navmesh::core::Cell>{}
@@ -662,28 +767,30 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
     }
     if (!cell)
     {
-        if (resolved)
+        std::string selection;
+        if (!options.editorId.empty())
         {
-            std::cerr << "No matching Skyrim CELL was found in the resolved load order";
-            if (!options.editorId.empty())
-            {
-                std::cerr << " for editor ID '" << options.editorId << "'";
-            }
-            else if (options.cellFormId)
-            {
-                std::cerr << " for form ID " << std::format("{:08X}", *options.cellFormId);
-            }
-            else if (options.cellX && options.cellY)
-            {
-                std::cerr << " at exterior coordinates " << *options.cellX << "," << *options.cellY;
-            }
-            std::cerr << ". Use List cells to find an exact CELL editor ID or form ID.\n";
+            selection += std::format(" editor ID '{}'", options.editorId);
         }
-        else
+        if (options.cellFormId)
         {
-            std::cerr << "No matching Skyrim cell was found in " << options.plugin << "\n";
+            selection += std::format(" Form ID {:08X}", *options.cellFormId);
         }
-        return 2;
+        if (!options.cell.empty())
+        {
+            selection += std::format(" name '{}'", options.cell);
+        }
+        if (options.cellX || options.cellY)
+        {
+            selection += std::format(" exterior coordinates ({}, {})",
+                                     options.cellX ? std::to_string(*options.cellX) : "missing X",
+                                     options.cellY ? std::to_string(*options.cellY) : "missing Y");
+        }
+        return fail(std::format("No matching Skyrim CELL was found for{} in {}. Use List cells / --list-cells to "
+                                "export cells.json, then copy an exact CELL Form ID or editor ID into Cells / --cells. "
+                                "Exterior selection requires both --cell-x and --cell-y.",
+                                selection.empty() ? " the selected input" : selection,
+                                resolved ? "the active load order" : PathUtf8(options.plugin)));
     }
     if (UsesBatchGeneration(options))
     {
@@ -710,8 +817,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             report << std::format("  \"form_id\":\"{:08X}\",\"status\":\"skipped_existing_navm\"\n}}\n", cell->id);
             if (!report)
             {
-                std::cerr << "Cannot write generation-report.json.\n";
-                return 2;
+                return fail(WriteFailure(options.output / "generation-report.json"));
             }
             std::cout << status << '\n';
             update(100, status);
@@ -818,8 +924,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                 const auto &bounds = *options.sceneBounds;
                 if (bounds[0] > bounds[2] || bounds[1] > bounds[3])
                 {
-                    std::cerr << "--scene-bounds requires minX minY maxX maxY.\n";
-                    return 1;
+                    return fail("Invalid --scene-bounds: minimum X/Y exceeds maximum X/Y. Supply minX minY maxX maxY "
+                                "in world coordinates with each minimum no greater than its maximum.",
+                                1);
                 }
                 detail::CullGeometryToBounds(extracted,
                                              {.min = {bounds[0], bounds[1], std::numeric_limits<float>::lowest()},
@@ -871,15 +978,15 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             options.exportGeometry.empty() ? options.output / "geometry.obj" : options.exportGeometry;
         if (!navmesh::skyrim::WriteGeometryObj(geometryPath, geometry))
         {
-            std::cerr << "Failed to write geometry OBJ to " << geometryPath << "\n";
+            std::cerr << WriteFailure(geometryPath) << '\n';
         }
         if (!navmesh::reproducibility::WriteSidecar(geometryPath, metadata))
         {
-            std::cerr << "Failed to write geometry metadata sidecar\n";
+            std::cerr << WriteFailure(navmesh::core::PathFromUtf8(PathUtf8(geometryPath) + ".metadata.json")) << '\n';
         }
         if (!navmesh::skyrim::WriteGeometryJson(options.output / "geometry.json", *cell, geometry, metadata))
         {
-            std::cerr << "Failed to write geometry JSON\n";
+            std::cerr << WriteFailure(options.output / "geometry.json") << '\n';
         }
         update(78, "Geometry exports written");
         if (wasCancelled())
@@ -1044,19 +1151,29 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             }
             catch (const std::exception &error)
             {
-                std::cerr << "Candidate generation failed: " << error.what() << "\n";
-                return 2;
+                return fail(std::format("Candidate generation failed for CELL {:08X} ('{}'): {}. Review the generation "
+                                        "settings and geometry.json in '{}'. If the inputs are valid, include this "
+                                        "reason and the settings when reporting the failure.",
+                                        cell->id, cell->editorId, error.what(),
+                                        PathUtf8(std::filesystem::absolute(options.output))));
             }
             const auto jsonPath = options.output / "candidate-navm.json";
             const auto objPath = options.output / "candidate-navm.obj";
             update(87, "Writing candidate exports");
             if (!navmesh::core::WriteCandidateJson(jsonPath, *candidate, geometry.scene,
-                                                   navmesh::reproducibility::ToJson(metadata, "    ")) ||
-                !navmesh::core::WriteCandidateObj(objPath, *candidate) ||
-                !navmesh::reproducibility::WriteSidecar(objPath, metadata))
+                                                   navmesh::reproducibility::ToJson(metadata, "    ")))
             {
-                std::cerr << "Failed to write neutral candidate exports.\n";
-                return 2;
+                return fail(WriteFailure(jsonPath));
+            }
+            if (!navmesh::core::WriteCandidateObj(objPath, *candidate))
+            {
+                return fail(WriteFailure(objPath));
+            }
+            if (!navmesh::reproducibility::WriteSidecar(objPath, metadata))
+            {
+                auto sidecarPath = objPath;
+                sidecarPath += ".metadata.json";
+                return fail(WriteFailure(sidecarPath));
             }
         }
         // Publish counts and the inspection scene before the guarded plugin writer runs.
@@ -1074,8 +1191,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         countLog.close();
         if (!countLog)
         {
-            std::cerr << "Failed to write navmesh-counts.txt.\n";
-            return 2;
+            return fail(WriteFailure(options.output / "navmesh-counts.txt"));
         }
         std::cout << navmeshCounts;
         if (options.makeScene && selectedCells.size() > 1)
@@ -1097,8 +1213,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             const auto &bounds = *options.sceneBounds;
             if (bounds[0] > bounds[2] || bounds[1] > bounds[3])
             {
-                std::cerr << "--scene-bounds requires minX minY maxX maxY.\n";
-                return 1;
+                return fail("Invalid --scene-bounds: minimum X/Y exceeds maximum X/Y. Supply minX minY maxX maxY in "
+                            "world coordinates with each minimum no greater than its maximum.",
+                            1);
             }
             sceneOptions.bounds = navmesh::core::SceneBounds{
                 .world = {.min = {bounds[0], bounds[1], std::numeric_limits<float>::lowest()},
@@ -1110,13 +1227,11 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                                                                  sceneMarkers, metadata, sceneOptions);
         if (!sceneExport.written)
         {
-            std::cerr << "Failed to write the inspection scene or its provenance sidecar.\n";
-            return 2;
+            return fail(WriteFailure(scenePath) + " The scene or its .provenance.json sidecar could not be saved.");
         }
         if (!navmesh::reproducibility::WriteSidecar(scenePath, metadata))
         {
-            std::cerr << "Failed to write GLB metadata sidecar\n";
-            return 2;
+            return fail(WriteFailure(navmesh::core::PathFromUtf8(PathUtf8(scenePath) + ".metadata.json")));
         }
         std::cout << std::format(
             "Exported combined GLB scene to {} ({} objects, {} triangles, {} geometry triangles culled)\n",
@@ -1128,9 +1243,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                 "Candidate topology validation failed: {}. Inspection scene saved to {}; see candidate-navm.json.",
                 candidate->topology.findings.empty() ? "invalid candidate" : candidate->topology.findings.front(),
                 navmesh::core::PathToUtf8(scenePath));
-            update(88, failure);
-            std::cerr << failure << '\n';
-            return 2;
+            return fail(failure + " Plugin export stopped. Inspect the reported geometry; include the validation "
+                                  "reason and candidate exports when reporting the issue.");
         }
         // Serialization requires a valid candidate and retains the resolved source master ordering.
         if (options.generatePlugin && candidate->mesh.polygons.empty())
@@ -1141,8 +1255,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                                             cell->id);
             if (!generationReport)
             {
-                std::cerr << "Cannot write generation-report.json.\n";
-                return 2;
+                return fail(WriteFailure(options.output / "generation-report.json"));
             }
             std::cout << "No supported walkable floor survives generation; plugin writing skipped.\n";
         }
@@ -1169,15 +1282,15 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             update(89, "Writing NAVM override plugin");
             if (bosInputs && !navmesh::skyrim::BaseObjectSwapSnapshotMatches(*bosInputs))
             {
-                std::cerr << "BOS configurations changed during generation; rerun with coherent inputs.\n";
-                return 2;
+                return fail("BOS configurations changed during generation; rerun with coherent inputs.\n", 2);
             }
             if (!navmesh::skyrim::WriteNavmeshOverride(options.output, inputPaths, *resolved, *cell, *candidate,
                                                        pluginPath, error))
             {
-                std::cerr << "Plugin generation failed: " << error << "\n";
-                update(89, std::format("Plugin generation failed: {}", error));
-                return 2;
+                return fail(std::format(
+                    "Plugin generation failed: {}. Review candidate-navm.json and scene.glb in '{}' before retrying. "
+                    "For unsupported record or linking failures, include this reason when reporting the issue.",
+                    error, PathUtf8(std::filesystem::absolute(options.output))));
             }
             std::ifstream writtenPlugin(pluginPath, std::ios::binary);
             std::array<unsigned char, 12> pluginHeader{};
@@ -1202,7 +1315,9 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                                            analysisReport);
             if (!navmesh::reproducibility::WriteSidecar(options.exportAnalysis, metadata))
             {
-                std::cerr << "Failed to write analysis metadata sidecar\n";
+                std::cerr << WriteFailure(
+                                 navmesh::core::PathFromUtf8(PathUtf8(options.exportAnalysis) + ".metadata.json"))
+                          << '\n';
             }
             std::cout << "Exported analysis OBJ to " << options.exportAnalysis << "\n";
         }
@@ -1214,7 +1329,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             navmesh::cli::WriteObj(meshPath, mesh, std::format("NAVM {:08X}", mesh.id));
             if (!navmesh::reproducibility::WriteSidecar(meshPath, metadata))
             {
-                std::cerr << "Failed to write navmesh metadata sidecar\n";
+                std::cerr << WriteFailure(navmesh::core::PathFromUtf8(PathUtf8(meshPath) + ".metadata.json")) << '\n';
             }
         }
 
@@ -1243,7 +1358,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                                               geometry, analysisReport);
             if (!navmesh::reproducibility::WriteSidecar(sceneReportPath, metadata))
             {
-                std::cerr << "Failed to write scene report metadata sidecar\n";
+                std::cerr << WriteFailure(navmesh::core::PathFromUtf8(PathUtf8(sceneReportPath) + ".metadata.json"))
+                          << '\n';
             }
         }
         if (options.diagnostics && !cell->navMeshes.empty())
@@ -1253,7 +1369,8 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                                               geometry, analysisReport);
             if (!navmesh::reproducibility::WriteSidecar(diagnosticPath, metadata))
             {
-                std::cerr << "Failed to write diagnostic metadata sidecar\n";
+                std::cerr << WriteFailure(navmesh::core::PathFromUtf8(PathUtf8(diagnosticPath) + ".metadata.json"))
+                          << '\n';
             }
             std::cout << "Wrote diagnostic report to " << diagnosticPath << "\n";
         }
@@ -1321,10 +1438,45 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         update(95, "Writing scene for selected cells");
         if (!combinedScene.Write(outputRoot / "scene.glb", options, selectedCells))
         {
-            std::cerr << "Failed to write the selected-cell scene.\n";
-            return 2;
+            return fail(WriteFailure(outputRoot / "scene.glb"));
         }
     }
     update(100, std::format("Inspected {} cells", selectedCells.size()));
     return 0;
+}
+
+int navmesh::app::Run(const Options &options, const ProgressCallback &progress, const CancellationCallback &cancelled)
+{
+    int lastPercent{};
+    std::string stage = "Validating inputs";
+    const auto update = [&](int percent, std::string_view status)
+    {
+        lastPercent = percent;
+        stage = status;
+        if (progress)
+        {
+            progress(percent, status);
+        }
+    };
+    try
+    {
+        return RunWithDiagnostics(options, update, cancelled);
+    }
+    catch (const std::filesystem::filesystem_error &error)
+    {
+        return ReportFailure(
+            progress, lastPercent,
+            std::format("{} failed: {}. Check that the named path exists, is accessible, and has enough free space for "
+                        "writes; choose another output or cache folder if needed.",
+                        stage, error.what()),
+            1);
+    }
+    catch (const std::exception &error)
+    {
+        return ReportFailure(progress, lastPercent,
+                             std::format("{} failed: {}. Output folder: '{}'. If the inputs and settings are valid, "
+                                         "include this reason and the run settings when reporting the issue.",
+                                         stage, error.what(), PathUtf8(options.output)),
+                             1);
+    }
 }

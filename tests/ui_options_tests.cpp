@@ -9,8 +9,11 @@
 #include <limits>
 #include <stdexcept>
 
+void TestActionableErrors();
+
 void TestDesktopOptionsAndRecastSettings()
 {
+    TestActionableErrors();
     using namespace navmesh;
     app::Options draft;
     draft.mo2 = "fixture-mo2";

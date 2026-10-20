@@ -2,10 +2,58 @@
 #include "core/io/file_path.h"
 
 #include <algorithm>
+#include <cmath>
+#include <format>
+#include <limits>
 #include <stdexcept>
 
 namespace navmesh::app
 {
+    namespace
+    {
+        /// Retain the option and original input when the standard numeric parsers reject a value.
+        template <class Parse>
+        auto ParseNumber(const std::string &option, const std::string &value, std::string_view expected, Parse parse)
+        {
+            try
+            {
+                std::size_t end{};
+                const auto number = parse(value, end);
+                if (end == value.size())
+                {
+                    return number;
+                }
+            }
+            catch (const std::invalid_argument &)
+            {
+            }
+            catch (const std::out_of_range &)
+            {
+            }
+            throw std::invalid_argument(std::format("Invalid value '{}' for {}. Enter {}.", value, option, expected));
+        }
+
+        float ParseFloat(const std::string &option, const std::string &value)
+        {
+            return ParseNumber(option, value, "a finite number within the supported range",
+                               [](const std::string &text, std::size_t &end)
+                               {
+                                   const auto number = std::stof(text, &end);
+                                   if (!std::isfinite(number))
+                                   {
+                                       throw std::invalid_argument("nonfinite");
+                                   }
+                                   return number;
+                               });
+        }
+
+        int ParseInteger(const std::string &option, const std::string &value)
+        {
+            return ParseNumber(option, value, "a whole number within the signed integer range",
+                               [](const std::string &text, std::size_t &end) { return std::stoi(text, &end); });
+        }
+    } // namespace
+
     std::vector<std::string> ParseCellSelection(std::string_view selection)
     {
         std::vector<std::string> identifiers;
@@ -51,22 +99,66 @@ namespace navmesh::app
         for (int index = 1; index < argc; ++index)
         {
             const std::string argument = argv[index];
+            const std::array valueOptions{"--plugin",
+                                          "--data",
+                                          "--load-order",
+                                          "--mo2",
+                                          "--vortex",
+                                          "--vortex-plugins",
+                                          "--profile",
+                                          "--mods-dir",
+                                          "--cell",
+                                          "--cells",
+                                          "--cell-formid",
+                                          "--editor-id",
+                                          "--worldspace",
+                                          "--cell-x",
+                                          "--cell-y",
+                                          "--output",
+                                          "--export-geometry",
+                                          "--export-analysis",
+                                          "--export-scene",
+                                          "--geometry-layers",
+                                          "--output-detail",
+                                          "--batch-output",
+                                          "--asset-cache",
+                                          "--cache-budget-mib",
+                                          "--working-memory-mib",
+                                          "--workers",
+                                          "--neighboring-cell-radius",
+                                          "--scene-bounds",
+                                          "--copy-plugin-source",
+                                          "--surface-search-radius",
+                                          "--max-support-distance",
+                                          "--max-slope",
+                                          "--partitioning-algorithm",
+                                          "--rebuild-plugin"};
+            const bool needsValue =
+                std::find(valueOptions.begin(), valueOptions.end(), argument) != valueOptions.end() ||
+                std::any_of(generationInputs.begin(), generationInputs.end(),
+                            [&](const auto &input) { return argument == input.first; });
+            if (needsValue)
+            {
+                const int count = argument == "--scene-bounds" ? 4 : 1;
+                for (int offset = 1; offset <= count; ++offset)
+                {
+                    if (index + offset >= argc || std::string_view(argv[index + offset]).starts_with("--") ||
+                        std::string_view(argv[index + offset]).empty())
+                    {
+                        throw std::invalid_argument(
+                            argument == "--scene-bounds"
+                                ? "--scene-bounds requires four numbers: minX minY maxX maxY."
+                                : std::format("{} requires a value. Supply it immediately after the option; quote "
+                                              "paths or names containing spaces.",
+                                              argument));
+                    }
+                }
+            }
             const auto generationInput = std::find_if(generationInputs.begin(), generationInputs.end(),
                                                       [&](const auto &input) { return argument == input.first; });
             if (generationInput != generationInputs.end())
             {
-                if (index + 1 == argc)
-                {
-                    throw std::invalid_argument(argument + " requires a number");
-                }
-                const std::string value = argv[++index];
-                std::size_t end{};
-                const auto number = std::stof(value, &end);
-                if (end != value.size())
-                {
-                    throw std::invalid_argument(argument + " requires a number without trailing characters");
-                }
-                *generationInput->second = number;
+                *generationInput->second = ParseFloat(argument, argv[++index]);
             }
             else if (argument == "--plugin" && index + 1 < argc)
             {
@@ -109,13 +201,24 @@ namespace navmesh::app
             {
                 if (options.rebuildScope != RebuildScope::Cell)
                 {
-                    throw std::invalid_argument("Choose one rebuild scope");
+                    throw std::invalid_argument(
+                        "Choose one rebuild scope: use --cells, --rebuild-plugin, or --rebuild-load-order separately.");
                 }
                 options.cellSelection += std::string(argv[++index]) + "\n";
             }
             else if (argument == "--cell-formid" && index + 1 < argc)
             {
-                options.cellFormId = static_cast<std::uint32_t>(std::stoul(argv[++index], nullptr, 16));
+                options.cellFormId = ParseNumber(argument, argv[++index], "a hexadecimal CELL Form ID from cells.json",
+                                                 [](const std::string &text, std::size_t &end)
+                                                 {
+                                                     const auto number = std::stoull(text, &end, 16);
+                                                     if (text.find('-') != std::string::npos ||
+                                                         number > std::numeric_limits<std::uint32_t>::max())
+                                                     {
+                                                         throw std::out_of_range("Form ID");
+                                                     }
+                                                     return static_cast<std::uint32_t>(number);
+                                                 });
             }
             else if (argument == "--editor-id" && index + 1 < argc)
             {
@@ -127,11 +230,11 @@ namespace navmesh::app
             }
             else if (argument == "--cell-x" && index + 1 < argc)
             {
-                options.cellX = std::stoi(argv[++index]);
+                options.cellX = ParseInteger(argument, argv[++index]);
             }
             else if (argument == "--cell-y" && index + 1 < argc)
             {
-                options.cellY = std::stoi(argv[++index]);
+                options.cellY = ParseInteger(argument, argv[++index]);
             }
             else if (argument == "--output" && index + 1 < argc)
             {
@@ -174,12 +277,16 @@ namespace navmesh::app
                      index + 1 < argc)
             {
                 const std::string value = argv[++index];
-                std::size_t end{};
-                const auto number = std::stoull(value, &end);
-                if (value.empty() || value.front() == '-' || end != value.size())
-                {
-                    throw std::invalid_argument(argument + " requires a nonnegative integer");
-                }
+                const auto number =
+                    ParseNumber(argument, value, "a nonnegative whole number within the unsigned integer range",
+                                [](const std::string &text, std::size_t &end)
+                                {
+                                    if (text.find('-') != std::string::npos)
+                                    {
+                                        throw std::invalid_argument("negative");
+                                    }
+                                    return std::stoull(text, &end);
+                                });
                 if (argument == "--cache-budget-mib")
                 {
                     options.cacheBudgetMiB = number;
@@ -195,12 +302,13 @@ namespace navmesh::app
             }
             else if (argument == "--neighboring-cell-radius" && index + 1 < argc)
             {
-                options.neighboringCellRadius = std::stoi(argv[++index]);
+                options.neighboringCellRadius = ParseInteger(argument, argv[++index]);
             }
             else if (argument == "--scene-bounds" && index + 4 < argc)
             {
-                options.sceneBounds = std::array<float, 4>{std::stof(argv[++index]), std::stof(argv[++index]),
-                                                           std::stof(argv[++index]), std::stof(argv[++index])};
+                options.sceneBounds =
+                    std::array<float, 4>{ParseFloat(argument, argv[++index]), ParseFloat(argument, argv[++index]),
+                                         ParseFloat(argument, argv[++index]), ParseFloat(argument, argv[++index])};
             }
             else if (argument == "--diagnostics")
             {
@@ -249,15 +357,15 @@ namespace navmesh::app
             }
             else if (argument == "--surface-search-radius" && index + 1 < argc)
             {
-                options.surfaceSearchRadius = std::stof(argv[++index]);
+                options.surfaceSearchRadius = ParseFloat(argument, argv[++index]);
             }
             else if (argument == "--max-support-distance" && index + 1 < argc)
             {
-                options.maxSupportDistance = std::stof(argv[++index]);
+                options.maxSupportDistance = ParseFloat(argument, argv[++index]);
             }
             else if (argument == "--max-slope" && index + 1 < argc)
             {
-                options.maxSlope = std::stof(argv[++index]);
+                options.maxSlope = ParseFloat(argument, argv[++index]);
             }
             else if (argument == "--partitioning-algorithm" && index + 1 < argc)
             {
@@ -287,7 +395,8 @@ namespace navmesh::app
             {
                 if (options.rebuildScope != RebuildScope::Cell || !options.cellSelection.empty())
                 {
-                    throw std::invalid_argument("Choose one rebuild scope");
+                    throw std::invalid_argument(
+                        "Choose one rebuild scope: use --cells, --rebuild-plugin, or --rebuild-load-order separately.");
                 }
                 options.rebuildScope = RebuildScope::Plugin;
                 options.affectedPlugin = argv[++index];
@@ -297,31 +406,17 @@ namespace navmesh::app
             {
                 if (options.rebuildScope != RebuildScope::Cell || !options.cellSelection.empty())
                 {
-                    throw std::invalid_argument("Choose one rebuild scope");
+                    throw std::invalid_argument(
+                        "Choose one rebuild scope: use --cells, --rebuild-plugin, or --rebuild-load-order separately.");
                 }
                 options.rebuildScope = RebuildScope::LoadOrder;
                 options.generateCandidate = true;
             }
-            else if (argument == "--batch-output" || argument == "--asset-cache" || argument == "--cache-budget-mib" ||
-                     argument == "--working-memory-mib" || argument == "--workers")
+            else
             {
-                throw std::invalid_argument(argument + " requires a value");
-            }
-            else if (argument == "--rebuild-plugin")
-            {
-                throw std::invalid_argument("--rebuild-plugin requires an active plugin filename");
-            }
-            else if (argument == "--vortex" || argument == "--vortex-plugins")
-            {
-                throw std::invalid_argument(argument + " requires a folder path");
-            }
-            else if (argument == "--cells")
-            {
-                throw std::invalid_argument("--cells requires a list of CELL Form IDs or editor IDs");
-            }
-            else if (argument == "--copy-plugin-source")
-            {
-                throw std::invalid_argument("--copy-plugin-source requires an active plugin filename");
+                throw std::invalid_argument(std::format("Unknown option or unexpected argument '{}'. Check the option "
+                                                        "spelling and quote paths or names containing spaces.",
+                                                        argument));
             }
         }
         return options;

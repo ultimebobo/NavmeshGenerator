@@ -99,6 +99,8 @@ namespace navmesh::app
 
     /// Parse UTF-8 CLI options into native paths; `--generate-plugin` selects the format automatically
     /// and rejects a format argument.
+    /// Reject unknown options, missing values and malformed or out-of-range numbers with the option and correction.
+    /// @throws std::invalid_argument On invalid command-line input, before performing I/O.
     [[nodiscard]] Options ParseCommandLine(int argc, char **argv);
 
     /** Split an explicit cell list for CLI, desktop validation and resolved selection.

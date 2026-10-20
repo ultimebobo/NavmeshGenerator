@@ -413,8 +413,10 @@ namespace navmesh::skyrim
         const auto iniPath = requestedRoot / "ModOrganizer.ini";
         if (!std::filesystem::is_regular_file(iniPath))
         {
-            result.diagnostics.push_back({DiagnosticKind::InvalidPlugin, PathUtf8(requestedRoot),
-                                          "MO2 root does not contain ModOrganizer.ini."});
+            result.diagnostics.push_back(
+                {DiagnosticKind::InvalidPlugin, PathUtf8(requestedRoot),
+                 "MO2 root does not contain ModOrganizer.ini. Select the portable root or instance folder containing "
+                 "that file; use MO2 to locate the active instance."});
             return result;
         }
         const auto ini = ReadIni(iniPath);
@@ -465,8 +467,9 @@ namespace navmesh::skyrim
         {
             if (!std::filesystem::is_regular_file(file))
             {
-                result.diagnostics.push_back(
-                    {DiagnosticKind::InvalidPlugin, PathUtf8(file), "Required MO2 profile file is missing."});
+                result.diagnostics.push_back({DiagnosticKind::InvalidPlugin, PathUtf8(file),
+                                              "Required MO2 profile file is missing. Select an existing profile from "
+                                              "this MO2 instance and run MO2 once to save its lists before retrying."});
             }
         }
         if (!std::filesystem::is_directory(result.gameData))
@@ -494,8 +497,10 @@ namespace navmesh::skyrim
             result.enabledMods.push_back({name, path, priority++});
             if (!std::filesystem::is_directory(path))
             {
-                result.diagnostics.push_back(
-                    {DiagnosticKind::InvalidPlugin, name, "Enabled MO2 mod directory is missing: " + PathUtf8(path)});
+                result.diagnostics.push_back({DiagnosticKind::InvalidPlugin, name,
+                                              "Enabled MO2 mod directory is missing; restore or disable the mod in "
+                                              "MO2, or correct its configured mod storage path: " +
+                                                  PathUtf8(path)});
             }
         }
         std::set<std::string> active;

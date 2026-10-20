@@ -16,7 +16,8 @@ namespace navmesh::core
      * Distances use Skyrim world units; region area uses square units and slope uses degrees.
      * @param profile Nonnegative radius, step and area; positive height, clearance and weld tolerance.
      * @param settings Positive voxel sizes and nonnegative contour/merge controls.
-     * @throws std::invalid_argument On invalid values or voxel conversions outside Recast's integer range.
+     * @throws std::invalid_argument Names the invalid setting and correction, or the horizontal/vertical
+       * voxel conversion limit that requires a coarser resolution or smaller movement dimensions.
      */
     void ValidateRecastSettings(const NavigationProfile &profile, const RecastSettings &settings);
 

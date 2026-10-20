@@ -30,9 +30,12 @@ namespace navmesh::cli
     /// Print support classifications and evidence statistics to standard output.
     void PrintAnalysisSummary(const navmesh::analysis::AnalysisReport &analysis);
 
-    /// Overwrite winning-record and origin-chain JSON; return silently if opening fails.
-    void WriteLoadOrderJson(const std::filesystem::path &path, const navmesh::skyrim::ResolvedLoadOrder &loadOrder);
+    /// Overwrite winning-record and origin-chain JSON; return false if opening, writing or closing fails.
+    /// The parent directory must exist; no input plugins are changed.
+    [[nodiscard]] bool WriteLoadOrderJson(const std::filesystem::path &path,
+                                          const navmesh::skyrim::ResolvedLoadOrder &loadOrder);
 
-    /// Overwrite cell-list JSON, preserving input order; return silently if opening fails.
-    void WriteCellsJson(const std::filesystem::path &path, const std::vector<navmesh::core::Cell> &cells);
+    /// Overwrite cell-list JSON, preserving input order; return false if opening, writing or closing fails.
+    /// The parent directory must exist; the input cells are unchanged.
+    [[nodiscard]] bool WriteCellsJson(const std::filesystem::path &path, const std::vector<navmesh::core::Cell> &cells);
 } // namespace navmesh::cli

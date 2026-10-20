@@ -2472,6 +2472,43 @@ class BatchRebuild(unittest.TestCase):
                 self.run_cli("--rebuild-plugin", "Patch.esp", flag, value, code=1)
         self.run_cli("--rebuild-plugin", "Patch.esp", "--recast-cell-size", code=1)
 
+    def test_errors_identify_input_and_next_step(self):
+        base = [str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
+                "--output", str(self.root / "errors"), "--asset-cache", str(self.root / "cache")]
+        cases = [(["--workers", "0"], 1, ["--workers: 0", "Enter"]),
+                 (["--agent-radius", "oops"], 1, ["--agent-radius", "oops", "finite number"]),
+                 (["--output"], 1, ["--output requires a value", "Supply"]),
+                 (["--generate-plguin"], 1, ["Unknown option", "--generate-plguin", "spelling"]),
+                 (["--cells", "MissingCell"], 2, ["MissingCell", "--list-cells", "cells.json"]),
+                 (["--rebuild-plugin", "Missing.esp"], 1, ["Missing.esp", "enabled plugin filename"])]
+        for arguments, code, fragments in cases:
+            with self.subTest(arguments=arguments):
+                result = subprocess.run([*base, *arguments], capture_output=True, text=True, timeout=90)
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                for fragment in fragments:
+                    self.assertIn(fragment, result.stderr)
+
+    def test_catalog_write_failure_is_reported(self):
+        output = self.root / "blocked-catalog"
+        (output / "cells.json").mkdir(parents=True)
+        result = subprocess.run([str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
+                                 "--output", str(output), "--list-cells"],
+                                capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn((output / "cells.json").as_posix(), result.stderr)
+        self.assertIn("write permission", result.stderr)
+        self.assertIn("free space", result.stderr)
+        self.assertNotIn("Cell list complete", result.stderr)
+
+    def test_missing_master_error_includes_recovery(self):
+        (self.root / "plugins.txt").write_text("Patch.esp\n")
+        result = subprocess.run([str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
+                                 "--output", str(self.root / "missing-master"), "--list-cells"],
+                                capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("Baseline.esm", result.stderr)
+        self.assertIn("Enable or install the named masters", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

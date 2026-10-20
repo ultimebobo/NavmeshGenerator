@@ -561,12 +561,12 @@ namespace navmesh::cli
                                  analysis.slopeStats.median, analysis.slopeStats.p95);
     }
 
-    void WriteLoadOrderJson(const std::filesystem::path &path, const navmesh::skyrim::ResolvedLoadOrder &loadOrder)
+    bool WriteLoadOrderJson(const std::filesystem::path &path, const navmesh::skyrim::ResolvedLoadOrder &loadOrder)
     {
         std::ofstream stream(path, std::ios::trunc);
         if (!stream)
         {
-            return;
+            return false;
         }
         stream << "{\n  \"records\": [\n";
         for (std::size_t index = 0; index < loadOrder.records.size(); ++index)
@@ -583,14 +583,16 @@ namespace navmesh::cli
             stream << "]}" << (index + 1 == loadOrder.records.size() ? "" : ",") << "\n";
         }
         stream << "  ]\n}\n";
+        stream.close();
+        return static_cast<bool>(stream);
     }
 
-    void WriteCellsJson(const std::filesystem::path &path, const std::vector<navmesh::core::Cell> &cells)
+    bool WriteCellsJson(const std::filesystem::path &path, const std::vector<navmesh::core::Cell> &cells)
     {
         std::ofstream stream(path, std::ios::trunc);
         if (!stream)
         {
-            return;
+            return false;
         }
         stream << "{\n  \"cells\": [\n";
         for (std::size_t index = 0; index < cells.size(); ++index)
@@ -607,6 +609,8 @@ namespace navmesh::cli
             stream << "}" << (index + 1 == cells.size() ? "" : ",") << "\n";
         }
         stream << "  ]\n}\n";
+        stream.close();
+        return static_cast<bool>(stream);
     }
 
 } // namespace navmesh::cli

@@ -101,6 +101,14 @@ and validates relevant values before running. Developer input routes, custom OBJ
 paths, exterior coordinates, terrain-only and diagnostic HTML controls are CLI
 options.
 
+Failed runs show the cause and a next step in desktop status and CLI stderr.
+Invalid settings identify the field and supplied value; input failures retain the
+plugin, profile or path involved; export errors identify the destination and
+storage checks. Use **Copy error details** to copy a desktop failure for a report.
+Saved diagnostic reports are named in the failure message when available.
+CLI parsing rejects unknown options, missing values and malformed numbers before
+reading game inputs.
+
 Candidate warnings do not fail a run. A candidate topology validation error is a
 failure and appears in red with the validation reason. The inspection scene and
 candidate exports are written before this check so they remain available for

@@ -1,6 +1,7 @@
 #include "ui/options_model.h"
 
 #include <cmath>
+#include <format>
 #include <stdexcept>
 
 namespace navmesh::ui
@@ -151,19 +152,53 @@ namespace navmesh::ui
             }
             core::ValidateRecastSettings(result.navigationProfile, result.recastSettings);
         }
-        if (result.neighboringCellRadius < 0 || result.workers == 0 || result.workers > 64 ||
-            result.workingMemoryMiB < 64 || result.workingMemoryMiB > 1048576 || result.cacheBudgetMiB > 1048576)
+        if (result.neighboringCellRadius < 0)
         {
-            throw std::invalid_argument("Check Advanced settings: neighboring radius must be nonnegative, "
-                                        "workers between 1 and 64, working memory between 64 and 1048576 MiB, "
-                                        "and disk budget at most 1048576 MiB.");
+            throw std::invalid_argument(
+                std::format("Invalid Neighboring cells / --neighboring-cell-radius: {}. Enter a nonnegative whole "
+                            "number in Advanced settings or the CLI option.",
+                            result.neighboringCellRadius));
         }
-        if (!std::isfinite(result.surfaceSearchRadius) || result.surfaceSearchRadius <= 0 ||
-            !std::isfinite(result.maxSupportDistance) || result.maxSupportDistance < 0 ||
-            !std::isfinite(result.maxSlope) || result.maxSlope < 0 || result.maxSlope >= 90)
+        if (result.workers == 0 || result.workers > 64)
         {
-            throw std::invalid_argument("Check Advanced settings: analysis requires a positive search radius, "
-                                        "nonnegative support distance and a slope below 90 degrees.");
+            throw std::invalid_argument(std::format("Invalid Workers / --workers: {}. Enter a whole number from 1 "
+                                                    "through 64 in Advanced settings or the CLI option.",
+                                                    result.workers));
+        }
+        if (result.workingMemoryMiB < 64 || result.workingMemoryMiB > 1048576)
+        {
+            throw std::invalid_argument(
+                std::format("Invalid Working memory / --working-memory-mib: {}. Enter a value from 64 through 1048576 "
+                            "MiB in Advanced settings or the CLI option.",
+                            result.workingMemoryMiB));
+        }
+        if (result.cacheBudgetMiB > 1048576)
+        {
+            throw std::invalid_argument(
+                std::format("Invalid Cache disk budget / --cache-budget-mib: {}. Enter a value from 0 through 1048576 "
+                            "MiB in Advanced settings or the CLI option.",
+                            result.cacheBudgetMiB));
+        }
+        if (!std::isfinite(result.surfaceSearchRadius) || result.surfaceSearchRadius <= 0)
+        {
+            throw std::invalid_argument(
+                std::format("Invalid Surface search radius / --surface-search-radius: {}. Enter a finite positive "
+                            "distance in Skyrim units in Advanced settings or the CLI option.",
+                            result.surfaceSearchRadius));
+        }
+        if (!std::isfinite(result.maxSupportDistance) || result.maxSupportDistance < 0)
+        {
+            throw std::invalid_argument(
+                std::format("Invalid Maximum support distance / --max-support-distance: {}. Enter a finite nonnegative "
+                            "distance in Skyrim units in Advanced settings or the CLI option.",
+                            result.maxSupportDistance));
+        }
+        if (!std::isfinite(result.maxSlope) || result.maxSlope < 0 || result.maxSlope >= 90)
+        {
+            throw std::invalid_argument(
+                std::format("Invalid Analysis slope / --max-slope: {}. Enter a finite angle from 0 up to, but "
+                            "excluding, 90 degrees in Advanced settings or the CLI option.",
+                            result.maxSlope));
         }
         if (!listOnly && cellScope && result.cellSelection.empty() && !result.cellFormId && result.editorId.empty())
         {

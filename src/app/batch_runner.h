@@ -21,7 +21,7 @@ namespace navmesh::app::detail
      * @param resolved Winning records and ownership, retained throughout the run.
      * @param assets Optional mod-manager model winners; null uses the configured Data directory.
      * @param paths Source plugin paths in resolved load-order order.
-     * @param progress Optional synchronous progress sink.
+     * @param progressSink Optional synchronous progress sink; fatal failures publish the cause and diagnostic output path.
      * @param cancelled Optional cancellation query between processing stages.
      * @param inputPreparationSeconds Elapsed input/report preparation time, in seconds, for checkpoint telemetry.
      * @param bosInputs Optional runtime snapshot; revalidated before publishing a generated plugin.
@@ -32,6 +32,6 @@ namespace navmesh::app::detail
      */
     int RunBatch(const Options &options, const skyrim::ResolvedLoadOrder &resolved,
                  const skyrim::ModelAssetSources *assets, const std::vector<std::filesystem::path> &paths,
-                 const ProgressCallback &progress, const CancellationCallback &cancelled,
+                 const ProgressCallback &progressSink, const CancellationCallback &cancelled,
                  double inputPreparationSeconds = 0, const skyrim::BaseObjectSwapInput *bosInputs = nullptr);
 } // namespace navmesh::app::detail

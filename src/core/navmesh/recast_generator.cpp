@@ -1217,19 +1217,33 @@ namespace navmesh::core
 {
     void ValidateRecastSettings(const NavigationProfile &profile, const RecastSettings &settings)
     {
-        const auto nonnegative = [](float value) { return std::isfinite(value) && value >= 0; };
-        const auto positive = [&](float value) { return nonnegative(value) && value > 0; };
-        if (!nonnegative(profile.agentRadius) || !positive(profile.agentHeight) || !positive(profile.clearance) ||
-            !nonnegative(profile.stepHeight) || !nonnegative(profile.maxSlopeDegrees) ||
-            profile.maxSlopeDegrees >= 90 || !nonnegative(profile.minimumRegionArea) ||
-            !positive(profile.weldTolerance) || !positive(settings.cellSize) || !positive(settings.cellHeight) ||
-            !nonnegative(settings.maxSimplificationError) || !nonnegative(settings.maxEdgeLength) ||
-            !nonnegative(settings.mergeRegionAreaMultiplier))
+        const auto validate = [](float value, std::string_view name, bool mustBePositive)
         {
-            throw std::invalid_argument("Invalid Recast settings: use finite positive voxel sizes, height, clearance "
-                                        "and weld tolerance; nonnegative radius, climb, area and contour controls; "
-                                        "and a slope below 90 degrees.");
+            if (!std::isfinite(value) || (mustBePositive ? value <= 0 : value < 0))
+            {
+                throw std::invalid_argument(std::format(
+                    "Invalid {}: {}. Enter a finite {} value in Advanced settings or the corresponding CLI option.",
+                    name, value, mustBePositive ? "positive" : "nonnegative"));
+            }
+        };
+        validate(profile.agentRadius, "agent radius", false);
+        validate(profile.agentHeight, "agent height", true);
+        validate(profile.clearance, "agent clearance", true);
+        validate(profile.stepHeight, "step height", false);
+        validate(profile.maxSlopeDegrees, "walkable slope", false);
+        if (profile.maxSlopeDegrees >= 90)
+        {
+            throw std::invalid_argument(std::format("Invalid walkable slope: {} degrees. Enter a value below 90 "
+                                                    "degrees in Advanced settings / --agent-max-slope.",
+                                                    profile.maxSlopeDegrees));
         }
+        validate(profile.minimumRegionArea, "minimum region area", false);
+        validate(profile.weldTolerance, "weld tolerance", true);
+        validate(settings.cellSize, "horizontal voxel size", true);
+        validate(settings.cellHeight, "vertical voxel size", true);
+        validate(settings.maxSimplificationError, "contour simplification error", false);
+        validate(settings.maxEdgeLength, "maximum contour edge length", false);
+        validate(settings.mergeRegionAreaMultiplier, "region merge multiplier", false);
         // Check conversions at the finest requested resolution. Adaptive horizontal sizing
         // only reduces these counts; vertical spans must also fit Recast's packed span height.
         const double cellSize = settings.cellSize;
@@ -1237,12 +1251,23 @@ namespace navmesh::core
         const double integerLimit = std::numeric_limits<int>::max() - 1.0;
         if (std::ceil(area) > integerLimit || std::ceil(area * settings.mergeRegionAreaMultiplier) > integerLimit ||
             std::ceil(profile.agentRadius / cellSize) > integerLimit ||
-            settings.maxEdgeLength / cellSize > integerLimit ||
-            std::ceil(std::max(profile.agentHeight, profile.clearance) / static_cast<double>(settings.cellHeight)) >
+            settings.maxEdgeLength / cellSize > integerLimit)
+        {
+            throw std::invalid_argument(std::format(
+                "Generation settings exceed Recast's horizontal voxel-count limit at horizontal voxel size {}. "
+                "Increase Horizontal voxel size / --recast-cell-size, reduce agent radius, minimum region area, region "
+                "merge multiplier or maximum contour edge length, or use Reset in Advanced settings.",
+                settings.cellSize));
+        }
+        if (std::ceil(std::max(profile.agentHeight, profile.clearance) / static_cast<double>(settings.cellHeight)) >
                 RC_SPAN_MAX_HEIGHT ||
             std::floor(profile.stepHeight / static_cast<double>(settings.cellHeight)) > RC_SPAN_MAX_HEIGHT)
         {
-            throw std::invalid_argument("Recast settings exceed voxel count or vertical span limits.");
+            throw std::invalid_argument(
+                std::format("Generation settings exceed Recast's vertical span limit at vertical voxel size {}. "
+                            "Increase Vertical voxel size / --recast-cell-height, reduce agent height, clearance or "
+                            "step height, or use Reset in Advanced settings.",
+                            settings.cellHeight));
         }
     }
 

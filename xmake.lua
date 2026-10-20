@@ -70,6 +70,7 @@ target("navmesh-tests")
     add_files("src/skyrim/vortex/**.cpp")
     add_files("src/app/options.cpp")
     add_files("src/app/cell_scene.cpp")
+    add_files("src/app/main.cpp", "src/app/batch_runner.cpp", "src/cli/**.cpp")
 
 -- Development-only probe for archive differential tests and stage benchmarks.
 target("navmesh-bsa-probe")

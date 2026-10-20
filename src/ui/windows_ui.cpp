@@ -27,6 +27,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -74,7 +75,9 @@ namespace
         const auto count = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer.data(), static_cast<DWORD>(buffer.size()));
         if (!count || count >= buffer.size())
         {
-            throw std::runtime_error("Cannot locate the local application settings folder.");
+            throw std::runtime_error(
+                "Cannot locate the local application settings folder because LOCALAPPDATA is unavailable. Restore that "
+                "Windows environment variable and restart the application.");
         }
         const auto directory = std::filesystem::path(buffer.data()) / "NavmeshGenerator";
         std::filesystem::create_directories(directory);
@@ -93,7 +96,10 @@ namespace
     {
         if (!WritePrivateProfileStringW(L"options", Wide(key).c_str(), Wide(value).c_str(), path.c_str()))
         {
-            throw std::runtime_error("Could not save desktop settings.");
+            const auto error = GetLastError();
+            throw std::runtime_error(std::format("Cannot save desktop setting '{}' to '{}': {}. Check folder "
+                                                 "permissions, free space and file locks, then retry.",
+                                                 key, PathText(path), std::system_category().message(error)));
         }
     }
 
@@ -842,6 +848,13 @@ namespace
         if (error)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.58F, 0.5F, 1));
+        }
+        if (error && code != 3)
+        {
+            if (ImGui::SmallButton("Copy error details"))
+            {
+                ImGui::SetClipboardText(status.c_str());
+            }
         }
         ImGui::TextWrapped("%s", status.c_str());
         if (error)

@@ -164,7 +164,9 @@ namespace navmesh::app::detail
             }
             if (!match)
             {
-                throw std::runtime_error("No matching CELL in the resolved load order: " + identifier);
+                throw std::runtime_error(
+                    "No matching CELL in the resolved load order: " + identifier +
+                    ". Use List cells / --list-cells and copy an exact Form ID or editor ID from cells.json.");
             }
             selectedIds.insert(match->id);
         }
@@ -183,10 +185,20 @@ namespace navmesh::app::detail
     /// Full scene meshes are owned only by extraction caches and in-flight tasks.
     int RunBatch(const navmesh::app::Options &options, const navmesh::skyrim::ResolvedLoadOrder &resolved,
                  const navmesh::skyrim::ModelAssetSources *assets, const std::vector<std::filesystem::path> &paths,
-                 const navmesh::app::ProgressCallback &progress, const navmesh::app::CancellationCallback &cancelled,
-                 double inputPreparationSeconds, const navmesh::skyrim::BaseObjectSwapInput *bosInputs)
+                 const navmesh::app::ProgressCallback &progressSink,
+                 const navmesh::app::CancellationCallback &cancelled, double inputPreparationSeconds,
+                 const navmesh::skyrim::BaseObjectSwapInput *bosInputs)
     {
         using namespace navmesh;
+        int lastPercent = 30;
+        const app::ProgressCallback progress = [&](int percent, std::string_view status)
+        {
+            lastPercent = percent;
+            if (progressSink)
+            {
+                progressSink(percent, status);
+            }
+        };
         const auto stop = [&] { return cancelled && cancelled(); };
         const auto &copySource =
             options.rebuildScope == app::RebuildScope::Cell ? options.copySourcePlugin : options.affectedPlugin;
@@ -194,7 +206,9 @@ namespace navmesh::app::detail
             std::none_of(paths.begin(), paths.end(), [&](const auto &path)
                          { return EqualsIgnoreCase(navmesh::core::PathToUtf8(path.filename()), copySource); }))
         {
-            throw std::invalid_argument("Rebuild plugin is not active in the resolved load order: " + copySource);
+            throw std::invalid_argument("Rebuild plugin is not active in the resolved load order: " + copySource +
+                                        ". Select an enabled plugin filename, including its extension; check the "
+                                        "selected mod-manager profile and deploy Vortex changes before rerunning.");
         }
         const auto started = std::chrono::steady_clock::now();
         const auto assetCache = skyrim::ModelAssetCacheDirectory(options.data, assets, options.assetCache);
@@ -700,9 +714,23 @@ namespace navmesh::app::detail
         };
         const auto fail = [&](const std::string &error)
         {
-            exports();
-            summary("failed", error);
-            std::cerr << error << '\n';
+            const bool exportsWritten = exports();
+            const bool reportWritten = summary("failed", error);
+            auto message = std::format("Batch failed: {}\nOutput folder: '{}'.", error,
+                                       core::PathToUtf8(std::filesystem::absolute(options.output)));
+            if (reportWritten)
+            {
+                message += " Review batch-report.json for the selected cells and failure details.";
+            }
+            if (!exportsWritten || !reportWritten)
+            {
+                message += " Some diagnostic exports could not be saved. Check folder permissions, free space and file "
+                           "locks, or choose another output folder.";
+            }
+            message += " For unsupported generation or linking failures, include this reason and the run settings when "
+                       "reporting the issue.";
+            std::cerr << message << '\n';
+            progress(lastPercent, message);
             return 2;
         };
         if (stop())
