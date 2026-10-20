@@ -1,4 +1,5 @@
 #include "skyrim/parser/plugin_copy.h"
+#include "skyrim/parser/text_encoding.h"
 
 #include <algorithm>
 #include <cstring>
@@ -163,7 +164,7 @@ namespace
                 {
                     return false;
                 }
-                masters.emplace_back(header.begin() + dataOffset, end);
+                masters.push_back(navmesh::skyrim::DecodePluginText(std::string(header.begin() + dataOffset, end)));
             }
         }
         return foundHedr;

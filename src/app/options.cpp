@@ -1,4 +1,5 @@
 #include "app/options.h"
+#include "core/io/file_path.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -69,28 +70,28 @@ namespace navmesh::app
             }
             else if (argument == "--plugin" && index + 1 < argc)
             {
-                options.plugin = argv[++index];
+                options.plugin = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--data" && index + 1 < argc)
             {
-                options.data = argv[++index];
+                options.data = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--load-order" && index + 1 < argc)
             {
-                options.loadOrder = argv[++index];
+                options.loadOrder = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--mo2" && index + 1 < argc)
             {
-                options.mo2 = argv[++index];
+                options.mo2 = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--vortex" && index + 1 < argc)
             {
                 options.modManager = ModManager::Vortex;
-                options.vortex = argv[++index];
+                options.vortex = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--vortex-plugins" && index + 1 < argc)
             {
-                options.vortexPlugins = argv[++index];
+                options.vortexPlugins = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--profile" && index + 1 < argc)
             {
@@ -98,7 +99,7 @@ namespace navmesh::app
             }
             else if (argument == "--mods-dir" && index + 1 < argc)
             {
-                options.modsDirectory = argv[++index];
+                options.modsDirectory = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--cell" && index + 1 < argc)
             {
@@ -134,19 +135,19 @@ namespace navmesh::app
             }
             else if (argument == "--output" && index + 1 < argc)
             {
-                options.output = argv[++index];
+                options.output = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--export-geometry" && index + 1 < argc)
             {
-                options.exportGeometry = argv[++index];
+                options.exportGeometry = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--export-analysis" && index + 1 < argc)
             {
-                options.exportAnalysis = argv[++index];
+                options.exportAnalysis = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--export-scene" && index + 1 < argc)
             {
-                options.exportScene = argv[++index];
+                options.exportScene = core::PathFromUtf8(argv[++index]);
             }
             else if (argument == "--make-scene")
             {
@@ -166,7 +167,7 @@ namespace navmesh::app
             }
             else if (argument == "--asset-cache" && index + 1 < argc)
             {
-                options.assetCache = argv[++index];
+                options.assetCache = core::PathFromUtf8(argv[++index]);
             }
             else if ((argument == "--cache-budget-mib" || argument == "--working-memory-mib" ||
                       argument == "--workers") &&

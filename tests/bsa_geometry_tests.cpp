@@ -6,6 +6,8 @@
 #include "skyrim/extraction/geometry_extractor.h"
 #include "core/navmesh/generator.h"
 #include "core/geometry/convex_hull.h"
+#include "core/io/file_path.h"
+#include "skyrim/parser/text_encoding.h"
 
 #include <NifFile.hpp>
 #include <bhk.hpp>
@@ -30,11 +32,12 @@ namespace
     }
 
     // Build a named SE archive with one prefixed, LZ4-compressed synthetic model.
-    void WriteModelArchive(const std::filesystem::path &path, const std::string &model)
+    void WriteModelArchive(const std::filesystem::path &path, const std::string &model,
+                           const std::string &modelName = "fixture.nif", const std::string &directory = "meshes")
     {
-        const std::string folder("meshes\0", 7);
-        const std::string filename("fixture.nif\0", 12);
-        const std::string prefix = "meshes\\fixture.nif";
+        const std::string folder = directory + '\0';
+        const std::string filename = modelName + '\0';
+        const std::string prefix = directory + '\\' + modelName;
         std::string compressed(LZ4F_compressFrameBound(model.size(), nullptr), '\0');
         const auto compressedSize =
             LZ4F_compressFrame(compressed.data(), compressed.size(), model.data(), model.size(), nullptr);
@@ -45,7 +48,8 @@ namespace
         AppendInteger(payload, model.size());
         payload += compressed;
         std::string archive("BSA\0", 4);
-        for (const auto field : {105U, 36U, 0x107U, 1U, 1U, 7U, 12U, 1U})
+        for (const auto field : {105U, 36U, 0x107U, 1U, 1U, static_cast<unsigned>(folder.size()),
+                                 static_cast<unsigned>(filename.size()), 1U})
         {
             AppendInteger(archive, field);
         }
@@ -89,6 +93,54 @@ namespace
         object->targetRef.index = nif.GetBlockID(nif.GetRootNode());
         nif.GetRootNode()->collisionRef.index = nif.GetHeader().AddBlock(std::move(object));
         assert(nif.Save(path) == 0);
+    }
+
+    void CheckUnicodeModelPaths(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        const auto directory = root / std::filesystem::path(u8"assets_\u65E5\u672C");
+        std::filesystem::create_directories(directory);
+        const auto loose = directory / std::filesystem::path(u8"loose_\u65E5\u672C.nif");
+        WriteCollisionModel(loose, 64, 16);
+        std::ifstream input(loose, std::ios::binary);
+        const std::string payload((std::istreambuf_iterator<char>(input)), {});
+        input.close();
+        for (const bool legacy : {true, false})
+        {
+            const std::string filename = legacy ? "bag\xB0.nif" : "bag\xC2\xB0.nif";
+            const std::string folder = legacy ? "meshes\\props\xE9" : "meshes\\props\xC3\xA9";
+            const auto data = directory / (legacy ? "legacy" : "utf8");
+            std::filesystem::create_directories(data);
+            const auto archive = data / std::filesystem::path(u8"Models_\u65E5\u672C.bsa");
+            WriteModelArchive(archive, payload, filename, folder);
+            skyrim::ModelAssetSources assets;
+            assets.archives = {archive};
+            const auto snapshot = skyrim::ModelAssetCacheDirectory(data, &assets, directory / "cache");
+            const std::string logical = "meshes/props\xC3\xA9/bag\xC2\xB0.nif";
+            core::Cell cell;
+            cell.references = {{.id = 1,
+                                .recordType = "REFR",
+                                .modelPath = skyrim::DecodePluginText(folder + '\\' + filename),
+                                .baseRecordType = "STAT"}};
+            skyrim::ModelGeometryCache cache;
+            const auto geometry = skyrim::ExtractGeometry(data, cell, snapshot, {}, {}, &assets, &cache, true);
+            assert(geometry.archiveSearchComplete && geometry.collisionModelsLoaded == 1);
+            assert(geometry.collisionTriangles == 2);
+            assert(std::filesystem::is_regular_file(snapshot / core::PathFromUtf8(logical)));
+            std::set<std::string> changed;
+            assert(skyrim::ChangedArchiveModels(data, assets, snapshot, {archive}, changed));
+            assert(changed == std::set<std::string>{logical});
+            assets.looseModels[logical] = loose;
+            const auto looseGeometry = skyrim::ExtractGeometry(data, cell, snapshot, {}, {}, &assets, nullptr, true);
+            assert(looseGeometry.archiveSearchComplete && looseGeometry.collisionModelsLoaded == 1);
+            changed.clear();
+            assert(skyrim::ChangedArchiveModels(data, assets, snapshot, {archive}, changed) && changed.empty());
+            assets.looseModels.clear();
+            skyrim::TrimModelAssetCache(snapshot, 0);
+            assert(!std::filesystem::exists(snapshot / core::PathFromUtf8(logical)));
+            const auto reused = skyrim::ExtractGeometry(data, cell, snapshot, {}, {}, &assets, &cache, true);
+            assert(reused.collisionModelsLoaded == 1 && cache.Statistics().modelHits == 1);
+        }
     }
 
     bool HasNavigationAt(const navmesh::core::CandidateNavMesh &candidate, navmesh::core::Vec3 point)
@@ -1069,6 +1121,7 @@ void TestNativeBsaGeometry()
         }
     } cleanup{root};
 
+    CheckUnicodeModelPaths(root);
     nifly::NifFile nif;
     nif.Create({nifly::V20_2_0_7, 12, 130});
     const std::vector<nifly::Vector3> vertices = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};

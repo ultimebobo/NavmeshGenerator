@@ -2940,6 +2940,7 @@ void TestNavmeshInfoExport();
 void TestNavmeshCover();
 void TestFormIdResolution();
 void TestOperablePassages();
+void TestNativeBsaGeometry();
 
 int main(int argc, char **argv)
 {
@@ -2951,6 +2952,11 @@ int main(int argc, char **argv)
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 #endif
     TestOperablePassages();
+    if (argc == 2 && std::string_view(argv[1]) == "--bsa-only")
+    {
+        TestNativeBsaGeometry();
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--form-ids-only")
     {
         TestFormIdResolution();
@@ -3091,6 +3097,7 @@ int main(int argc, char **argv)
     TestAffectedCells();
     TestResolvedLoadOrder();
     TestFormIdResolution();
+    TestNativeBsaGeometry();
     TestTeleportInputResolution();
     TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();

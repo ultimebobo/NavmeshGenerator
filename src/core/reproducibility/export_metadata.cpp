@@ -1,4 +1,5 @@
 #include "core/reproducibility/export_metadata.h"
+#include "core/io/file_path.h"
 
 #include <fstream>
 #include <format>
@@ -65,7 +66,7 @@ namespace navmesh::reproducibility
             "\"terrain_land_missing\": {}, \"terrain_supported\": {}, \"collision_geometry_supported\": "
             "{}}},\n{}\"warnings\": [{}]\n{}}}",
             indent, indent, kExportMetadataSchemaVersion, indent, kToolVersion, indent,
-            EscapeJson(metadata.inputPlugin.generic_string()), indent, selectedCell, indent, indent,
+            EscapeJson(navmesh::core::PathToUtf8(metadata.inputPlugin)), indent, selectedCell, indent, indent,
             metadata.coverage.references, metadata.coverage.referencesWithModels, metadata.coverage.modelsLoaded,
             metadata.coverage.modelsMissing, metadata.coverage.geometryVertices, metadata.coverage.geometryTriangles,
             metadata.coverage.terrainLandRecords, metadata.coverage.terrainLandDecoded,
@@ -89,8 +90,9 @@ namespace navmesh::reproducibility
     }
     bool WriteSidecar(const std::filesystem::path &path, const ExportMetadata &metadata)
     {
-        std::ofstream output(std::filesystem::path(path.string() + ".metadata.json"),
-                             std::ios::trunc | std::ios::binary);
+        auto sidecar = path;
+        sidecar += ".metadata.json";
+        std::ofstream output(sidecar, std::ios::trunc | std::ios::binary);
         if (!output)
         {
             return false;

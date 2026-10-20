@@ -11,7 +11,7 @@ namespace navmesh::skyrim::detail
     {
         /// Complete source file; unknown and compressed records remain encoded.
         std::vector<std::uint8_t> bytes;
-        /// Source master order, excluding the source plugin's implicit self slot.
+        /// UTF-8 source master names in order, excluding the source plugin's implicit self slot.
         std::vector<std::string> masters;
         /// Original TES4 flags, including master, light, and localization flags.
         std::uint32_t flags{};

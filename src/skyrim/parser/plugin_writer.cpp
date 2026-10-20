@@ -1,4 +1,6 @@
 #include "skyrim/parser/plugin_writer.h"
+#include "core/io/file_path.h"
+#include "skyrim/parser/text_encoding.h"
 #include "skyrim/parser/plugin_copy.h"
 #include "skyrim/parser/navmesh_info.h"
 #include "skyrim/parser/reference_navigation.h"
@@ -149,8 +151,8 @@ namespace
     {
         std::string name = "generated-navmesh.esp";
         std::size_t suffix = 1;
-        while (std::any_of(inputPlugins.begin(), inputPlugins.end(),
-                           [&](const auto &input) { return SameName(input.filename().string(), name); }))
+        while (std::any_of(inputPlugins.begin(), inputPlugins.end(), [&](const auto &input)
+                           { return SameName(navmesh::core::PathToUtf8(input.filename()), name); }))
         {
             name = "generated-navmesh-" + std::to_string(++suffix) + ".esp";
         }
@@ -208,7 +210,7 @@ namespace
                 {
                     return false;
                 }
-                masters.emplace_back(source.begin() + p, zero);
+                masters.push_back(navmesh::skyrim::DecodePluginText(std::string(source.begin() + p, zero)));
             }
             p += size;
             extended.reset();
@@ -375,8 +377,9 @@ namespace
             auto targets = targetsBySource.find(record.winning.plugin);
             if (targets == targetsBySource.end())
             {
-                const auto path = std::find_if(inputPlugins.begin(), inputPlugins.end(), [&](const auto &input)
-                                               { return SameName(input.filename().string(), record.winning.plugin); });
+                const auto path = std::find_if(
+                    inputPlugins.begin(), inputPlugins.end(), [&](const auto &input)
+                    { return SameName(navmesh::core::PathToUtf8(input.filename()), record.winning.plugin); });
                 if (path == inputPlugins.end())
                 {
                     return false;
@@ -1021,9 +1024,9 @@ namespace
         {
             modifiedReferences.insert(id);
         }
-        return navmesh::skyrim::detail::ValidateNavigationGraph(records, masters, path.stem().string(), input,
-                                                                modifiedMeshes, modifiedReferences, error,
-                                                                generatedStepHeights);
+        return navmesh::skyrim::detail::ValidateNavigationGraph(
+            records, masters, navmesh::core::PathToUtf8(path.stem()), input, modifiedMeshes, modifiedReferences, error,
+            generatedStepHeights);
     }
 } // namespace
 
@@ -1593,8 +1596,8 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         {
             continue;
         }
-        const auto path = std::find_if(inputPlugins.begin(), inputPlugins.end(),
-                                       [&](const auto &p) { return SameName(p.filename().string(), name); });
+        const auto path = std::find_if(inputPlugins.begin(), inputPlugins.end(), [&](const auto &p)
+                                       { return SameName(navmesh::core::PathToUtf8(p.filename()), name); });
         if (path == inputPlugins.end())
         {
             return fail("Winning NAVM source plugin is absent from the input paths.");
@@ -1629,7 +1632,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     std::vector<std::string> masters;
     for (const auto &path : inputPlugins)
     {
-        const auto name = path.filename().string();
+        const auto name = navmesh::core::PathToUtf8(path.filename());
         const auto required =
             std::any_of(sources.begin(), sources.end(),
                         [&](const auto &source)
@@ -1691,9 +1694,10 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         // Keep the self slot virtual while reusing NAVM rebasing. It is never emitted
         // as a TES4 master, and arbitrary copied payloads retain their original indices.
         copiedName = selected->name;
-        const auto selectedPath = std::find_if(inputPlugins.begin(), inputPlugins.end(), [&](const auto &inputPath)
-                                               { return SameName(inputPath.filename().string(), copiedName); });
-        copiedName = selectedPath->filename().string();
+        const auto selectedPath =
+            std::find_if(inputPlugins.begin(), inputPlugins.end(), [&](const auto &inputPath)
+                         { return SameName(navmesh::core::PathToUtf8(inputPath.filename()), copiedName); });
+        copiedName = navmesh::core::PathToUtf8(selectedPath->filename());
         masters = prepared.masters;
         masters.push_back(copiedName);
         copy = std::move(prepared);
@@ -1788,8 +1792,8 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     std::uint32_t nextObjectId = firstNewObjectId;
     for (const auto &master : masters)
     {
-        const auto it = std::find_if(inputPlugins.begin(), inputPlugins.end(),
-                                     [&](const auto &p) { return SameName(p.filename().string(), master); });
+        const auto it = std::find_if(inputPlugins.begin(), inputPlugins.end(), [&](const auto &p)
+                                     { return SameName(navmesh::core::PathToUtf8(p.filename()), master); });
         if (it == inputPlugins.end())
         {
             return fail("A copied plugin master is absent from the input load order.");
@@ -1802,7 +1806,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             return fail("Cannot read a required source master.");
         }
     }
-    const auto path = outputDirectory / (copy ? copiedName : PatchFilename(inputPlugins));
+    const auto path = outputDirectory / core::PathFromUtf8(copy ? copiedName : PatchFilename(inputPlugins));
     if (std::filesystem::exists(path))
     {
         return fail("Plugin output already exists; choose an empty output folder.");
@@ -2560,7 +2564,8 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     PutSubrecord(headerPayload, "HEDR", hedr);
     for (const auto &master : masters)
     {
-        Bytes name(master.begin(), master.end());
+        const auto encodedMaster = EncodePluginText(master);
+        Bytes name(encodedMaster.begin(), encodedMaster.end());
         name.push_back(0);
         PutSubrecord(headerPayload, "MAST", name);
         PutSubrecord(headerPayload, "DATA", Bytes(8));

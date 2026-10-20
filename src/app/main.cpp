@@ -1,4 +1,5 @@
 #include "analysis/navmesh_analysis.h"
+#include "core/io/file_path.h"
 #include "app/batch_runner.h"
 #include "app/cell_scene.h"
 #include "app/geometry_pipeline.h"
@@ -361,7 +362,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         for (const auto &file : mo2Input->looseAssetWinners)
         {
-            if (std::filesystem::path(file.logicalPath).extension() == ".nif")
+            if (navmesh::core::PathFromUtf8(file.logicalPath).extension() == ".nif")
             {
                 modelAssets.looseModels.emplace(file.logicalPath, file.physicalPath);
             }
@@ -385,9 +386,10 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                  .progress = [&](std::size_t completed, std::size_t total, const std::filesystem::path &plugin)
                  {
                      const auto percent = total == 0 ? 30 : 20 + static_cast<int>((10 * completed) / total);
-                     update(percent, completed == total ? "Load order records resolved"
-                                                        : std::format("Resolving plugin {} of {}: {}", completed + 1,
-                                                                      total, plugin.filename().string()));
+                     update(percent, completed == total
+                                         ? "Load order records resolved"
+                                         : std::format("Resolving plugin {} of {}: {}", completed + 1, total,
+                                                       navmesh::core::PathToUtf8(plugin.filename())));
                  }});
         }
         catch (const std::exception &error)
@@ -421,7 +423,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         options.data = vortexInput->gameData;
         modelAssets = std::move(vortexInput->assets);
-        std::cerr << "Using deployed Data: " << options.data.string() << "\n";
+        std::cerr << "Using deployed Data: " << navmesh::core::PathToUtf8(options.data) << "\n";
         update(20, "Resolving active plugin load order");
         try
         {
@@ -432,9 +434,10 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                  .progress = [&](std::size_t completed, std::size_t total, const std::filesystem::path &plugin)
                  {
                      const auto percent = total == 0 ? 30 : 20 + static_cast<int>((10 * completed) / total);
-                     update(percent, completed == total ? "Load order records resolved"
-                                                        : std::format("Resolving plugin {} of {}: {}", completed + 1,
-                                                                      total, plugin.filename().string()));
+                     update(percent, completed == total
+                                         ? "Load order records resolved"
+                                         : std::format("Resolving plugin {} of {}: {}", completed + 1, total,
+                                                       navmesh::core::PathToUtf8(plugin.filename())));
                  }});
         }
         catch (const std::exception &error)
@@ -853,11 +856,12 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             .warnings = {geometry.terrainLandMissing
                              ? "Terrain coverage is missing for this exterior CELL; no flat substitute was emitted."
                              : "Terrain is not applicable to this interior CELL.",
-                         geometry.collisionGeometrySupported ? "Collision support includes reachable triangle meshes "
-                                                               "and convex hulls, boxes and tessellated capsules; other shapes are "
-                                                               "not approximated."
-                                                             : "No supported Havok collision was found; any "
-                                                               "render triangles are low-confidence fallbacks."}};
+                         geometry.collisionGeometrySupported
+                             ? "Collision support includes reachable triangle meshes "
+                               "and convex hulls, boxes and tessellated capsules; other shapes are "
+                               "not approximated."
+                             : "No supported Havok collision was found; any "
+                               "render triangles are low-confidence fallbacks."}};
         const auto findings = navmesh::validation::Validate(*cell);
         const auto report = navmesh::cli::ToJson(*cell, findings, metadata);
         const auto reportPath = options.output / "report.json";
@@ -1116,13 +1120,14 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
         }
         std::cout << std::format(
             "Exported combined GLB scene to {} ({} objects, {} triangles, {} geometry triangles culled)\n",
-            scenePath.string(), sceneExport.objects, sceneExport.triangles, sceneExport.culledTriangles);
+            navmesh::core::PathToUtf8(scenePath), sceneExport.objects, sceneExport.triangles,
+            sceneExport.culledTriangles);
         if (candidate && !candidate->topology.valid)
         {
             const auto failure = std::format(
                 "Candidate topology validation failed: {}. Inspection scene saved to {}; see candidate-navm.json.",
                 candidate->topology.findings.empty() ? "invalid candidate" : candidate->topology.findings.front(),
-                scenePath.string());
+                navmesh::core::PathToUtf8(scenePath));
             update(88, failure);
             std::cerr << failure << '\n';
             return 2;
@@ -1179,7 +1184,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
             writtenPlugin.read(reinterpret_cast<char *>(pluginHeader.data()),
                                static_cast<std::streamsize>(pluginHeader.size()));
             const bool eslFlagged = writtenPlugin && (pluginHeader[9] & 0x02U) != 0;
-            std::cout << "Generated NAVM override plugin: " << pluginPath.string()
+            std::cout << "Generated NAVM override plugin: " << navmesh::core::PathToUtf8(pluginPath)
                       << (eslFlagged ? " (ESL-flagged ESP)\n" : " (regular ESP)\n");
             std::cout << "Verified NAVM, NAVI, cover, reciprocal portals and door XNDP associations against the input "
                          "load order.\n";
@@ -1279,7 +1284,7 @@ int navmesh::app::Run(const Options &input, const ProgressCallback &progress, co
                                  "{}\nGeometry vertices: {}\nGeometry triangles: {}\nExported geometry: {}\n",
                                  cell->references.size(), geometry.referencesWithModels, geometry.modelsLoaded,
                                  geometry.modelsMissing, geometry.scene.mesh.vertices.size(),
-                                 geometry.scene.mesh.triangles.size(), geometryPath.string());
+                                 geometry.scene.mesh.triangles.size(), navmesh::core::PathToUtf8(geometryPath));
         update(100, std::format("Original navmesh polygons: {}; generated navmesh polygons: {}",
                                 existingSelectedPolygons, generatedPolygons));
         return 0;

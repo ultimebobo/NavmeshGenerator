@@ -919,7 +919,9 @@ namespace navmesh::core
         glb.write(reinterpret_cast<const char *>(&binaryLength), sizeof(binaryLength));
         glb.write(reinterpret_cast<const char *>(&binaryType), sizeof(binaryType));
         glb.write(reinterpret_cast<const char *>(binary.data()), static_cast<std::streamsize>(binary.size()));
-        std::ofstream provenance(outputPath.string() + ".provenance.json", std::ios::trunc);
+        auto provenancePath = outputPath;
+        provenancePath += ".provenance.json";
+        std::ofstream provenance(provenancePath, std::ios::trunc);
         if (provenance)
         {
             provenance << "{\n  \"metadata\": " << reproducibility::ToJson(metadata, "    ") << ",\n  \"layers\": ["

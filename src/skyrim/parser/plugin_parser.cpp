@@ -1,5 +1,6 @@
 #include "skyrim/parser/plugin_parser.h"
 #include "skyrim/parser/water_height.h"
+#include "skyrim/parser/text_encoding.h"
 
 #include <algorithm>
 #include <cctype>
@@ -341,11 +342,13 @@ namespace navmesh::skyrim
                         }
                         if (subType == "EDID")
                         {
-                            cell.editorId = TrimNulls(ReadAscii(*payload, subDataStart, subSize));
+                            cell.editorId = navmesh::skyrim::DecodePluginText(
+                                TrimNulls(ReadAscii(*payload, subDataStart, subSize)));
                         }
                         else if (subType == "FULL")
                         {
-                            auto name = TrimNulls(ReadAscii(*payload, subDataStart, subSize));
+                            auto name = navmesh::skyrim::DecodePluginText(
+                                TrimNulls(ReadAscii(*payload, subDataStart, subSize)));
                             if (!name.empty() && std::all_of(name.begin(), name.end(), [](unsigned char value)
                                                              { return std::isprint(value) != 0; }))
                             {
@@ -429,11 +432,13 @@ namespace navmesh::skyrim
                             }
                             if (subType == "EDID")
                             {
-                                record.editorId = TrimNulls(ReadAscii(*payload, subDataStart, subSize));
+                                record.editorId = navmesh::skyrim::DecodePluginText(
+                                    TrimNulls(ReadAscii(*payload, subDataStart, subSize)));
                             }
                             else if (subType == "MODL")
                             {
-                                record.modelPath = TrimNulls(ReadAscii(*payload, subDataStart, subSize));
+                                record.modelPath = navmesh::skyrim::DecodePluginText(
+                                    TrimNulls(ReadAscii(*payload, subDataStart, subSize)));
                             }
                             else if (record.type == "DOOR" && subType == "FNAM" && subSize >= 1)
                             {

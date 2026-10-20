@@ -97,7 +97,8 @@ namespace navmesh::app
         float surfaceSearchRadius{64.0F}, maxSupportDistance{32.0F}, maxSlope{45.0F};
     };
 
-    /// Parse CLI options; `--generate-plugin` selects the format automatically and rejects a format argument.
+    /// Parse UTF-8 CLI options into native paths; `--generate-plugin` selects the format automatically
+    /// and rejects a format argument.
     [[nodiscard]] Options ParseCommandLine(int argc, char **argv);
 
     /** Split an explicit cell list for CLI, desktop validation and resolved selection.

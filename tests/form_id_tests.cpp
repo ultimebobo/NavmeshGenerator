@@ -3,12 +3,15 @@
 #endif
 
 #include "skyrim/parser/plugin_parser.h"
+#include "skyrim/parser/text_encoding.h"
+#include "core/io/file_path.h"
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <tuple>
 #include <zlib.h>
 
@@ -224,6 +227,70 @@ namespace
         assert(std::count_if(resolved.diagnostics.begin(), resolved.diagnostics.end(),
                              [](const auto &item) { return item.kind == DiagnosticKind::UnresolvedFormId; }) == 2);
     }
+
+    void TestUnicodeInputs(const std::filesystem::path &root)
+    {
+        const std::string legacyName = "Master\xB0.esm";
+        const std::string utf8Name = "Master\xC2\xB0.esm";
+        const auto masterPath = navmesh::core::PathFromUtf8(utf8Name);
+        const auto patchPath = std::filesystem::path(u8"Patch_\u65E5\u672C.esp");
+        WritePlugin(root / masterPath, {}, false, {{"STAT", 0x900, {}}});
+        Bytes model;
+        Subrecord(model, "MODL", {'f', 'o', 'l', 'd', 'e', 'r', '\\', 'b', 'a', 'g', 0xB0, '.', 'n', 'i', 'f', 0});
+        WritePlugin(root / patchPath, {legacyName}, false, {{"STAT", 0x1000900, model}});
+        const auto manifest = root / "unicode-load-order.txt";
+        std::ofstream(manifest) << utf8Name << '\n' << navmesh::core::PathToUtf8(patchPath) << '\n';
+        const auto resolved = ResolveLoadOrder({.dataDirectory = root, .plugins = ReadLoadOrderManifest(manifest)});
+        assert(resolved.diagnostics.empty());
+        assert(resolved.plugins == std::vector<std::string>({utf8Name, navmesh::core::PathToUtf8(patchPath)}));
+        const auto *record = resolved.FindWinning(0x1000900);
+        assert(record && record->modelPath == "folder\\bag\xC2\xB0.nif");
+        assert(record->raw->subrecords.front().data ==
+               Bytes({'f', 'o', 'l', 'd', 'e', 'r', '\\', 'b', 'a', 'g', 0xB0, '.', 'n', 'i', 'f', 0}));
+        assert(EncodePluginText(utf8Name) == legacyName);
+        const auto unicode = navmesh::core::PathToUtf8(patchPath);
+        assert(DecodePluginText(unicode) == unicode && EncodePluginText(unicode) == unicode);
+        const std::string legacySymbols = "\x80\x91\x96\xB0\xE9";
+        assert(DecodePluginText(legacySymbols) == "\xE2\x82\xAC\xE2\x80\x98\xE2\x80\x93\xC2\xB0\xC3\xA9");
+        assert(EncodePluginText(DecodePluginText(legacySymbols)) == legacySymbols);
+
+        // Unexpected reader exceptions must name the plugin in both resolution stages.
+        class FailingReader final : public IPluginReader
+        {
+          public:
+            bool failMetadata{};
+            bool ReadMetadata(const std::filesystem::path &, std::vector<std::string> &, bool &,
+                              std::vector<Diagnostic> &) const override
+            {
+                if (failMetadata)
+                {
+                    throw std::runtime_error("synthetic conversion failure");
+                }
+                return true;
+            }
+            bool Read(const std::filesystem::path &, std::vector<ResolvedRecord> &, std::vector<std::string> &, bool &,
+                      std::vector<Diagnostic> &, bool) const override
+            {
+                throw std::runtime_error("synthetic conversion failure");
+            }
+        } reader;
+        for (const bool metadata : {false, true})
+        {
+            reader.failMetadata = metadata;
+            try
+            {
+                (void)ResolveLoadOrder({.dataDirectory = root, .plugins = {patchPath}}, reader);
+                assert(false);
+            }
+            catch (const std::runtime_error &error)
+            {
+                const std::string message = error.what();
+                assert(message.find(unicode) != std::string::npos);
+                assert(message.find(metadata ? "metadata" : "records") != std::string::npos);
+                assert(message.find("synthetic conversion failure") != std::string::npos);
+            }
+        }
+    }
 } // namespace
 
 void TestFormIdResolution()
@@ -235,5 +302,6 @@ void TestFormIdResolution()
     TestFileLocalIndices(root);
     TestMissingMasterIdentity(root);
     TestCompressedRecordBoundaries(root);
+    TestUnicodeInputs(root);
     std::filesystem::remove_all(root);
 }

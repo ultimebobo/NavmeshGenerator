@@ -1,4 +1,5 @@
 #include "skyrim/parser/base_object_swapper.h"
+#include "core/io/file_path.h"
 
 #include "core/io/content_hash.h"
 
@@ -50,7 +51,8 @@ namespace navmesh::skyrim
 
         bool ConfigName(const std::filesystem::path &path)
         {
-            return path.extension() == ".ini" && path.filename().string().find("_SWAP") != std::string::npos;
+            return path.extension() == ".ini" &&
+                   navmesh::core::PathToUtf8(path.filename()).find("_SWAP") != std::string::npos;
         }
 
         std::string Read(const std::filesystem::path &path)
@@ -58,12 +60,13 @@ namespace navmesh::skyrim
             std::ifstream file(path, std::ios::binary);
             if (!file)
             {
-                throw std::runtime_error("Cannot read BOS configuration: " + path.string());
+                throw std::runtime_error("Cannot read BOS configuration: " + navmesh::core::PathToUtf8(path));
             }
             std::string contents{std::istreambuf_iterator<char>(file), {}};
             if (file.bad())
             {
-                throw std::runtime_error("Cannot completely read BOS configuration: " + path.string());
+                throw std::runtime_error("Cannot completely read BOS configuration: " +
+                                         navmesh::core::PathToUtf8(path));
             }
             return contents;
         }
@@ -319,7 +322,7 @@ namespace navmesh::skyrim
                     const auto close = line.find(']');
                     if (close == std::string::npos)
                     {
-                        const auto source = config.path.empty() ? config.name : config.path.generic_string();
+                        const auto source = config.path.empty() ? config.name : navmesh::core::PathToUtf8(config.path);
                         throw std::runtime_error(source + ":" + std::to_string(lineNumber) +
                                                  ": Unterminated BOS section header");
                     }
@@ -460,7 +463,7 @@ namespace navmesh::skyrim
                     const auto &section = entry.section;
                     const auto &line = entry.line;
                     const auto evidence = config.name + ":" + std::to_string(entry.lineNumber);
-                    const auto source = config.path.empty() ? config.name : config.path.generic_string();
+                    const auto source = config.path.empty() ? config.name : navmesh::core::PathToUtf8(config.path);
                     try
                     {
                         const auto sectionParts = Split(section, '|');
@@ -891,9 +894,9 @@ namespace navmesh::skyrim
             }
             for (const auto &entry : std::filesystem::directory_iterator(root))
             {
-                if (entry.is_regular_file() && Lower(entry.path().extension().string()) == ".ini")
+                if (entry.is_regular_file() && Lower(navmesh::core::PathToUtf8(entry.path().extension())) == ".ini")
                 {
-                    winners[Lower(entry.path().filename().string())] = entry.path();
+                    winners[Lower(navmesh::core::PathToUtf8(entry.path().filename()))] = entry.path();
                 }
             }
         }
@@ -906,14 +909,14 @@ namespace navmesh::skyrim
                 continue;
             }
             auto contents = Read(path);
-            result.configs.push_back({path.filename().string(), path, std::move(contents)});
+            result.configs.push_back({navmesh::core::PathToUtf8(path.filename()), path, std::move(contents)});
         }
         std::sort(result.configs.begin(), result.configs.end(),
                   [](const auto &a, const auto &b) { return a.name < b.name; });
         for (const auto &config : result.configs)
         {
             hash.Add(config.name);
-            hash.Add(config.path.generic_string());
+            hash.Add(navmesh::core::PathToUtf8(config.path));
             hash.Add(config.contents);
         }
         result.fingerprint = hash.Hex();
@@ -995,7 +998,7 @@ namespace navmesh::skyrim
         for (const auto &config : input.configs)
         {
             out << (comma ? "," : "") << "{\"name\":" << Json(config.name)
-                << ",\"path\":" << Json(config.path.generic_string()) << "}";
+                << ",\"path\":" << Json(navmesh::core::PathToUtf8(config.path)) << "}";
             comma = true;
         }
         out << "],\"placements\":[";

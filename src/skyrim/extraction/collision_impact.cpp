@@ -446,14 +446,15 @@ namespace navmesh::skyrim
                     const auto unreadable = std::find_if(
                         geometry.scene.coverage.begin(), geometry.scene.coverage.end(),
                         [](const auto &coverage) { return coverage.status == core::GeometryCoverage::Unreadable; });
-                    throw std::runtime_error(
-                        std::format("Cannot determine collision impact for REFR {:08X}: {} ({})",
-                                    unreadable != geometry.scene.coverage.end() ? unreadable->source.reference.formId
-                                                                                : record.formId,
-                                    unreadable != geometry.scene.coverage.end() ? unreadable->source.modelPath
-                                                                                : reference->modelPath,
-                                    unreadable != geometry.scene.coverage.end() ? unreadable->detail
-                                                                                : "archive model search incomplete"));
+                    throw std::runtime_error(std::format(
+                        "Cannot determine collision impact for REFR {:08X} in '{}' (base plugin '{}'): {} ({})",
+                        unreadable != geometry.scene.coverage.end() ? unreadable->source.reference.formId
+                                                                    : record.formId,
+                        reference->sourcePlugin, reference->basePlugin,
+                        unreadable != geometry.scene.coverage.end() ? unreadable->source.modelPath
+                                                                    : reference->modelPath,
+                        unreadable != geometry.scene.coverage.end() ? unreadable->detail
+                                                                    : "archive model search incomplete"));
                 }
                 if (geometry.scene.coverage.front().status == core::GeometryCoverage::Missing)
                 {

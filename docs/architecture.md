@@ -41,6 +41,12 @@ Nonempty payloads require bounded zlib decoding to the declared size. Compressed
 prefixes must fit inside their record, and decode failures identify the plugin,
 file-local FormID and record byte offset.
 
+Embedded plugin text and BSA directory names are decoded to UTF-8, retaining
+valid UTF-8 and otherwise using Windows-1252; raw plugin subrecords remain intact
+for copying. Native filesystem paths use explicit UTF-8 conversion for identities,
+reports and progress, independently of the Windows code page. Unexpected plugin
+reader failures identify the input path and whether metadata or records were being read.
+
 ## 2. Skyrim extraction
 
 Model extraction owns the furniture and fire navigation policies. Supported

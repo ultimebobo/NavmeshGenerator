@@ -1,4 +1,6 @@
 #include "skyrim/extraction/bsa_archive.h"
+#include "skyrim/parser/text_encoding.h"
+#include "core/io/file_path.h"
 
 #include <lz4frame.h>
 #include <zlib.h>
@@ -157,7 +159,8 @@ namespace navmesh::skyrim
                 {
                     throw std::runtime_error("Invalid BSA folder name");
                 }
-                const auto directory = Normalize(std::string(table.data() + position, length - 1));
+                const auto directory =
+                    Normalize(DecodePluginText(std::string_view(table.data() + position, length - 1)));
                 position += length;
                 actualFolderNames += length;
                 const auto count = U32(table, static_cast<std::size_t>(folder * recordSize + 8));
@@ -182,7 +185,8 @@ namespace navmesh::skyrim
                     }
                     const auto nameLength = static_cast<std::size_t>(end - (table.begin() + namePosition));
                     const auto logical =
-                        directory + '/' + Normalize(std::string(table.data() + namePosition, nameLength));
+                        directory + '/' +
+                        Normalize(DecodePluginText(std::string_view(table.data() + namePosition, nameLength)));
                     namePosition += nameLength + 1;
                     if (logical.starts_with("meshes/") && logical.ends_with(".nif"))
                     {
@@ -348,7 +352,7 @@ namespace navmesh::skyrim
 
         std::string ArchiveKey(const std::filesystem::path &path)
         {
-            auto key = std::filesystem::absolute(path).lexically_normal().generic_string();
+            auto key = navmesh::core::PathToUtf8(std::filesystem::absolute(path).lexically_normal());
 #ifdef _WIN32
             key = Normalize(key);
 #endif
@@ -374,7 +378,15 @@ namespace navmesh::skyrim
         {
             if (!provider.index)
             {
-                provider.index = ReadIndex(provider.path, statistics[0]);
+                try
+                {
+                    provider.index = ReadIndex(provider.path, statistics[0]);
+                }
+                catch (const std::exception &error)
+                {
+                    throw std::runtime_error("Cannot index archive '" + core::PathToUtf8(provider.path) +
+                                             "': " + error.what());
+                }
             }
             else
             {
@@ -411,16 +423,17 @@ namespace navmesh::skyrim
                     catch (const std::exception &error)
                     {
                         reliable = false;
-                        std::cerr << "BSA extraction: unreadable winner " << provider.path.filename().string() << '/'
-                                  << logical << ": " << error.what() << '\n';
+                        std::cerr << "BSA extraction: unreadable winner "
+                                  << navmesh::core::PathToUtf8(provider.path.filename()) << '/' << logical << ": "
+                                  << error.what() << '\n';
                     }
                 }
             }
             catch (const std::exception &error)
             {
                 reliable = false;
-                std::cerr << "BSA extraction: skipped " << provider.path.filename().string() << ": " << error.what()
-                          << '\n';
+                std::cerr << "BSA extraction: skipped " << navmesh::core::PathToUtf8(provider.path.filename()) << ": "
+                          << error.what() << '\n';
             }
             return reliable;
         }

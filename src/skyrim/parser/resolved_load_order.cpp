@@ -1,5 +1,7 @@
 #include "skyrim/parser/plugin_parser.h"
+#include "core/io/file_path.h"
 #include "skyrim/parser/water_height.h"
+#include "skyrim/parser/text_encoding.h"
 
 #include <algorithm>
 #include <cctype>
@@ -9,6 +11,7 @@
 #include <iomanip>
 #include <iterator>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <zlib.h>
@@ -160,19 +163,19 @@ namespace
             record.raw->subrecords.push_back(std::move(sub));
             if (kind == "MAST" && masters)
             {
-                masters->push_back(Trim(Text(payload, data, size)));
+                masters->push_back(navmesh::skyrim::DecodePluginText(Trim(Text(payload, data, size))));
             }
             else if (kind == "EDID")
             {
-                record.editorId = Trim(Text(payload, data, size));
+                record.editorId = navmesh::skyrim::DecodePluginText(Trim(Text(payload, data, size)));
             }
             else if (kind == "FULL")
             {
-                record.name = Trim(Text(payload, data, size));
+                record.name = navmesh::skyrim::DecodePluginText(Trim(Text(payload, data, size)));
             }
             else if (kind == "MODL")
             {
-                record.modelPath = Trim(Text(payload, data, size));
+                record.modelPath = navmesh::skyrim::DecodePluginText(Trim(Text(payload, data, size)));
             }
             else if (kind == "NAME" && (record.type == "REFR" || record.type == "ACHR") && size >= 4)
             {
@@ -471,14 +474,14 @@ namespace navmesh::skyrim
         stream.read(reinterpret_cast<char *>(bytes.data()), 24);
         if (!stream || Text(bytes, 0, 4) != "TES4")
         {
-            diagnostics.push_back(
-                {DiagnosticKind::InvalidPlugin, path.filename().string(), "Expected a TES4 plugin header."});
+            diagnostics.push_back({DiagnosticKind::InvalidPlugin, navmesh::core::PathToUtf8(path.filename()),
+                                   "Expected a TES4 plugin header."});
             return false;
         }
         const auto payloadSize = U32(bytes, 4);
         if (length < 24 || payloadSize > static_cast<std::uint64_t>(length) - 24 || payloadSize > kMaxDecodedRecordSize)
         {
-            diagnostics.push_back({DiagnosticKind::InvalidPlugin, path.filename().string(),
+            diagnostics.push_back({DiagnosticKind::InvalidPlugin, navmesh::core::PathToUtf8(path.filename()),
                                    "TES4 header extends beyond the file or exceeds the safe decoded record size."});
             return false;
         }
@@ -487,8 +490,8 @@ namespace navmesh::skyrim
         stream.read(reinterpret_cast<char *>(payload.data()), payloadSize);
         if (!stream)
         {
-            diagnostics.push_back(
-                {DiagnosticKind::InvalidPlugin, path.filename().string(), "Cannot read TES4 payload."});
+            diagnostics.push_back({DiagnosticKind::InvalidPlugin, navmesh::core::PathToUtf8(path.filename()),
+                                   "Cannot read TES4 payload."});
             return false;
         }
         ResolvedRecord header{.type = "TES4"};
@@ -498,7 +501,8 @@ namespace navmesh::skyrim
         std::string error;
         if (!ParseSubrecords(*header.raw, header, &masters, error))
         {
-            diagnostics.push_back({DiagnosticKind::MalformedInput, path.filename().string(), "TES4 " + error});
+            diagnostics.push_back(
+                {DiagnosticKind::MalformedInput, navmesh::core::PathToUtf8(path.filename()), "TES4 " + error});
             return false;
         }
         return true;
@@ -511,7 +515,7 @@ namespace navmesh::skyrim
         std::error_code sizeError;
         if (!includeReferencesAndNavmeshes && std::filesystem::file_size(path, sizeError) > 512ULL * 1024ULL * 1024ULL)
         {
-            diagnostics.push_back({DiagnosticKind::UnsupportedRecord, path.filename().string(),
+            diagnostics.push_back({DiagnosticKind::UnsupportedRecord, navmesh::core::PathToUtf8(path.filename()),
                                    "Plugin exceeds the 512 MiB list-cells reader limit; it was skipped rather than "
                                    "risking an out-of-memory failure."});
             return false;
@@ -531,15 +535,15 @@ namespace navmesh::skyrim
         }
         if (b.size() < 24 || Text(b, 0, 4) != "TES4")
         {
-            diagnostics.push_back(
-                {DiagnosticKind::InvalidPlugin, path.filename().string(), "Expected a TES4 plugin header."});
+            diagnostics.push_back({DiagnosticKind::InvalidPlugin, navmesh::core::PathToUtf8(path.filename()),
+                                   "Expected a TES4 plugin header."});
             return false;
         }
         const auto headerEnd = 24ULL + U32(b, 4);
         if (headerEnd > b.size())
         {
-            diagnostics.push_back(
-                {DiagnosticKind::InvalidPlugin, path.filename().string(), "TES4 header extends beyond the file."});
+            diagnostics.push_back({DiagnosticKind::InvalidPlugin, navmesh::core::PathToUtf8(path.filename()),
+                                   "TES4 header extends beyond the file."});
             return false;
         }
         isLight = (U32(b, 8) & 0x200U) != 0;
@@ -550,10 +554,11 @@ namespace navmesh::skyrim
         std::string headerError;
         if (!ParseSubrecords(*header.raw, header, &masters, headerError))
         {
-            diagnostics.push_back({DiagnosticKind::MalformedInput, path.filename().string(), "TES4 " + headerError});
+            diagnostics.push_back(
+                {DiagnosticKind::MalformedInput, navmesh::core::PathToUtf8(path.filename()), "TES4 " + headerError});
             return false;
         }
-        const auto plugin = path.filename().string();
+        const auto plugin = navmesh::core::PathToUtf8(path.filename());
         const auto walk = [&](const auto &self, std::size_t begin, std::size_t end, std::uint32_t cell,
                               std::uint32_t world, bool persistent, bool temporary,
                               std::vector<std::array<std::uint8_t, 24>> groups) -> void
@@ -661,7 +666,7 @@ namespace navmesh::skyrim
                 {
                     line.erase(0, 1);
                 }
-                result.emplace_back(Trim(line));
+                result.push_back(core::PathFromUtf8(Trim(line)));
             }
         }
         return result;
@@ -689,12 +694,12 @@ namespace navmesh::skyrim
         {
             const auto &requested = input.plugins[requestedIndex];
             auto path = requested.is_absolute() ? requested : input.dataDirectory / requested;
-            const auto name = Lower(path.filename().string());
+            const auto name = Lower(navmesh::core::PathToUtf8(path.filename()));
             if (byName.contains(name))
             {
-                readEvents.push_back(
-                    {.duplicate = Diagnostic{DiagnosticKind::DuplicatePlugin, path.filename().string(),
-                                             "The load-order manifest names this plugin more than once."}});
+                readEvents.push_back({.duplicate = Diagnostic{
+                                          DiagnosticKind::DuplicatePlugin, navmesh::core::PathToUtf8(path.filename()),
+                                          "The load-order manifest names this plugin more than once."}});
                 continue;
             }
             Source source{.path = path};
@@ -708,9 +713,17 @@ namespace navmesh::skyrim
                     result.inputSnapshots.push_back({path, size, modified});
                 }
             }
-            source.metadataValid = reader.ReadMetadata(path, source.masters, source.light, source.diagnostics);
+            try
+            {
+                source.metadataValid = reader.ReadMetadata(path, source.masters, source.light, source.diagnostics);
+            }
+            catch (const std::exception &error)
+            {
+                throw std::runtime_error("Cannot read plugin metadata '" + core::PathToUtf8(path) +
+                                         "': " + error.what());
+            }
             byName.emplace(name, sources.size());
-            result.plugins.push_back(path.filename().string());
+            result.plugins.push_back(navmesh::core::PathToUtf8(path.filename()));
             readEvents.push_back({.source = sources.size()});
             sources.push_back(std::move(source));
         }
@@ -721,7 +734,7 @@ namespace navmesh::skyrim
                 if (!byName.contains(Lower(master)))
                 {
                     result.diagnostics.push_back(
-                        {DiagnosticKind::MissingMaster, source.path.filename().string(),
+                        {DiagnosticKind::MissingMaster, navmesh::core::PathToUtf8(source.path.filename()),
                          "Missing master '" + master + "'. Add it before this plugin in --load-order."});
                 }
             }
@@ -732,7 +745,8 @@ namespace navmesh::skyrim
             {
                 if (const auto it = byName.find(Lower(master)); it != byName.end() && it->second >= i)
                 {
-                    result.diagnostics.push_back({DiagnosticKind::Cycle, sources[i].path.filename().string(),
+                    result.diagnostics.push_back({DiagnosticKind::Cycle,
+                                                  navmesh::core::PathToUtf8(sources[i].path.filename()),
                                                   "Master '" + master + "' must occur earlier in the load order."});
                 }
             }
@@ -749,7 +763,7 @@ namespace navmesh::skyrim
             {
                 full[i] = nextFull++;
             }
-            result.pluginFormPrefixes.emplace(Lower(sources[i].path.filename().string()),
+            result.pluginFormPrefixes.emplace(Lower(navmesh::core::PathToUtf8(sources[i].path.filename())),
                                               sources[i].light ? 0xFE000000U | (light[i] << 12) : full[i] << 24);
         }
         const auto resolve = [&](std::size_t owner, std::uint32_t raw) -> std::optional<std::uint32_t>
@@ -793,22 +807,31 @@ namespace navmesh::skyrim
             {
                 continue;
             }
-            if (input.progress)
-            {
-                input.progress(i, sources.size(), source.path);
-            }
             // Metadata fixes master indices first; transfer records from just one plugin into winners at a time.
             std::vector<std::string> masters;
             std::vector<Diagnostic> diagnostics;
             bool isLight{};
             std::vector<ResolvedRecord> records;
-            const auto read =
-                reader.Read(source.path, records, masters, isLight, diagnostics, input.indexReferencesAndNavmeshes);
+            bool read{};
+            try
+            {
+                if (input.progress)
+                {
+                    input.progress(i, sources.size(), source.path);
+                }
+                read =
+                    reader.Read(source.path, records, masters, isLight, diagnostics, input.indexReferencesAndNavmeshes);
+            }
+            catch (const std::exception &error)
+            {
+                throw std::runtime_error("Cannot read plugin records '" + core::PathToUtf8(source.path) +
+                                         "': " + error.what());
+            }
             source.diagnostics = std::move(diagnostics);
             if (read && (masters != source.masters || isLight != source.light))
             {
                 result.diagnostics.push_back(
-                    {DiagnosticKind::InvalidPlugin, source.path.filename().string(),
+                    {DiagnosticKind::InvalidPlugin, navmesh::core::PathToUtf8(source.path.filename()),
                      "Plugin master metadata changed while resolving its records; rerun with coherent inputs."});
                 continue;
             }
@@ -819,7 +842,8 @@ namespace navmesh::skyrim
                 const auto global = resolve(i, record.formId);
                 if (!global)
                 {
-                    result.diagnostics.push_back({DiagnosticKind::UnresolvedFormId, sources[i].path.filename().string(),
+                    result.diagnostics.push_back({DiagnosticKind::UnresolvedFormId,
+                                                  navmesh::core::PathToUtf8(sources[i].path.filename()),
                                                   "Cannot resolve source-local FormID " + HexFormId(sourceFormId) +
                                                       " in " + record.type + ": " + unresolvedReason(i, sourceFormId)});
                     continue;
@@ -840,7 +864,7 @@ namespace navmesh::skyrim
                     if (!resolvedReference)
                     {
                         result.diagnostics.push_back(
-                            {DiagnosticKind::UnresolvedFormId, sources[i].path.filename().string(),
+                            {DiagnosticKind::UnresolvedFormId, navmesh::core::PathToUtf8(sources[i].path.filename()),
                              "Cannot resolve referenced source-local FormID " + HexFormId(reference) + " in " +
                                  record.type + " " + HexFormId(sourceFormId) + " (load-order FormID " +
                                  HexFormId(record.formId) + "): " + unresolvedReason(i, reference)});
@@ -859,7 +883,8 @@ namespace navmesh::skyrim
                     record.navmeshDoor->navmeshId = target ? resolve(i, target).value_or(0) : 0;
                     if (target && !record.navmeshDoor->navmeshId)
                     {
-                        result.diagnostics.push_back({DiagnosticKind::UnresolvedFormId, source.path.filename().string(),
+                        result.diagnostics.push_back({DiagnosticKind::UnresolvedFormId,
+                                                      navmesh::core::PathToUtf8(source.path.filename()),
                                                       "Cannot resolve a door's XNDP NAVM identity."});
                     }
                 }
@@ -1252,13 +1277,14 @@ namespace navmesh::skyrim
             const auto size = std::filesystem::file_size(source.path, fileError);
             if (fileError || size != source.size)
             {
-                error = "Input plugin changed or became unavailable: " + source.path.filename().string();
+                error =
+                    "Input plugin changed or became unavailable: " + navmesh::core::PathToUtf8(source.path.filename());
                 return false;
             }
             const auto modified = std::filesystem::last_write_time(source.path, fileError);
             if (fileError || modified != source.modified)
             {
-                error = "Input plugin changed during generation: " + source.path.filename().string();
+                error = "Input plugin changed during generation: " + navmesh::core::PathToUtf8(source.path.filename());
                 return false;
             }
         }

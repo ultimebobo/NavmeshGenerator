@@ -305,6 +305,33 @@ class BatchRebuild(unittest.TestCase):
         (application / "plugins.txt").unlink()
         self.run_vortex(game, application, "--list-cells", code=2, output="missing-list")
 
+    def test_unicode_plugin_names_through_resolution_and_export(self):
+        master = "Master\u00b0.esm"
+        plugin = "Patch_\u65e5\u672c.esp"
+        (self.root / "Baseline.esm").rename(self.root / master)
+        source = (self.root / "Patch.esp").read_bytes()
+        header_size = struct.unpack_from("<I", source, 4)[0]
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        header += sub("MAST", master.encode("cp1252") + b"\0") + sub("DATA", bytes(8))
+        (self.root / plugin).write_bytes(record("TES4", 0, header) + source[24 + header_size:])
+        (self.root / "Patch.esp").unlink()
+        (self.root / "plugins.txt").write_text(f"{master}\n{plugin}\n", encoding="utf-8")
+        for copy in (False, True):
+            with self.subTest(copy=copy):
+                output = self.run_cli("--rebuild-plugin", plugin,
+                                      "--copy-plugin" if copy else "--generate-plugin",
+                                      output=f"output_\u65e5\u672c_{copy}")
+                report = json.loads((output / "batch-report.json").read_text(encoding="utf-8"))
+                self.assertEqual(report["status"], "complete")
+                emitted = output / (plugin if copy else "generated-navmesh.esp")
+                masters = [payload for kind, payload in read_subrecords(read_records(emitted)[0][3])
+                           if kind == b"MAST"]
+                self.assertIn(master.encode("cp1252") + b"\0", masters)
+                readback = f"{master}\n{emitted}\n" if copy else f"{master}\n{plugin}\n{emitted}\n"
+                (self.root / "plugins.txt").write_text(readback, encoding="utf-8")
+                self.run_cli("--list-cells", output=f"readback-{copy}")
+                (self.root / "plugins.txt").write_text(f"{master}\n{plugin}\n", encoding="utf-8")
+
     def test_plugin_scope_and_single_patch(self):
         output = self.run_cli("--rebuild-plugin", "pAtCh.EsP", "--generate-plugin")
         report = json.loads((output / "batch-report.json").read_text())

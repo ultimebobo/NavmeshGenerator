@@ -373,9 +373,13 @@ void TestCollisionImpactSelection()
             {
                 Select(order, root, assets);
             }
-            catch (const std::runtime_error &)
+            catch (const std::runtime_error &error)
             {
                 failed = true;
+                const std::string message = error.what();
+                Require(message.find("in 'Edit.esp'") != std::string::npos);
+                Require(message.find("base plugin 'Base.esm'") != std::string::npos);
+                Require(message.find("Unresolved.nif") != std::string::npos);
             }
             Require(failed);
         };

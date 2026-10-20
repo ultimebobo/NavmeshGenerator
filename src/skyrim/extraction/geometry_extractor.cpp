@@ -1,4 +1,5 @@
 #include "skyrim/extraction/geometry_extractor.h"
+#include "core/io/file_path.h"
 #include "skyrim/extraction/asset_cache.h"
 #include "skyrim/extraction/bsa_archive.h"
 #include "core/geometry/convex_hull.h"
@@ -54,7 +55,7 @@ namespace
     /// Behavior-driven passage assets can keep their state names outside the NIF in an HKX graph.
     [[nodiscard]] bool IsPassageAsset(const std::string &path)
     {
-        const auto name = std::filesystem::path(NormalizedModelPath(path)).stem().string();
+        const auto name = navmesh::core::PathToUtf8(navmesh::core::PathFromUtf8(NormalizedModelPath(path)).stem());
         return name.find("door") != std::string::npos || name.find("gate") != std::string::npos ||
                name.find("portcullis") != std::string::npos;
     }
@@ -72,7 +73,7 @@ namespace
             return false;
         }
         const auto normalized = NormalizedModelPath(reference.modelPath);
-        const auto name = std::filesystem::path(normalized).filename().string();
+        const auto name = navmesh::core::PathToUtf8(navmesh::core::PathFromUtf8(normalized).filename());
         constexpr std::array transientKinds{"trap", "hazard", "toggle", "projectile", "breath", "stream", "jet"};
         if (std::any_of(transientKinds.begin(), transientKinds.end(),
                         [&](const char *kind) { return normalized.find(kind) != std::string::npos; }))
@@ -87,7 +88,7 @@ namespace
     [[nodiscard]] bool IsHearthAsset(const std::string &path)
     {
         const auto normalized = NormalizedModelPath(path);
-        const auto name = std::filesystem::path(normalized).stem().string();
+        const auto name = navmesh::core::PathToUtf8(navmesh::core::PathFromUtf8(normalized).stem());
         return normalized.find("trap") == std::string::npos &&
                (name.find("firepit") != std::string::npos || name.find("fireplace") != std::string::npos ||
                 name.find("hearth") != std::string::npos);
@@ -97,7 +98,7 @@ namespace
     [[nodiscard]] bool IsFurniture(const navmesh::core::Reference &reference)
     {
         const auto path = NormalizedModelPath(reference.modelPath);
-        const auto name = std::filesystem::path(path).stem().string();
+        const auto name = navmesh::core::PathToUtf8(navmesh::core::PathFromUtf8(path).stem());
         constexpr std::array furnitureKinds{"chair",   "table",    "shelf", "cupboard",
                                             "dresser", "wardrobe", "bench", "bed"};
         const bool clutterFurniture = path.starts_with("clutter/") &&
@@ -1261,9 +1262,9 @@ namespace
                 character = '/';
             }
         }
-        auto relativePath = std::filesystem::path(normalized);
+        auto relativePath = navmesh::core::PathFromUtf8(normalized);
         const auto first = relativePath.begin();
-        if (first == relativePath.end() || first->string() != "meshes")
+        if (first == relativePath.end() || *first != "meshes")
         {
             relativePath = std::filesystem::path("meshes") / relativePath;
         }
@@ -1418,7 +1419,7 @@ namespace
 
     [[nodiscard]] std::string AssetKey(const std::filesystem::path &path)
     {
-        auto key = path.generic_string();
+        auto key = navmesh::core::PathToUtf8(path);
         std::transform(key.begin(), key.end(), key.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return key;
@@ -1450,7 +1451,7 @@ namespace
             {
                 continue;
             }
-            auto logical = relative.string();
+            auto logical = navmesh::core::PathToUtf8(relative);
             std::replace(logical.begin(), logical.end(), '/', '\\');
             std::transform(logical.begin(), logical.end(), logical.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -1493,8 +1494,8 @@ namespace navmesh::skyrim
             std::error_code error;
             const auto size = std::filesystem::file_size(path, error);
             const auto stamp = std::filesystem::last_write_time(path, error).time_since_epoch().count();
-            return path.lexically_normal().generic_string() + ":" + std::to_string(size) + ":" + std::to_string(stamp) +
-                   (includeRender ? ":display" : ":navigation");
+            return navmesh::core::PathToUtf8(path.lexically_normal()) + ":" + std::to_string(size) + ":" +
+                   std::to_string(stamp) + (includeRender ? ":display" : ":navigation");
         }
         std::size_t GeometryBytes(const TriangleGeometry &geometry)
         {
@@ -1664,9 +1665,9 @@ namespace navmesh::skyrim
         const bool snapshotOwned = std::filesystem::exists(cacheDirectory / ".navmesh-assets.json");
         const auto cachedKey = [&](const std::filesystem::path &relative)
         {
-            return (cacheDirectory / relative).lexically_normal().generic_string() +
+            return navmesh::core::PathToUtf8((cacheDirectory / relative).lexically_normal()) +
                    (navigationOnly ? ":navigation-snapshot" : ":display-snapshot") +
-                   (IsHearthAsset(relative.generic_string()) ? ":hearth" : "");
+                   (IsHearthAsset(navmesh::core::PathToUtf8(relative)) ? ":hearth" : "");
         };
         output.archiveSearchComplete = ExtractBsaModels(
             dataDirectory, cacheDirectory, cell, assets,

@@ -1,4 +1,5 @@
 #include "skyrim/extraction/bsa_archive.h"
+#include "core/io/file_path.h"
 
 #include <chrono>
 #include <fstream>
@@ -27,7 +28,7 @@ int main(int argc, char **argv)
         std::vector<std::filesystem::path> archives;
         for (std::string path; std::getline(archiveList, path);)
         {
-            archives.emplace_back(path);
+            archives.push_back(navmesh::core::PathFromUtf8(path));
         }
         std::set<std::string> requested;
         for (std::string name; std::getline(requestList, name);)
@@ -56,7 +57,7 @@ int main(int argc, char **argv)
             {
                 for (const auto &path : requested)
                 {
-                    changed.emplace(path);
+                    changed.insert(navmesh::core::PathFromUtf8(path));
                 }
             }
             std::set<std::string> models;

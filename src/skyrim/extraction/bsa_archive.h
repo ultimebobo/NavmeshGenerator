@@ -27,7 +27,7 @@ namespace navmesh::skyrim
         ~BsaModelExtractor();
 
         /** Extract uncached winning models, publishing complete files by rename.
-         * @param requested Logical meshes paths, ASCII case insensitive, with either slash convention.
+         * @param requested UTF-8 logical meshes paths, ASCII case insensitive, with either slash convention.
          * @return False on an unsafe path, index, decoding, or cache I/O failure; successful
          * files remain usable. An unreadable winning entry never uses a lower provider.
          * Missing names are persisted only after a reliable search of every provider.

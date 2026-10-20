@@ -158,6 +158,7 @@ namespace navmesh::skyrim
         std::vector<std::array<std::uint8_t, 24>> groupHeaders;
         // These model the roadmap record subset without discarding unrecognised fields.
         std::optional<PluginRecord> raw;
+        /// Decoded UTF-8 logical asset path; encoded bytes remain in raw subrecords for lossless copying.
         std::optional<std::string> modelPath;
         std::optional<std::array<float, 6>> transform;
         std::optional<float> referenceScale;
@@ -224,11 +225,12 @@ namespace navmesh::skyrim
         virtual ~IPluginReader() = default;
         /** Read only master order and light-plugin identity before record resolution.
          * The default implementation delegates to Read without reference indexing and discards records.
+         * Master names are decoded UTF-8; raw header bytes remain separate.
          * @return False on header failure; appends input diagnostics without changing game files.
          */
         virtual bool ReadMetadata(const std::filesystem::path &path, std::vector<std::string> &masters, bool &isLight,
                                   std::vector<Diagnostic> &diagnostics) const;
-        /// Read owned indexed records and master names; false on unusable input, with diagnostics.
+        /// Read owned indexed records and UTF-8 master names; false on unusable input, with diagnostics.
         virtual bool Read(const std::filesystem::path &path, std::vector<ResolvedRecord> &records,
                           std::vector<std::string> &masters, bool &isLight, std::vector<Diagnostic> &diagnostics,
                           bool includeReferencesAndNavmeshes = true) const = 0;
@@ -245,6 +247,7 @@ namespace navmesh::skyrim
                   std::vector<std::string> &masters, bool &isLight, std::vector<Diagnostic> &diagnostics,
                   bool includeReferencesAndNavmeshes = true) const override;
     };
+    /// Read UTF-8 plugin paths in order, ignoring blank/comment lines and optional activation markers.
     [[nodiscard]] std::vector<std::filesystem::path> ReadLoadOrderManifest(const std::filesystem::path &manifest);
     /// Resolve winning records and cells from an ordered plugin list.
     /// @param input Data directory and plugins in load order, plus optional progress callback.
@@ -255,6 +258,7 @@ namespace navmesh::skyrim
     /// References include valid model-local base bounds, automatic DOOR state and reciprocal teleport arrival positions;
     /// Missing or deleted return links supply no arrival anchor; initially disabled quest doors retain theirs.
     /// Partial CELL/WRLD declarations retain their full parent's coordinates and environment data.
+    /// Unexpected reader failures throw with the plugin path and metadata/record stage.
     [[nodiscard]] ResolvedLoadOrder ResolveLoadOrder(const LoadOrderInput &input,
                                                      const IPluginReader &reader = DirectPluginReader{});
 

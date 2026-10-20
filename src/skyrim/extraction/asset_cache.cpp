@@ -22,7 +22,7 @@ namespace navmesh::skyrim
         {
             for (const auto &entry : std::filesystem::directory_iterator(dataDirectory))
             {
-                auto extension = entry.path().extension().string();
+                auto extension = navmesh::core::PathToUtf8(entry.path().extension());
                 std::transform(extension.begin(), extension.end(), extension.begin(),
                                [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
                 if (entry.is_regular_file() && extension == ".bsa")
@@ -41,12 +41,12 @@ namespace navmesh::skyrim
     {
         const auto archives = ModelArchives(dataDirectory, assets);
         core::ContentHash hash;
-        hash.Add("navmesh-assets-schema-1\n");
-        hash.Add(std::filesystem::absolute(dataDirectory).lexically_normal().generic_string());
+        hash.Add("navmesh-assets-schema-2\n");
+        hash.Add(navmesh::core::PathToUtf8(std::filesystem::absolute(dataDirectory).lexically_normal()));
         for (const auto &archive : archives)
         {
             hash.Add("\n");
-            hash.Add(std::filesystem::absolute(archive).lexically_normal().generic_string());
+            hash.Add(navmesh::core::PathToUtf8(std::filesystem::absolute(archive).lexically_normal()));
             std::error_code error;
             hash.Add(":" + std::to_string(std::filesystem::file_size(archive, error)));
             hash.Add(":" + std::to_string(std::filesystem::last_write_time(archive, error).time_since_epoch().count()));
@@ -60,7 +60,7 @@ namespace navmesh::skyrim
         std::ofstream manifest(snapshot / "archives.txt", std::ios::trunc);
         for (const auto &archive : archives)
         {
-            manifest << archive.string() << '\n';
+            manifest << navmesh::core::PathToUtf8(archive) << '\n';
         }
         if (!marker || !manifest)
         {
@@ -116,16 +116,17 @@ namespace navmesh::skyrim
         }
         bool OwnedCacheFile(const std::filesystem::path &relative, bool snapshot)
         {
-            const auto name = relative.filename().string();
+            const auto name = navmesh::core::PathToUtf8(relative.filename());
             if (!snapshot)
             {
-                return (relative.extension() == ".json" && IsDigest(relative.stem().string())) ||
+                return (relative.extension() == ".json" && IsDigest(navmesh::core::PathToUtf8(relative.stem()))) ||
                        (name.starts_with("loose-assets-") && name.ends_with(".tsv") &&
                         IsDigest(std::string_view(name).substr(13, name.size() - 17)));
             }
-            const auto first = relative.begin()->string();
+            const auto first = core::PathToUtf8(*relative.begin());
             return (first == "meshes" && relative.extension() == ".nif") ||
-                   (first == "candidates" && relative.extension() == ".gz" && IsDigest(relative.stem().string())) ||
+                   (first == "candidates" && relative.extension() == ".gz" &&
+                    IsDigest(navmesh::core::PathToUtf8(relative.stem()))) ||
                    name == "archives.txt" || name == "changed-archives.txt" || name == "changed-models.txt" ||
                    name == ".missing-models.txt";
         }
@@ -162,7 +163,7 @@ namespace navmesh::skyrim
             {
                 continue;
             }
-            const auto name = directory.path().filename().string();
+            const auto name = navmesh::core::PathToUtf8(directory.path().filename());
             const bool ownedSnapshot = name.size() == 64 && IsDigest(name) &&
                                        std::filesystem::is_regular_file(directory.path() / ".navmesh-assets.json");
             if (!ownedSnapshot && name != ".indexes" && name != ".mo2")

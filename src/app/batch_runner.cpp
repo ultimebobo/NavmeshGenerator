@@ -1,4 +1,5 @@
 #include "app/batch_runner.h"
+#include "core/io/file_path.h"
 #include "app/cell_scene.h"
 
 #include "app/geometry_pipeline.h"
@@ -189,8 +190,9 @@ namespace navmesh::app::detail
         const auto stop = [&] { return cancelled && cancelled(); };
         const auto &copySource =
             options.rebuildScope == app::RebuildScope::Cell ? options.copySourcePlugin : options.affectedPlugin;
-        if (!copySource.empty() && std::none_of(paths.begin(), paths.end(), [&](const auto &path)
-                                                { return EqualsIgnoreCase(path.filename().string(), copySource); }))
+        if (!copySource.empty() &&
+            std::none_of(paths.begin(), paths.end(), [&](const auto &path)
+                         { return EqualsIgnoreCase(navmesh::core::PathToUtf8(path.filename()), copySource); }))
         {
             throw std::invalid_argument("Rebuild plugin is not active in the resolved load order: " + copySource);
         }
@@ -243,12 +245,12 @@ namespace navmesh::app::detail
                 {
                     for (const auto &archive : assets->archives)
                     {
-                        const auto archiveStem = archive.stem().string();
+                        const auto archiveStem = navmesh::core::PathToUtf8(archive.stem());
                         const bool belongsToChangedPlugin = std::any_of(
                             std::next(paths.begin()), paths.end(),
                             [&](const auto &plugin)
                             {
-                                const auto pluginStem = plugin.stem().string();
+                                const auto pluginStem = navmesh::core::PathToUtf8(plugin.stem());
                                 return EqualsIgnoreCase(archiveStem, pluginStem) ||
                                        (archiveStem.size() > pluginStem.size() &&
                                         archiveStem[pluginStem.size()] == ' ' &&
@@ -266,9 +268,9 @@ namespace navmesh::app::detail
             }
             else
             {
-                const auto selected =
-                    std::find_if(paths.begin(), paths.end(), [&](const auto &path)
-                                 { return EqualsIgnoreCase(path.filename().string(), options.affectedPlugin); });
+                const auto selected = std::find_if(
+                    paths.begin(), paths.end(), [&](const auto &path)
+                    { return EqualsIgnoreCase(navmesh::core::PathToUtf8(path.filename()), options.affectedPlugin); });
                 if (selected != paths.end() && !inside(*selected, options.data))
                 {
                     for (const auto &[logical, physical] : assets->looseModels)
@@ -279,12 +281,13 @@ namespace navmesh::app::detail
                         }
                     }
                 }
-                const auto pluginStem = std::filesystem::path(options.affectedPlugin).stem().string();
+                const auto pluginStem =
+                    navmesh::core::PathToUtf8(navmesh::core::PathFromUtf8(options.affectedPlugin).stem());
                 archiveModelsChanged =
                     std::any_of(assets->archives.begin(), assets->archives.end(),
                                 [&](const auto &archive)
                                 {
-                                    const auto stem = archive.stem().string();
+                                    const auto stem = navmesh::core::PathToUtf8(archive.stem());
                                     return EqualsIgnoreCase(stem, pluginStem) ||
                                            (stem.size() > pluginStem.size() && stem[pluginStem.size()] == ' ' &&
                                             EqualsIgnoreCase(stem.substr(0, pluginStem.size()), pluginStem));
@@ -293,11 +296,12 @@ namespace navmesh::app::detail
         }
         if (archiveModelsChanged && assets)
         {
-            const auto pluginStem = std::filesystem::path(options.affectedPlugin).stem().string();
+            const auto pluginStem =
+                navmesh::core::PathToUtf8(navmesh::core::PathFromUtf8(options.affectedPlugin).stem());
             for (const auto &archive : assets->archives)
             {
                 const auto relative = archive.lexically_relative(options.data);
-                const auto stem = archive.stem().string();
+                const auto stem = navmesh::core::PathToUtf8(archive.stem());
                 if ((options.rebuildScope == app::RebuildScope::LoadOrder &&
                      (relative.empty() || *relative.begin() == "..")) ||
                     (options.rebuildScope == app::RebuildScope::Plugin &&
@@ -500,7 +504,7 @@ namespace navmesh::app::detail
                 const auto size = std::filesystem::file_size(paths[i], inputError);
                 const auto stamp = std::filesystem::last_write_time(paths[i], inputError).time_since_epoch().count();
                 out << std::format("    {{\"path\":\"{}\",\"bytes\":{},\"timestamp\":{}}}{}\n",
-                                   JsonEscape(paths[i].generic_string()), inputError ? 0 : size, stamp,
+                                   JsonEscape(navmesh::core::PathToUtf8(paths[i])), inputError ? 0 : size, stamp,
                                    i + 1 == paths.size() ? "" : ",");
             }
             out << "  ],\n  \"input_diagnostics\":[\n";
@@ -576,14 +580,15 @@ namespace navmesh::app::detail
                         continue;
                     }
                     if (iterator->is_directory(sizeError) &&
-                        iterator->path().filename().string().starts_with(".candidate-staging-"))
+                        navmesh::core::PathToUtf8(iterator->path().filename()).starts_with(".candidate-staging-"))
                     {
                         iterator.disable_recursion_pending();
                         continue;
                     }
                     if (iterator->is_regular_file(sizeError) && iterator->path() != summaryPath)
                     {
-                        artifactBytes[iterator->path().extension().string()] += iterator->file_size(sizeError);
+                        artifactBytes[navmesh::core::PathToUtf8(iterator->path().extension())] +=
+                            iterator->file_size(sizeError);
                     }
                 }
             }
@@ -1092,7 +1097,7 @@ namespace navmesh::app::detail
                 return fail(error);
             }
             std::cout << (options.copyPlugin ? "Generated plugin copy: " : "Generated batch NAVM override plugin: ")
-                      << written.string() << '\n';
+                      << navmesh::core::PathToUtf8(written) << '\n';
         }
         skyrim::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL);
         const auto generationFailures = std::count_if(results.begin(), results.end(), [](const auto &result)
