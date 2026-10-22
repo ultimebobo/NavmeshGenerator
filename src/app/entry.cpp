@@ -45,14 +45,8 @@ int main(int argc, char **argv)
     }
     try
     {
-        return navmesh::app::Run(navmesh::app::ParseCommandLine(argc, argv),
-                                 [](int percent, std::string_view status)
-                                 {
-                                     if (percent >= 78)
-                                     {
-                                         std::cerr << percent << "% " << status << '\n';
-                                     }
-                                 });
+        return navmesh::app::Run(navmesh::app::ParseCommandLine(argc, argv), [](int percent, std::string_view status)
+                                 { std::cerr << percent << "% " << status << '\n'; });
     }
     catch (const std::exception &error)
     {

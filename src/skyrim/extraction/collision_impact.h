@@ -22,6 +22,8 @@ namespace navmesh::skyrim
         bool terrainOnly{};
         /// Optional cooperative cancellation; cancellation stops selection before generation or writing.
         GeometryCancellationCallback cancelled;
+        /// Optional synchronous activity sink identifying the reference and model about to be compared.
+        std::function<void(std::string_view)> progress;
     };
 
     /** Select cells whose supported terrain, water or placed collision inputs change.

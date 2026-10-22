@@ -4,6 +4,14 @@ This project is intentionally split into processing stages so the analysis logic
 
 The build targets the Windows application, neutral core, and tests. Runtime game APIs are outside the processing pipeline.
 
+The app-owned `app/run_progress` reporter serializes activity events, publishes
+idle heartbeats, and appends flushed UTF-8 logs independently of processing and
+export policy. The CLI and desktop consume the same stream. The reporter owns
+its timer thread and joins it before returning a terminal result; consumers must
+accept serialized callbacks from either the processing or timer thread. Batch
+orchestration supplies completion counters and worker snapshots without changing
+task ordering. Logging failures warn rather than rejecting generated navigation.
+
 The neutral `core/geometry/convex_hull` helper triangulates closed vertex hulls
 without game or platform dependencies. Skyrim extraction decodes Havok vertices,
 applies the existing rigid-body and reference transforms, and classifies fixed

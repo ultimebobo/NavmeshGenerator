@@ -109,6 +109,21 @@ Saved diagnostic reports are named in the failure message when available.
 CLI parsing rejects unknown options, missing values and malformed numbers before
 reading game inputs.
 
+Every run appends timestamped activity and its terminal result to `run.log` in
+the output folder, flushing entries as they are published. The CLI shows activity
+from input preparation onward. **Recent activity** opens the desktop's bounded
+activity history and provides **Copy log path** for support reports. The status
+area fits its wrapped text without an inner scrollbar. Status shows
+elapsed time, input identities and batch completion/cache/skip/failure counters,
+with a worker snapshot and memory-admission waits where applicable. Reference-level
+updates are throttled; the latest operation remains available to periodic idle
+heartbeats. **Still running** means the process can report activity, not that the
+operation has advanced or that it cannot be stuck. Heartbeats retain progress and
+show operation duration, time since activity and, after a collected CELL result,
+time since completion. Worker counts describe the last published snapshot. Log
+failures warn without changing the processing result; include `batch-report.json`
+and the named input reports alongside the log when reporting failures.
+
 Candidate warnings do not fail a run. A candidate topology validation error is a
 failure and appears in red with the validation reason. The inspection scene and
 candidate exports are written before this check so they remain available for
@@ -195,7 +210,7 @@ NavmeshGenerator.exe --mo2 "D:\Modding\MO2\Skyrim SE" --profile "My Actual Profi
 - `profiles\<profile>\plugins.txt` and `loadorder.txt` to determine enabled plugins and plugin order;
 - base-game `Data`, enabled mod directories, and `Overwrite` to reproduce MO2's loose-file winners.
 
-The first output for every MO2 operation is `input-report.json`. Compact/plugin-only batches retain winner counts and a shared loose-asset catalog path; full inspection includes every virtual winner. It identifies the profile, profile files read, active plugins, enabled mods, physical paths chosen for every input file, and a snapshot hash. It must warn about missing files, duplicate plugins, unsupported archive sources, or profile changes observed during the run.
+The input-resolution report for every MO2 operation is `input-report.json`. Compact/plugin-only batches retain winner counts and a shared loose-asset catalog path; full inspection includes every virtual winner. It identifies the profile, profile files read, active plugins, enabled mods, physical paths chosen for every input file, and a snapshot hash. It must warn about missing files, duplicate plugins, unsupported archive sources, or profile changes observed during the run.
 
 MO2's profile files are the source of truth. `--data`, `--load-order`, `--mods-dir`, and `--profiles-dir` may exist only as explicitly marked developer/test escape hatches; they are not examples for normal use.
 

@@ -187,7 +187,7 @@ namespace navmesh::app::detail
                  const navmesh::skyrim::ModelAssetSources *assets, const std::vector<std::filesystem::path> &paths,
                  const navmesh::app::ProgressCallback &progressSink,
                  const navmesh::app::CancellationCallback &cancelled, double inputPreparationSeconds,
-                 const navmesh::skyrim::BaseObjectSwapInput *bosInputs)
+                 const navmesh::skyrim::BaseObjectSwapInput *bosInputs, const navmesh::app::RunEventCallback &events)
     {
         using namespace navmesh;
         int lastPercent = 30;
@@ -378,7 +378,20 @@ namespace navmesh::app::detail
                      .changedModels = changedModels,
                      .archiveModelsChanged = archiveModelsChanged,
                      .terrainOnly = options.terrainOnly,
-                     .cancelled = cancelled},
+                     .cancelled = cancelled,
+                     .progress =
+                         [&](std::string_view message)
+                     {
+                         if (events)
+                         {
+                             events(
+                                 {.kind = app::RunEventKind::Detail, .percent = 30, .message = std::string(message)});
+                         }
+                         else
+                         {
+                             progress(30, message);
+                         }
+                     }},
                     modelCache, selectionStatistics);
             }
         }
@@ -500,6 +513,10 @@ namespace navmesh::app::detail
         {
             metadata.warnings.push_back(missingModelWarning);
             std::cerr << missingModelWarning << '\n';
+            if (events)
+            {
+                events({.kind = app::RunEventKind::Warning, .percent = lastPercent, .message = missingModelWarning});
+            }
         }
         const auto batchMetadata = reproducibility::ToJson(metadata, "    ");
         const auto summaryPath = options.output / "batch-report.json";
@@ -769,8 +786,33 @@ namespace navmesh::app::detail
         std::deque<Pending> pending;
         std::size_t pendingBytes{};
         auto lastCheckpoint = std::chrono::steady_clock::now();
-        const auto collect = [&]() -> int
+        std::size_t observedGenerated{}, observedSkipped{}, observedFailed{};
+        // Futures stay in target order; ready results are no longer active workers before collection.
+        const auto batchActivity = [&](std::string_view operation, app::RunEventKind kind = app::RunEventKind::Progress)
         {
+            std::size_t active{};
+            for (const auto &job : pending)
+            {
+                active += job.result.wait_for(std::chrono::seconds::zero()) == std::future_status::ready ? 0 : 1;
+            }
+            const auto counters =
+                std::format("completed {}/{}; generated {}; cached {}; skipped {}; failed {}; worker snapshot: active "
+                            "{}, in flight {}",
+                            observedGenerated + observedSkipped + observedFailed, results.size(), observedGenerated,
+                            candidateHits, observedSkipped, observedFailed, active, pending.size());
+            if (events)
+            {
+                events(
+                    {.kind = kind, .percent = lastPercent, .message = std::string(operation), .batchStatus = counters});
+            }
+            else
+            {
+                progress(lastPercent, std::string(operation) + " | " + counters);
+            }
+        };
+        const auto collect = [&](std::string_view reason = "Waiting for generation result") -> int
+        {
+            batchActivity(reason);
             auto job = std::move(pending.front());
             pending.pop_front();
             pendingBytes -= job.estimatedBytes;
@@ -788,9 +830,23 @@ namespace navmesh::app::detail
             {
                 std::cerr << std::format("CELL {:08X}: {}; see batch-report.json for validation findings\n",
                                          result.cell->id, result.status);
+                if (events)
+                {
+                    for (const auto &finding : result.diagnostics)
+                    {
+                        events({.kind = app::RunEventKind::Warning,
+                                .percent = lastPercent,
+                                .message = std::format("CELL {:08X}: {}", result.cell->id, finding)});
+                    }
+                }
             }
             ++completedCells;
             candidateHits += result.reused ? 1 : 0;
+            observedGenerated += result.status == "generated" ? 1 : 0;
+            observedFailed += result.status == "skipped_generation_failed" ? 1 : 0;
+            batchActivity(std::format("CELL {:08X}: {}{}", result.cell->id, result.status,
+                                      result.error.empty() ? "" : "; " + result.error),
+                          app::RunEventKind::CellCompleted);
             if (result.status == "generated")
             {
                 generatedPolygons += result.candidate.mesh.polygons.size();
@@ -837,6 +893,9 @@ namespace navmesh::app::detail
                 result.status = "skipped_existing_navm";
                 if (!options.makeScene)
                 {
+                    ++observedSkipped;
+                    batchActivity(std::format("CELL {:08X}: {}", cell.id, result.status),
+                                  app::RunEventKind::CellCompleted);
                     continue;
                 }
             }
@@ -844,11 +903,15 @@ namespace navmesh::app::detail
                 record && record->raw && (record->raw->flags & 0x20U))
             {
                 result.status = "skipped_deleted_cell";
+                ++observedSkipped;
+                batchActivity(std::format("CELL {:08X}: {}", cell.id, result.status), app::RunEventKind::CellCompleted);
                 continue;
             }
             if (IsPersistentExteriorCell(cell, resolved.FindWinning(cell.id)))
             {
                 result.status = "skipped_persistent_cell";
+                ++observedSkipped;
+                batchActivity(std::format("CELL {:08X}: {}", cell.id, result.status), app::RunEventKind::CellCompleted);
                 continue;
             }
             const auto update = [&](std::string_view status)
@@ -900,13 +963,30 @@ namespace navmesh::app::detail
                         uniqueModels.insert(reference.modelPath);
                     }
                 }
-                auto extracted =
-                    options.terrainOnly
-                        ? skyrim::GeometryExtraction{}
-                        : skyrim::ExtractGeometry(
-                              options.data, geometryCell, assetCache, [&](std::size_t done, std::size_t total)
-                              { update(std::format("Geometry {:08X}: reference {}/{}", neighbor->id, done, total)); },
-                              stop, assets, &modelCache, !options.makeScene);
+                auto extracted = options.terrainOnly
+                                     ? skyrim::GeometryExtraction{}
+                                     : skyrim::ExtractGeometry(
+                                           options.data, geometryCell, assetCache,
+                                           [&](std::size_t done, std::size_t total)
+                                           {
+                                               const auto model = done < geometryCell.references.size()
+                                                                      ? geometryCell.references[done].modelPath
+                                                                      : std::string{};
+                                               const auto message = std::format(
+                                                   "CELL {:08X}; geometry supplier {:08X}: reference {}/{}; model {}",
+                                                   cell.id, neighbor->id, done, total, model);
+                                               if (events)
+                                               {
+                                                   events({.kind = app::RunEventKind::Detail,
+                                                           .percent = lastPercent,
+                                                           .message = message});
+                                               }
+                                               else
+                                               {
+                                                   update(message);
+                                               }
+                                           },
+                                           stop, assets, &modelCache, !options.makeScene);
                 if (stop())
                 {
                     result.status = "cancelled";
@@ -957,6 +1037,8 @@ namespace navmesh::app::detail
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - extractionStarted).count();
             if (skipGeneration)
             {
+                ++observedSkipped;
+                batchActivity(std::format("CELL {:08X}: {}", cell.id, result.status), app::RunEventKind::CellCompleted);
                 continue;
             }
             std::vector<core::CandidateExit> exits;
@@ -994,7 +1076,10 @@ namespace navmesh::app::detail
             while (!pending.empty() && (pending.size() >= options.workers ||
                                         estimatedBytes > workBudget - std::min(workBudget, pendingBytes)))
             {
-                if (const auto status = collect(); status != 0)
+                const auto reason = estimatedBytes > workBudget - std::min(workBudget, pendingBytes)
+                                        ? "Waiting for generation memory admission"
+                                        : "Waiting for a generation worker";
+                if (const auto status = collect(reason); status != 0)
                 {
                     return status;
                 }
@@ -1013,6 +1098,7 @@ namespace navmesh::app::detail
             pending.push_back({targetIndex, estimatedBytes,
                                std::async(std::launch::async, [input = std::move(input), &options]() mutable
                                           { return BuildBatchCandidate(std::move(input), options); })});
+            batchActivity(std::format("CELL {:08X}: generation admitted", cell.id));
             // Leave capacity for the next extraction and avoid starting unnecessary threads in single-worker mode.
             if (pending.size() >= options.workers)
             {
@@ -1048,6 +1134,7 @@ namespace navmesh::app::detail
             return 0;
         }
         // Refine shared seams only after the complete generated target set is available.
+        progress(90, "Reconciling CELL borders and filtering reachable navigation");
         if (const auto error = ReconcileBatchBorders(results, resolved); !error.empty())
         {
             return fail(error);
@@ -1064,6 +1151,7 @@ namespace navmesh::app::detail
                 generatedPolygons += result.candidate.mesh.polygons.size();
             }
         }
+        progress(91, "Writing batch candidate exports");
         if (!exports())
         {
             return fail("Cannot write batch candidate exports");

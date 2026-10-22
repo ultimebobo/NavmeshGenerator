@@ -7,6 +7,11 @@ this reference. The showcase utilities and renderer are described in the
 
 ## Code map
 
+- `navmesh::app::Run`, `RunEvent`, `RunEventCallback`: shared CLI/desktop run
+  boundary and serialized activity snapshots, including idle heartbeats and
+  terminal results. `app/run_progress` owns log flushing and timer shutdown;
+  callback references are borrowed and callbacks must not throw or reenter a run.
+
 - `navmesh::core::TriangulateConvexHull`: closed, outward-facing hull triangles
   indexing finite input points without moving them; rejects degenerate or
   unrepresentable hulls. Used by Skyrim convex collision extraction.

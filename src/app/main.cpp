@@ -325,7 +325,8 @@ namespace
 
 /// Run the shared pipeline; the public boundary annotates exceptions with the current processing stage.
 static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh::app::ProgressCallback &progress,
-                              const navmesh::app::CancellationCallback &cancelled)
+                              const navmesh::app::CancellationCallback &cancelled,
+                              const navmesh::app::RunEventCallback &events)
 {
     using namespace navmesh::app;
     auto options = input;
@@ -717,7 +718,7 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
         return detail::RunBatch(options, *resolved, (mo2Input || vortexInput) ? &modelAssets : nullptr, paths, progress,
                                 cancelled,
                                 std::chrono::duration<double>(std::chrono::steady_clock::now() - inputStarted).count(),
-                                bosInputs ? &*bosInputs : nullptr);
+                                bosInputs ? &*bosInputs : nullptr, events);
     };
     if (UsesBatchGeneration(options) && (options.rebuildScope != RebuildScope::Cell || !options.cellSelection.empty()))
     {
@@ -890,8 +891,19 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                           [&](std::size_t completed, std::size_t total)
                           {
                               const auto percent = total == 0 ? 65 : 45 + static_cast<int>((20 * completed) / total);
-                              update(percent, std::format("Extracting geometry source cell {}/{}: reference {} of {}",
-                                                          cellIndex + 1, sceneCells.size(), completed, total));
+                              const auto &source = sceneCells[cellIndex];
+                              const auto model = completed < source.references.size()
+                                                     ? source.references[completed].modelPath
+                                                     : std::string{};
+                              const auto message = std::format(
+                                  "Extracting geometry source CELL {:08X} ({}/{}): reference {} of {}; model {}",
+                                  source.id, cellIndex + 1, sceneCells.size(), completed, total, model);
+                              events({.kind = RunEventKind::Detail, .percent = lastPercent, .message = message});
+                              // Keep exception context and overall cell-list progress tied to pipeline updates.
+                              if (completed == total)
+                              {
+                                  update(percent, message);
+                              }
                           },
                           wasCancelled, (mo2Input || vortexInput) ? &modelAssets : nullptr, &modelCache);
             if (!options.terrainOnly)
@@ -916,6 +928,7 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                 for (const auto &warning : terrain.warnings)
                 {
                     std::cerr << warning << "\n";
+                    events({.kind = RunEventKind::Warning, .percent = lastPercent, .message = warning});
                 }
                 detail::AppendGeometry(extracted, std::move(terrainGeometry));
             }
@@ -1445,27 +1458,28 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
     return 0;
 }
 
-int navmesh::app::Run(const Options &options, const ProgressCallback &progress, const CancellationCallback &cancelled)
+int navmesh::app::Run(const Options &options, const ProgressCallback &progress, const CancellationCallback &cancelled,
+                      const RunEventCallback &events)
 {
+    detail::RunProgress activity(options.output, progress, events);
     int lastPercent{};
     std::string stage = "Validating inputs";
     const auto update = [&](int percent, std::string_view status)
     {
         lastPercent = percent;
         stage = status;
-        if (progress)
-        {
-            progress(percent, status);
-        }
+        activity.Publish({.percent = percent, .message = std::string(status)});
     };
+    const auto observe = [&](const RunEvent &event) { activity.Publish(event); };
+    int code{};
     try
     {
-        return RunWithDiagnostics(options, update, cancelled);
+        code = RunWithDiagnostics(options, update, cancelled, observe);
     }
     catch (const std::filesystem::filesystem_error &error)
     {
-        return ReportFailure(
-            progress, lastPercent,
+        code = ReportFailure(
+            update, lastPercent,
             std::format("{} failed: {}. Check that the named path exists, is accessible, and has enough free space for "
                         "writes; choose another output or cache folder if needed.",
                         stage, error.what()),
@@ -1473,10 +1487,12 @@ int navmesh::app::Run(const Options &options, const ProgressCallback &progress, 
     }
     catch (const std::exception &error)
     {
-        return ReportFailure(progress, lastPercent,
+        code = ReportFailure(update, lastPercent,
                              std::format("{} failed: {}. Output folder: '{}'. If the inputs and settings are valid, "
                                          "include this reason and the run settings when reporting the issue.",
                                          stage, error.what(), PathUtf8(options.output)),
                              1);
     }
+    activity.Finish(code);
+    return code;
 }

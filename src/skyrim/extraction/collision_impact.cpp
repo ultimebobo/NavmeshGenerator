@@ -435,6 +435,11 @@ namespace navmesh::skyrim
                 {
                     return result;
                 }
+                if (input_.progress)
+                {
+                    input_.progress(std::format("Selecting collision impacts: REFR {:08X}; plugin {}; model {}",
+                                                reference->id, reference->sourcePlugin, reference->modelPath));
+                }
                 const auto source = CollisionSourceContext(*reference, *origin, cutoff);
                 auto geometry = ExtractGeometry(input_.dataDirectory, source,
                                                 previousAssets ? input_.previousCacheDirectory : input_.cacheDirectory,

@@ -1,14 +1,13 @@
 #pragma once
 
 #include "app/options.h"
+#include "app/run_progress.h"
 
 #include <functional>
 #include <string_view>
 
 namespace navmesh::app
 {
-    /// Synchronous progress/status sink shared by the CLI and Windows UI; failed runs publish their terminal reason.
-    using ProgressCallback = std::function<void(int percent, std::string_view status)>;
     /// Optional synchronous cancellation query between processing stages.
     using CancellationCallback = std::function<bool()>;
     /// Execute a cell analysis or an affected-cell plugin/load-order rebuild.
@@ -20,6 +19,10 @@ namespace navmesh::app
     /// of the batch output policy; Plugin selections must fit MaximumPluginSceneCells before skips.
     /// Failures publish their cause and recovery guidance through progress as well as stderr.
     /// Processing exceptions are reported with their stage; cancellation remains a separate status.
+    /// Appends flushed activity to output/run.log; log failures warn without changing the processing result.
+    /// Status and optional structured events include idle heartbeats, serialized across processing and timer threads.
+    /// Callbacks must not throw or reenter Run; no callbacks remain active after return.
     /// @return Process-style status code; nonzero indicates failure or cancellation.
-    int Run(const Options &options, const ProgressCallback &progress = {}, const CancellationCallback &cancelled = {});
+    int Run(const Options &options, const ProgressCallback &progress = {}, const CancellationCallback &cancelled = {},
+            const RunEventCallback &events = {});
 } // namespace navmesh::app

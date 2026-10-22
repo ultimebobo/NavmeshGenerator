@@ -332,6 +332,30 @@ class BatchRebuild(unittest.TestCase):
                 self.run_cli("--list-cells", output=f"readback-{copy}")
                 (self.root / "plugins.txt").write_text(f"{master}\n{plugin}\n", encoding="utf-8")
 
+    def test_run_activity_is_visible_and_persisted(self):
+        completed = subprocess.run(
+            [str(EXE), "--data", str(self.root), "--load-order", str(self.root / "plugins.txt"),
+             "--output", str(self.root / "activity"), "--asset-cache", str(self.root / "cache"),
+             "--terrain-only", "--rebuild-plugin", "Patch.esp", "--generate-plugin"],
+            capture_output=True, text=True, timeout=90)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        for message in ("Validating inputs", "Selected", "completed 2/2", "cached", "worker snapshot",
+                        "Reconciling CELL borders", "Writing batch NAVM", "Completed (exit code 0)"):
+            self.assertIn(message, completed.stderr)
+        log = (self.root / "activity" / "run.log").read_text(encoding="utf-8")
+        self.assertIn("cell_completed", log)
+        self.assertIn("finished", log)
+        self.assertIn("completed 2/2", log)
+        self.assertIn("CELL 00000100", log)
+        self.assertIn("Z progress", log)
+
+        # A later failing run retains the earlier session and its concrete failure reason.
+        self.run_cli("--cells", "MissingCell", "--generate-plugin", output="activity", code=2)
+        saved = (self.root / "activity" / "run.log").read_text(encoding="utf-8")
+        self.assertTrue(saved.startswith(log))
+        self.assertIn("MissingCell", saved)
+        self.assertIn("Failed (exit code 2)", saved)
+
     def test_plugin_scope_and_single_patch(self):
         output = self.run_cli("--rebuild-plugin", "pAtCh.EsP", "--generate-plugin")
         report = json.loads((output / "batch-report.json").read_text())
@@ -2107,7 +2131,8 @@ class BatchRebuild(unittest.TestCase):
         self.run_cli("--cell-formid", "100", "--skip-existing-navmesh", code=1)
         self.run_cli("--list-cells", "--skip-existing-navmesh", code=1)
         completed = subprocess.run([str(EXE), "--plugin", str(self.root / "Baseline.esm"),
-                                    "--generate-candidate", "--skip-existing-navmesh"], capture_output=True, text=True)
+                                    "--generate-candidate", "--skip-existing-navmesh", "--output",
+                                    str(self.root / "invalid-skip")], capture_output=True, text=True)
         self.assertEqual(completed.returncode, 1)
 
     def test_scene_groups_doors_and_neighbor_connections(self):

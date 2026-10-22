@@ -21,6 +21,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <filesystem>
 #include <format>
 #include <map>
@@ -186,6 +187,9 @@ namespace
         std::atomic_bool cancel{};
         int percent{}, code{};
         std::string text{"Ready. Select a mod manager, its inputs and a rebuild target."};
+        /// Bounded recent activity and the run's log path, published under mutex with the status text.
+        std::deque<std::string> activity;
+        std::string logPath;
         bool complete{};
     };
 
@@ -428,6 +432,11 @@ namespace
                     std::lock_guard lock(workspace.status.mutex);
                     workspace.status.percent = std::clamp(percent, 0, 100);
                     workspace.status.text = text;
+                    workspace.status.activity.emplace_back(text);
+                    if (workspace.status.activity.size() > 200)
+                    {
+                        workspace.status.activity.pop_front();
+                    }
                 },
                 [&] { return workspace.status.cancel.load(); });
         }
@@ -470,6 +479,8 @@ namespace
                 workspace.status.code = 0;
                 workspace.status.text = listOnly ? "Exporting cell catalog..." : "Starting...";
                 workspace.status.complete = false;
+                workspace.status.activity.clear();
+                workspace.status.logPath = PathText(std::filesystem::absolute(options.output / "run.log"));
             }
             workspace.worker = std::thread([&workspace, options, listOnly] { Execute(workspace, options, listOnly); });
             workspace.busy = true;
@@ -824,33 +835,83 @@ namespace
         EndCard();
     }
 
-    void DrawActions(Workspace &workspace)
+    /// One frame's status snapshot keeps footer measurement and rendering consistent during worker updates.
+    struct ActionStatus
+    {
+        int percent{}, code{};
+        std::string text, logPath;
+        std::deque<std::string> activity;
+    };
+
+    ActionStatus ReadActionStatus(Workspace &workspace)
+    {
+        std::lock_guard lock(workspace.status.mutex);
+        if (workspace.status.complete)
+        {
+            workspace.busy = false;
+        }
+        return {.percent = workspace.status.percent,
+                .code = workspace.status.code,
+                .text = workspace.status.text,
+                .logPath = workspace.status.logPath,
+                .activity = workspace.status.activity};
+    }
+
+    /// Reserve the actual wrapped status, toolbar and action heights in the current font and window width.
+    float ActionAreaHeight(const ActionStatus &status)
+    {
+        const auto &style = ImGui::GetStyle();
+        const auto textHeight =
+            ImGui::CalcTextSize(status.text.c_str(), nullptr, false, ImGui::GetContentRegionAvail().x).y;
+        return 1 + 7 * style.FontScaleDpi + ImGui::GetFontSize() + textHeight + 36 * style.FontScaleDpi +
+               5 * style.ItemSpacing.y;
+    }
+
+    void DrawActions(Workspace &workspace, const ActionStatus &snapshot)
     {
         const float scale = ImGui::GetStyle().FontScaleDpi;
-        int percent{}, code{};
-        std::string status;
-        {
-            std::lock_guard lock(workspace.status.mutex);
-            percent = workspace.status.percent;
-            code = workspace.status.code;
-            status = workspace.status.text;
-            if (workspace.status.complete)
-            {
-                workspace.busy = false;
-            }
-        }
+        const auto &status = snapshot.text;
+        const auto &logPath = snapshot.logPath;
+        const auto &activity = snapshot.activity;
         ImGui::Separator();
-        ImGui::ProgressBar(percent / 100.0F, ImVec2(-1, 7 * scale), "");
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-        ImGui::BeginChild("status", ImVec2(0, 58 * scale));
-        ImGui::PopStyleColor();
-        const bool error = code != 0 && !workspace.busy;
+        ImGui::ProgressBar(snapshot.percent / 100.0F, ImVec2(-1, 7 * scale), "");
+        const bool error = snapshot.code != 0 && !workspace.busy;
+        if (ImGui::SmallButton("Recent activity"))
+        {
+            ImGui::OpenPopup("Run activity");
+        }
+        ImGui::SetNextWindowSize(ImVec2(760 * scale, 400 * scale), ImGuiCond_FirstUseEver);
+        if (ImGui::BeginPopupModal("Run activity", nullptr, ImGuiWindowFlags_NoSavedSettings))
+        {
+            ImGui::TextWrapped("Activity log: %s", logPath.c_str());
+            if (ImGui::SmallButton("Copy log path"))
+            {
+                ImGui::SetClipboardText(logPath.c_str());
+            }
+            ImGui::BeginChild("activity", ImVec2(0, -40 * scale));
+            const bool follow = ImGui::GetScrollY() >= ImGui::GetScrollMaxY();
+            for (const auto &line : activity)
+            {
+                ImGui::TextWrapped("%s", line.c_str());
+            }
+            if (follow)
+            {
+                ImGui::SetScrollHereY(1.0F);
+            }
+            ImGui::EndChild();
+            if (ImGui::Button("Close"))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
         if (error)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.58F, 0.5F, 1));
         }
-        if (error && code != 3)
+        if (error && snapshot.code != 3)
         {
+            ImGui::SameLine();
             if (ImGui::SmallButton("Copy error details"))
             {
                 ImGui::SetClipboardText(status.c_str());
@@ -861,7 +922,6 @@ namespace
         {
             ImGui::PopStyleColor();
         }
-        ImGui::EndChild();
         ImGui::BeginDisabled(workspace.busy);
         if (ImGui::Button("List cells to file", ImVec2(172 * scale, 36 * scale)))
         {
@@ -906,9 +966,10 @@ namespace
         ImGui::PopFont();
         ImGui::TextDisabled("Inspect cells and rebuild navigation from your mod manager.");
         ImGui::Spacing();
+        const auto status = ReadActionStatus(workspace);
         // Settings scroll independently so progress, cancellation and run actions stay visible.
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-        ImGui::BeginChild("settings", ImVec2(0, -158 * scale));
+        ImGui::BeginChild("settings", ImVec2(0, -ActionAreaHeight(status)));
         ImGui::PopStyleColor();
         ImGui::BeginDisabled(workspace.busy);
         const int columns = ImGui::GetContentRegionAvail().x >= 760 * scale ? 2 : 1;
@@ -959,7 +1020,7 @@ namespace
         DrawAdvanced(workspace, window, cellScope && !navmesh::app::UsesBatchGeneration(options), generation);
         ImGui::EndDisabled();
         ImGui::EndChild();
-        DrawActions(workspace);
+        DrawActions(workspace, status);
         ImGui::End();
     }
 

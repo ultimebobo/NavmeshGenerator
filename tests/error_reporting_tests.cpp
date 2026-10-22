@@ -7,12 +7,16 @@
 #include "app/run.h"
 #include "cli/inspection_report.h"
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <mutex>
+#include <thread>
 
 namespace
 {
@@ -40,6 +44,67 @@ namespace
             assert(message.contains(option));
             assert(message.contains(detail));
         }
+    }
+
+    void CheckRunActivity(const std::filesystem::path &root)
+    {
+        using namespace navmesh::app;
+        const auto output = root / "activity";
+        std::vector<RunEvent> events;
+        std::mutex mutex;
+        std::condition_variable wake;
+        const auto observe = [&](const RunEvent &event)
+        {
+            std::lock_guard lock(mutex);
+            events.push_back(event);
+            wake.notify_all();
+        };
+        {
+            detail::RunProgress progress(output, {}, observe, std::chrono::milliseconds(20));
+            progress.Publish(
+                {.kind = RunEventKind::CellCompleted, .percent = 40, .message = "CELL 00000100: generated"});
+            progress.Publish({.percent = 45, .message = "Decoding fixture.nif", .batchStatus = "completed 1/2"});
+            std::unique_lock lock(mutex);
+            assert(wake.wait_for(lock, std::chrono::seconds(2),
+                                 [&]
+                                 {
+                                     return std::any_of(events.begin(), events.end(), [](const auto &event)
+                                                        { return event.kind == RunEventKind::Heartbeat; });
+                                 }));
+            const auto &heartbeat = events.back();
+            assert(heartbeat.kind == RunEventKind::Heartbeat && heartbeat.percent == 45);
+            assert(heartbeat.message == "Decoding fixture.nif" && heartbeat.batchStatus == "completed 1/2");
+            assert(heartbeat.idleSeconds > 0 && heartbeat.operationSeconds > 0);
+            assert(heartbeat.sinceCompletionSeconds && *heartbeat.sinceCompletionSeconds >= heartbeat.idleSeconds);
+            lock.unlock();
+            // Readers can inspect flushed diagnostics before the run finishes.
+            std::ifstream liveLog(output / "run.log", std::ios::binary);
+            const std::string saved{std::istreambuf_iterator<char>(liveLog), {}};
+            assert(saved.contains("heartbeat") && saved.contains("fixture.nif") && saved.contains("completed 1/2"));
+            progress.Finish(3);
+            lock.lock();
+            const auto count = events.size();
+            assert(events.back().kind == RunEventKind::Finished && events.back().message.contains("Cancelled"));
+            assert(!wake.wait_for(lock, std::chrono::milliseconds(60), [&] { return events.size() != count; }));
+        }
+        {
+            detail::RunProgress retry(output, {}, observe);
+            retry.Publish({.percent = 100, .message = "Verified plugin"});
+            retry.Finish(0);
+        }
+        std::ifstream log(output / "run.log", std::ios::binary);
+        const std::string saved{std::istreambuf_iterator<char>(log), {}};
+        assert(saved.contains("Cancelled") && saved.contains("Completed") && saved.contains("Verified plugin"));
+        std::filesystem::create_directories(root / "unavailable-log" / "run.log");
+        {
+            detail::RunProgress unavailable(root / "unavailable-log", {}, observe);
+            unavailable.Publish({.message = "Processing continues"});
+            unavailable.Finish(0);
+        }
+        assert(std::any_of(
+            events.begin(), events.end(), [](const auto &event)
+            { return event.kind == RunEventKind::Warning && event.message.contains("Cannot write run.log"); }));
+        assert(events.back().message.contains("Completed"));
     }
 } // namespace
 
@@ -70,6 +135,7 @@ void TestActionableErrors()
         std::filesystem::temp_directory_path() /
         ("navmesh-error-fixture-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(root);
+    CheckRunActivity(root);
     app::Options options;
     options.mo2 = root / "missing-instance";
     options.profile = "Fixture";
@@ -87,7 +153,7 @@ void TestActionableErrors()
     std::cerr.rdbuf(previousBuffer);
     assert(status == 1);
     assert(terminal.contains("--workers: 0") && terminal.contains("Enter"));
-    assert(console.str() == terminal + "\n");
+    assert(terminal.contains(console.str().substr(0, console.str().size() - 1)));
     options.workers = app::Options{}.workers;
     assert(app::Run(options, progress) == 2);
     assert(terminal.contains("ModOrganizer.ini") && terminal.contains("missing-instance"));
