@@ -12,6 +12,15 @@ accept serialized callbacks from either the processing or timer thread. Batch
 orchestration supplies completion counters and worker snapshots without changing
 task ordering. Logging failures warn rather than rejecting generated navigation.
 
+The app-owned `app/asset_failures` catalog deduplicates Skyrim extraction failures
+by model, physical provider and category, retaining source references, stages and
+affected targets for batch and single-cell reports. Extraction reports unavailable
+required geometry separately from intentional exclusions; allocation and cache
+publication errors propagate. Batch orchestration excludes uncertain historical
+ownership scopes and rejects every target with failed supplier inputs before
+candidate-cache reuse. Skipped targets rejoin the authored border constraints;
+global linking and serialization remain mandatory for partial outputs.
+
 The neutral `core/geometry/convex_hull` helper triangulates closed vertex hulls
 without game or platform dependencies. Skyrim extraction decodes Havok vertices,
 applies the existing rigid-body and reference transforms, and classifies fixed

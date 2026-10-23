@@ -21,6 +21,7 @@ namespace navmesh::ui
      * Cell scope retains its explicit list and enabled copy source; hidden cell lists are cleared in other scopes.
      * Make scene is retained for Cell and Plugin runs and clears cost estimation; shared-run selection validates
      * the Plugin scene size against app::MaximumPluginSceneCells before extraction.
+     * Generation retains and validates the persisted cell-error policy for the shared run path; listing resets it.
      * @throws std::invalid_argument When the manager is invalid or required visible source, output or target inputs are missing.
      */
     [[nodiscard]] app::Options PrepareDesktopOptions(const app::Options &draft, bool listOnly);

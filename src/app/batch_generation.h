@@ -14,11 +14,13 @@ namespace navmesh::app::detail
         /// Generated geometry and compact source joins retained through batch seam refinement.
         core::CandidateNavMesh candidate;
         /// Public export metadata, report status, and captured failure message (empty on success).
-        /// skipped_generation_failed has no candidate or audit and retains authored geometry.
+        /// Recoverable generation/extraction skips have no candidate or audit and retain authored geometry.
         /// Reciprocal connections into successful neighbors can still be updated.
         std::string metadata, status, error;
         /// Topology findings captured when candidate generation fails.
         std::vector<std::string> diagnostics;
+        /// One-based batch asset-failure IDs responsible for skipping this target; empty for generation-only failures.
+        std::vector<std::size_t> assetFailures;
         /// Private gzip candidate/evidence path, optionally pinned until inspection export completes.
         std::filesystem::path auditPath;
         /// Steady-clock stage times in seconds; reuse performs no Recast generation.
@@ -49,7 +51,8 @@ namespace navmesh::app::detail
      * @param options Validated shared batch settings, including the normalized artifact policy.
      * @return Candidate with compact evidence and status generated, including valid empty floor coverage.
      * No component is removed for lacking an authored portal or a door. Cell-local generation
-     * and topology failures return skipped_generation_failed with an error and no candidate.
+     * and topology failures return skipped_generation_failed with an error and no candidate in continue mode;
+     * stop mode returns failed. Required-geometry failures return skipped_extraction_failed or failed respectively.
      * Allocation exceptions and evidence-storage failures return failed and must stop batch publishing.
      */
     [[nodiscard]] BatchCellResult BuildBatchCandidate(BatchGenerationInput input, const Options &options);
@@ -57,7 +60,7 @@ namespace navmesh::app::detail
     /** Join generated exterior seams and remove isolated floor networks across the complete set.
      * @param results Completed targets with full generated geometry and compact source joins.
      * Candidates remain present when an adjacent target has no walkable floor.
-     * Skipped generation targets retain their authored NAVMs as untouched border constraints.
+     * Targets skipped for generation or required-geometry failures retain authored NAVMs as untouched border constraints.
      * Recovery validates existing authored portals together with newly available neighbors.
      * Reachability retains door/authored-neighbor access and the largest floor network in
      * each contiguous exterior selection or interior. Generated portals alone do not anchor islands.

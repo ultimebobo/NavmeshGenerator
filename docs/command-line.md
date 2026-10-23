@@ -80,7 +80,7 @@ Generation uses winning geometry from the full load order and neighboring cells,
 while each generated NAVM stays clipped to its own target CELL. Oversized model
 bounds extend geometry suppliers. Neighboring-cell radius controls generation
 inputs without adding unchanged cells to the regeneration scope. Required model
-evidence that cannot be read stops collision selection with a diagnostic.
+evidence that cannot be read follows the shared [cell failure policy](batch-rebuilding.md#outputs-and-failure-policy).
 
 The load order is resolved once, navigation-equivalent overrides are excluded,
 and bounded caches reuse terrain, models, placements, and generated candidates.
@@ -93,7 +93,7 @@ candidate inspection. `--estimate-only` samples the selected scope before a full
 rebuild and caches the sampled work. Shared cache location and disk retention,
 working-memory admission, and worker settings are exposed and persisted in the
 desktop UI; see [performance improvements](performance-improvements.md).
-Every selected live batch cell generates navigation, including cells with no NAVM.
+Selected live batch cells with complete required geometry generate navigation, including cells with no NAVM.
 Workers retain every surviving walkable component until all targets are ready;
 shared generated seams then receive matching partitions and reciprocal links.
 Final reachability removes isolated floor networks, including roofs spanning CELL
@@ -104,7 +104,10 @@ clear replaced navigation where no supported floor survives. Cell-local generati
 and topology failures are logged as `skipped_generation_failed` and leave
 authored geometry intact while other targets continue. `complete_with_skips` and
 `generation_failed_cells` identify such completion in `batch-report.json`.
-Global linking and writer failures still stop export.
+`--cell-error-policy continue|stop` selects recovery or immediate failure and is
+persisted as **Cell error policy** in the desktop. Required-geometry skips use
+`skipped_extraction_failed` and `extraction_failed_cells`; deduplicated evidence is
+in `asset_failures`. Global linking and writer failures still stop export.
 The patch filename gains a numeric suffix if its default name is already active
 in the load order, so an earlier generated plugin can remain a valid dependency.
 Selected persistent worldspace containers are logged as `skipped_persistent_cell`;

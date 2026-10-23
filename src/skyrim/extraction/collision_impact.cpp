@@ -446,6 +446,31 @@ namespace navmesh::skyrim
                                                 {}, input_.cancelled,
                                                 previousAssets ? input_.previousAssets : input_.assets, &cache_, true);
                 CheckCancellation();
+                // A newly supplied asset may legitimately have no preceding provider. Other missing inputs
+                // have unknown collision; only a caller that excludes their ownership scope may recover.
+                bool failed{};
+                for (const auto &failure : geometry.failures)
+                {
+                    if (!previousAssets && failure.category == "missing")
+                    {
+                        auto model = Normalize(failure.model);
+                        statistics_.missingModels.insert(model.starts_with("meshes/") ? model : "meshes/" + model);
+                    }
+                    if (previousAssets && failure.category == "missing" && geometry.archiveSearchComplete)
+                    {
+                        continue;
+                    }
+                    failed = true;
+                    if (!input_.failedGeometry || !input_.failedGeometry(failure, *origin))
+                    {
+                        throw std::runtime_error("Cannot determine collision impact: " +
+                                                 DescribeGeometryFailure(failure));
+                    }
+                }
+                if (failed)
+                {
+                    return result;
+                }
                 if (geometry.modelsUnreadable || !geometry.archiveSearchComplete)
                 {
                     const auto unreadable = std::find_if(
@@ -509,6 +534,17 @@ namespace navmesh::skyrim
                     ExtractGeometry(input_.dataDirectory, {.references = {reference}}, input_.cacheDirectory, {},
                                     input_.cancelled, input_.assets, &cache_, true);
                 CheckCancellation();
+                for (const auto &failure : geometry.failures)
+                {
+                    if (!input_.failedGeometry || !input_.failedGeometry(failure, owner))
+                    {
+                        throw std::runtime_error("Cannot determine BOS collision: " + DescribeGeometryFailure(failure));
+                    }
+                }
+                if (!geometry.failures.empty())
+                {
+                    return {.origin = &owner};
+                }
                 if (geometry.modelsUnreadable || !geometry.archiveSearchComplete)
                 {
                     const auto unreadable = std::find_if(

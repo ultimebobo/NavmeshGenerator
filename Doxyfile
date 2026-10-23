@@ -11,7 +11,7 @@ MARKDOWN_SUPPORT       = YES
 USE_MDFILE_AS_MAINPAGE = docs/api.md
 
 # Document only code owned by this project; lib and tools contain vendored code.
-# App discovery includes shared run activity, persistent logging and heartbeat ownership.
+# App discovery includes shared run activity, persistent logging, heartbeat ownership and required-asset failure reporting.
 # Recursive src discovery includes MO2, Vortex and BOS input importers, Cell scene accumulation, collision impact selection, generated batch seam refinement, bounded authored border fan edits, complete-set floor reachability, sampled-floor triangulation and bounded surface/boundary simplification, triangle tagging, the desktop host/contextual option model, Recast settings, native BSA reading, caches, cover finalization, whole-reference navigation rewriting, effective-graph validation, and serialization.
 INPUT                 = src docs README.md AGENTS.md fixtures/README.md tests/integration/README.md
 FILE_PATTERNS         = *.h *.hpp *.cpp *.md

@@ -49,6 +49,20 @@ void TestDesktopOptionsAndRecastSettings()
     draft.copySourcePlugin = "Fixture.esp";
     draft.cellSelection = "FixtureCell\n00000100; OtherCell,0x101";
     const auto selected = ui::PrepareDesktopOptions(draft, false);
+    draft.cellErrorPolicy = "stop";
+    assert(ui::PrepareDesktopOptions(draft, false).cellErrorPolicy == "stop");
+    draft.cellErrorPolicy = "invalid";
+    bool invalidPolicyRejected{};
+    try
+    {
+        (void)ui::PrepareDesktopOptions(draft, false);
+    }
+    catch (const std::invalid_argument &)
+    {
+        invalidPolicyRejected = true;
+    }
+    assert(invalidPolicyRejected);
+    draft.cellErrorPolicy = "continue";
     assert(selected.cellSelection == draft.cellSelection && selected.copySourcePlugin == "Fixture.esp" &&
            selected.affectedPlugin.empty());
     assert(selected.copyPlugin && selected.generatePlugin && selected.generateCandidate);

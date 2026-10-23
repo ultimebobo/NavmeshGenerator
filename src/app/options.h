@@ -71,6 +71,9 @@ namespace navmesh::app
         /// Skip generation for cells with any winning NAVM record, including empty or unsupported records.
         /// Requires resolved mod-manager/load-order input; uncovered cells may receive new NAVM records.
         bool skipExistingNavmesh{};
+        /// Recoverable CELL failures: continue preserves authored navigation and skips affected targets; stop aborts export.
+        /// Applies to generation, never to invalid inputs, allocation, storage, global linking or writer failures.
+        std::string cellErrorPolicy{"continue"};
         /// Recast region strategy used for candidate generation; watershed is the default.
         core::RegionPartitioningAlgorithm partitioningAlgorithm{core::RegionPartitioningAlgorithm::Watershed};
         /// Agent dimensions and movement limits in Skyrim units; shared by all generation scopes.

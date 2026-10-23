@@ -149,6 +149,7 @@ namespace navmesh::app::detail
         destination.referencesWithModels += source.referencesWithModels;
         destination.modelsLoaded += source.modelsLoaded;
         destination.modelsMissing += source.modelsMissing;
+        destination.failures.insert(destination.failures.end(), source.failures.begin(), source.failures.end());
         destination.archiveSearchComplete = destination.archiveSearchComplete && source.archiveSearchComplete;
         destination.invalidVertices += source.invalidVertices;
         destination.invalidIndices += source.invalidIndices;

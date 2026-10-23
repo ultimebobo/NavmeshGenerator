@@ -24,6 +24,10 @@ namespace navmesh::skyrim
         GeometryCancellationCallback cancelled;
         /// Optional synchronous activity sink identifying the reference and model about to be compared.
         std::function<void(std::string_view)> progress;
+        /// Optional recovery sink for required geometry at a historical ownership context.
+        /// Returning true permits comparison to continue only after the caller excludes every potentially affected target.
+        /// Without this sink any required-geometry failure throws; input, allocation and storage exceptions always propagate.
+        std::function<bool(const GeometryFailure &, const RecordOrigin &)> failedGeometry;
     };
 
     /** Select cells whose supported terrain, water or placed collision inputs change.
@@ -43,8 +47,11 @@ namespace navmesh::skyrim
      * @param statistics Selection counters, reset before processing.
      * @return Unique targets in worldspace/coordinate order, followed by interiors in FormID order.
      * @throws std::invalid_argument if the named plugin is inactive.
-     * Missing models supply no collision and are recorded in statistics for operator warnings.
-     * @throws std::runtime_error for unreadable models, incomplete archive searches or cancellation; no patch is written.
+     * Missing current models are recorded in statistics. Required-geometry failures throw unless failedGeometry
+     * accepts responsibility for excluding their complete uncertain historical ownership scopes.
+     * A new asset's absent preceding provider is a valid empty comparison input.
+     * @throws std::runtime_error For unrecovered geometry failures, invalid ownership or cancellation.
+     * Allocation and storage exceptions always propagate; no patch may be published after those failures.
      */
     [[nodiscard]] std::vector<const core::Cell *> SelectCollisionAffectedCells(const ResolvedLoadOrder &resolved,
                                                                                const CellImpactIndex &index,

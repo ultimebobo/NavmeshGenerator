@@ -16,6 +16,21 @@ namespace navmesh::skyrim
 {
     using GeometryProgressCallback = std::function<void(std::size_t completedReferences, std::size_t totalReferences)>;
     using GeometryCancellationCallback = std::function<bool()>;
+    /// Unavailable required navigation geometry; decorative/excluded assets do not produce failures.
+    struct GeometryFailure
+    {
+        /// Stable category: missing, unreadable, unsupported, or archive_lookup.
+        std::string category;
+        /// Logical NIF name and physical supplying/attempted path; an absent provider is never guessed.
+        std::string model, provider;
+        /// Actionable asset-level cause; input/storage/allocation exceptions are not recoverable asset failures.
+        std::string reason;
+        /// Resolved placed-reference and base ownership, retained for diagnostics and dependency propagation.
+        core::RecordProvenance reference, baseObject;
+    };
+
+    /// Format a required-geometry failure with its asset, provider and resolved reference identities.
+    [[nodiscard]] std::string DescribeGeometryFailure(const GeometryFailure &failure);
     struct GeometryReferenceReport
     {
         std::uint32_t formId{};
@@ -44,6 +59,8 @@ namespace navmesh::skyrim
         /// Sole owner of support geometry, display geometry, and their provenance.
         core::Scene scene;
         std::vector<GeometryReferenceReport> references;
+        /// Required geometry that must prevent candidate acceptance, including failed archive lookups.
+        std::vector<GeometryFailure> failures;
         std::size_t referencesWithModels{};
         std::size_t modelsLoaded{};
         std::size_t modelsMissing{};
@@ -122,7 +139,9 @@ namespace navmesh::skyrim
     /// @param assets Optional mod-manager loose winners and ordered archive paths.
     /// @param modelCache Optional run-scoped model and placement cache, shared safely by workers.
     /// @param navigationOnly Materialize supported collision and coverage without render display meshes.
-    /// @return Geometry and per-reference failures, with archiveSearchComplete distinguishing absence from lookup failure.
+    /// @return Geometry, inspection coverage and required-navigation failures. Consumers must reject candidates with failures.
+    /// archiveSearchComplete distinguishes absence from lookup failure. NIF decoding errors become unreadable failures;
+    /// allocation and cache/storage exceptions propagate and must stop publishing.
     /// navigationOnly excludes render-only support.
     /// Landscape rock assets are tagged as navigation obstacles while retaining their collision geometry.
     /// Furniture, containers and STAT assets in the clutter directory retain supported collision as obstacles

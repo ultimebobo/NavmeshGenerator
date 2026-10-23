@@ -449,6 +449,12 @@ class BatchRebuild(unittest.TestCase):
                 self.assertEqual(copied_land, extreme)
             else:
                 self.assertFalse(any(item[1]==0x201 for item in emitted))
+        strict = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--cell-error-policy", "stop",
+                               output="strict-generation", code=2)
+        strict_report = json.loads((strict / "batch-report.json").read_text())
+        self.assertEqual(strict_report["status"], "failed")
+        self.assertIn("vertical span limit", strict_report["error"])
+        self.assertFalse((strict / "generated-navmesh.esp").exists())
 
     def test_recovery_preserves_untouched_portals_with_optional_authored_navmesh(self):
         header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
@@ -1316,7 +1322,7 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(json.loads((output / "batch-report.json").read_text())["selected_cells"], 0)
         self.assertFalse((output / "generated-navmesh.esp").exists())
 
-    def test_missing_model_warns_and_continues_without_collision(self):
+    def test_missing_selection_geometry_excludes_ownership_scope(self):
         header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800)) + sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
         base = record("STAT", 0x01000800, sub("MODL", b"MissingSolid.nif\0"))
         placement = record("REFR", 0x01000801, sub("NAME", struct.pack("<I", 0x01000800))
@@ -1326,20 +1332,108 @@ class BatchRebuild(unittest.TestCase):
                                              + group(int.from_bytes(b"WRLD", "little"), 0, children))
         output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", terrain_only=False)
         report = json.loads((output / "batch-report.json").read_text())
-        self.assertEqual(report["status"], "complete")
-        self.assertEqual(report["selected_cells"], 0)
+        self.assertEqual(report["status"], "complete_with_skips")
+        self.assertEqual(report["selected_cells"], 3)
         self.assertEqual(report["selection_missing_models"], ["meshes/missingsolid.nif"])
-        self.assertTrue(any("Warning:" in warning and "missing NIF" in warning
-                            for warning in report["metadata"]["warnings"]))
-        self.assertEqual(report["completed_cells"], 0)
+        self.assertEqual(report["extraction_failed_cells"], 3)
+        self.assertEqual(len(report["asset_failures"]), 1)
+        self.assertEqual(report["asset_failures"][0]["stages"], ["selection"])
+        self.assertEqual(report["asset_failures"][0]["cells"], ["00000100", "00000101", "00000102"])
         self.assertFalse((output / "generated-navmesh.esp").exists())
+        # An unresolved footprint excludes its worldspace while an independent world can still complete.
+        independent_cell = record("CELL", 0x01000811, sub("XCLC", struct.pack("<ii", 0, 0)))
+        independent_cell += group(0x01000811, 6, group(0x01000811, 9, record("LAND", 0x01000812, land())))
+        independent = record("WRLD", 0x01000810, sub("EDID", b"IndependentWorld\0"))
+        independent += group(0x01000810, 1, independent_cell)
+        with (self.root / "Patch.esp").open("ab") as plugin:
+            plugin.write(group(int.from_bytes(b"WRLD", "little"), 0, independent))
+        partial = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", terrain_only=False,
+                               output="independent-world")
+        partial_report = json.loads((partial / "batch-report.json").read_text())
+        self.assertEqual(partial_report["extraction_failed_cells"], 3)
+        self.assertEqual(partial_report["cells"][-1]["status"], "generated")
+        self.assertTrue((partial / "generated-navmesh.esp").exists())
         (self.root / "meshes").mkdir(exist_ok=True)
         (self.root / "meshes/MissingSolid.nif").write_bytes(b"invalid NIF")
         output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", terrain_only=False,
-                              code=2, output="unreadable")
+                              output="unreadable")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["status"], "complete_with_skips")
+        self.assertEqual(report["asset_failures"][0]["category"], "unreadable")
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--cell-error-policy", "stop",
+                              terrain_only=False, code=2, output="strict")
         report = json.loads((output / "batch-report.json").read_text())
         self.assertEqual(report["status"], "failed")
         self.assertIn("Cannot determine collision impact", report["error"])
+
+    def recovery_fixture(self, corrupt=False, authored=True):
+        base = record("STAT", 0x600, sub("MODL", b"BrokenSolid.nif\0")
+                      + sub("OBND", struct.pack("<6h", -100, -100, -100, 100, 100, 100)))
+        placements = b"".join(record("REFR", 0x700 + index, sub("NAME", struct.pack("<I", 0x600))
+                              + sub("DATA", struct.pack("<6f", 4090, 1024 + index, 0, 0, 0, 0)))
+                              for index in range(2))
+        self.write_baseline(navmeshes=None if authored else {2: navm(2)}, references={0: placements})
+        with (self.root / "Baseline.esm").open("ab") as plugin:
+            plugin.write(base)
+        if corrupt:
+            (self.root / "meshes").mkdir(exist_ok=True)
+            (self.root / "meshes/BrokenSolid.nif").write_bytes(b"invalid NIF")
+
+    def test_asset_failures_skip_all_dependent_targets_and_deduplicate(self):
+        for corrupt in (False, True):
+            self.recovery_fixture(corrupt)
+            for mode, workers in (("full", "1"), ("compact", "2"), ("plugin_only", "2")):
+                with self.subTest(corrupt=corrupt, mode=mode):
+                    output = self.run_cli("--cells", "100,101,102", "--generate-plugin", "--batch-output", mode,
+                                          "--workers", workers, terrain_only=False, output=f"recover-{corrupt}-{mode}")
+                    report = json.loads((output / "batch-report.json").read_text())
+                    self.assertEqual(report["status"], "complete_with_skips")
+                    self.assertEqual(report["extraction_failed_cells"], 2)
+                    self.assertEqual([cell["status"] for cell in report["cells"]],
+                                     ["skipped_extraction_failed", "skipped_extraction_failed", "generated"])
+                    self.assertEqual(len(report["asset_failures"]), 1)
+                    failure = report["asset_failures"][0]
+                    self.assertEqual(failure["category"], "unreadable" if corrupt else "missing")
+                    self.assertEqual(failure["cells"], ["00000100", "00000101"])
+                    self.assertEqual(len(failure["references"]), 2)
+                    self.assertTrue(failure["provider"])
+                    self.assertEqual(failure["stages"], ["extraction"])
+                    self.assertEqual(report["cells"][0]["asset_failure_ids"], [failure["id"]])
+                    self.assertFalse((output / "cells/00000100/candidate-navm.json").exists())
+                    for kind, form, _, payload in read_records(output / "generated-navmesh.esp"):
+                        if kind == "NAVM" and form in (0x200, 0x201):
+                            self.assertEqual(navm_geometry(payload), navm_geometry(navm(form - 0x200)))
+                    log = (output / "run.log").read_text()
+                    self.assertEqual(log.count("Asset failure 1 during extraction"), 1)
+
+    def test_stop_policy_aborts_asset_and_generation_failures(self):
+        self.recovery_fixture()
+        output = self.run_cli("--cells", "100,101,102", "--generate-plugin", "--cell-error-policy", "stop",
+                              terrain_only=False, output="strict-extraction", code=2)
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["cell_error_policy"], "stop")
+        self.assertFalse((output / "generated-navmesh.esp").exists())
+
+    def test_asset_failure_without_authored_navmesh_leaves_targets_uncovered(self):
+        self.recovery_fixture(authored=False)
+        output = self.run_cli("--cells", "100,101,102", "--generate-plugin", "--workers", "2",
+                              terrain_only=False, output="uncovered-failures")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual([cell["status"] for cell in report["cells"]],
+                         ["skipped_extraction_failed", "skipped_extraction_failed", "generated"])
+        identities = [form for kind, form, _, _ in read_records(output / "generated-navmesh.esp") if kind == "NAVM"]
+        self.assertEqual(identities, [0x202])
+
+    def test_single_cell_rejects_incomplete_navigation_geometry(self):
+        self.recovery_fixture()
+        for policy, code in (("continue", 0), ("stop", 2)):
+            output = self.run_cli("--cell-formid", "100", "--generate-plugin", "--cell-error-policy", policy,
+                                  terrain_only=False, output=f"single-{policy}", code=code)
+            report = json.loads((output / "generation-report.json").read_text())
+            self.assertEqual(report["status"], "skipped_extraction_failed")
+            self.assertEqual(len(report["asset_failures"]), 1)
+            self.assertFalse((output / "generated-navmesh.esp").exists())
 
     def test_parent_water_change_selects_only_inheriting_wet_cells(self):
         parent = sub("WNAM", struct.pack("<I", 0x401)) + sub("PNAM", struct.pack("<H", 8))

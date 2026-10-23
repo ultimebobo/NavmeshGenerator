@@ -317,6 +317,11 @@ namespace
                                         : algorithm == "layers" ? navmesh::core::RegionPartitioningAlgorithm::Layers
                                                                 : navmesh::core::RegionPartitioningAlgorithm::Watershed;
         options.batchOutput = ReadConfig(workspace.config, "batch_output", options.batchOutput);
+        options.cellErrorPolicy = ReadConfig(workspace.config, "cell_error_policy", options.cellErrorPolicy);
+        if (options.cellErrorPolicy != "continue" && options.cellErrorPolicy != "stop")
+        {
+            options.cellErrorPolicy = Options{}.cellErrorPolicy;
+        }
         if (options.batchOutput != "auto" && options.batchOutput != "full" && options.batchOutput != "compact" &&
             options.batchOutput != "plugin_only")
         {
@@ -371,6 +376,7 @@ namespace
         WriteConfig(workspace.config, "partitioning_algorithm",
                     algorithms[static_cast<int>(workspace.draft.partitioningAlgorithm)]);
         WriteConfig(workspace.config, "batch_output", workspace.draft.batchOutput);
+        WriteConfig(workspace.config, "cell_error_policy", workspace.draft.cellErrorPolicy);
         WriteConfig(workspace.config, "neighboring_cell_radius", std::to_string(workspace.draft.neighboringCellRadius));
     }
 
@@ -669,6 +675,18 @@ namespace
         }
         if (generation)
         {
+            ImGui::TextUnformatted("Cell error policy");
+            ImGui::SetNextItemWidth(-1);
+            int policy = options.cellErrorPolicy == "stop" ? 1 : 0;
+            if (ImGui::Combo("##cell_error_policy", &policy,
+                             "Continue with recoverable failures\0Stop on first failure\0"))
+            {
+                options.cellErrorPolicy = policy == 1 ? "stop" : "continue";
+            }
+            Help("Continue skips targets whose required geometry is unavailable and preserves their authored navmesh. "
+                 "Unknown selection footprints exclude their worldspace or interior. Stop aborts generation on a "
+                 "recoverable failure. Input, memory, storage and global navigation-validation failures always stop "
+                 "export.");
             ImGui::SeparatorText("Recast generation");
             ImGui::Checkbox("Tag water and preferred path triangles (experimental)", &options.tagTriangles);
             Help("Classify submerged floors using CELL and worldspace water levels and preserve nearby authored "

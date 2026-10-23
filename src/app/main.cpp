@@ -1,6 +1,7 @@
 #include "analysis/navmesh_analysis.h"
 #include "core/io/file_path.h"
 #include "app/batch_runner.h"
+#include "app/asset_failures.h"
 #include "app/cell_scene.h"
 #include "app/geometry_pipeline.h"
 #include "skyrim/extraction/asset_cache.h"
@@ -146,7 +147,8 @@ namespace
                 "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --cells <identifiers> | "
                 "--rebuild-plugin <active "
                 "filename> | --rebuild-load-order] [--generate-plugin] [--copy-plugin] [--skip-existing-navmesh] "
-                "[--no-triangle-tagging] [--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
+                "[--no-triangle-tagging] [--cell-error-policy <continue|stop>] "
+                "[--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
                 "[--cache-budget-mib <MiB>] [--working-memory-mib <MiB>] [--workers <count>] [--estimate-only] "
                 "--output "
                 "<dir>\nVortex input: --vortex <Skyrim-installation> [--vortex-plugins "
@@ -240,6 +242,10 @@ namespace
             options.batchOutput != "plugin_only")
         {
             return fail("--batch-output must be auto, full, compact, or plugin_only.\n", 1);
+        }
+        if (options.cellErrorPolicy != "continue" && options.cellErrorPolicy != "stop")
+        {
+            return fail("Cell error policy / --cell-error-policy must be continue or stop.\n", 1);
         }
         if (options.workers == 0 || options.workers > 64)
         {
@@ -803,6 +809,35 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
     const auto processCell = [&]() -> int
     {
         update(45, "Cell resolved");
+        const auto failedCell =
+            [&](std::string_view status, const std::string &reason, const detail::AssetFailureCatalog *assets = nullptr)
+        {
+            std::ofstream failureReport(options.output / "generation-report.json", std::ios::trunc);
+            failureReport << std::format("{{\"form_id\":\"{:08X}\",\"status\":\"{}\",\"cell_error_policy\":\"{}\","
+                                         "\"error\":\"{}\",\"asset_failures\":",
+                                         cell->id, status, options.cellErrorPolicy,
+                                         navmesh::reproducibility::EscapeJson(reason));
+            if (assets)
+            {
+                assets->WriteJson(failureReport);
+            }
+            else
+            {
+                failureReport << "[]";
+            }
+            failureReport << "}\n";
+            failureReport.close();
+            if (!failureReport)
+            {
+                return fail(WriteFailure(options.output / "generation-report.json"));
+            }
+            if (options.cellErrorPolicy == "stop")
+            {
+                return fail(reason);
+            }
+            update(100, "Completed with skips. " + reason + " See generation-report.json.");
+            return 0;
+        };
         if (wasCancelled())
         {
             return 3;
@@ -1050,7 +1085,24 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
         }
         // Generate a neutral candidate, stitch resolved exterior neighbors, and export its evidence.
         std::optional<navmesh::core::CandidateNavMesh> candidate;
-        if (options.generateCandidate)
+        detail::AssetFailureCatalog failedAssets;
+        std::string unavailableGeometry;
+        if (options.generateCandidate && !geometry.failures.empty())
+        {
+            for (const auto &failure : geometry.failures)
+            {
+                failedAssets.Add(failure, "extraction", cell->id);
+            }
+            unavailableGeometry =
+                std::format("CELL {:08X}: required geometry unavailable; authored NAVM retained. {} No replacement "
+                            "plugin was written.",
+                            cell->id, navmesh::skyrim::DescribeGeometryFailure(geometry.failures.front()));
+            if (options.cellErrorPolicy == "stop")
+            {
+                return failedCell("skipped_extraction_failed", unavailableGeometry, &failedAssets);
+            }
+        }
+        if (options.generateCandidate && unavailableGeometry.empty())
         {
             std::vector<navmesh::core::CandidateExit> exits;
             std::optional<navmesh::core::AABB> candidateBounds;
@@ -1162,13 +1214,23 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                                                      options.tagTriangles);
                 navmesh::core::CaptureCoverGeometry(*candidate, geometry.scene);
             }
+            catch (const std::bad_alloc &)
+            {
+                throw;
+            }
+            catch (const std::length_error &)
+            {
+                throw;
+            }
             catch (const std::exception &error)
             {
-                return fail(std::format("Candidate generation failed for CELL {:08X} ('{}'): {}. Review the generation "
-                                        "settings and geometry.json in '{}'. If the inputs are valid, include this "
-                                        "reason and the settings when reporting the failure.",
-                                        cell->id, cell->editorId, error.what(),
-                                        PathUtf8(std::filesystem::absolute(options.output))));
+                return failedCell(
+                    "skipped_generation_failed",
+                    std::format("Candidate generation failed for CELL {:08X} ('{}'): {}. Review the generation "
+                                "settings and geometry.json in '{}'. If the inputs are valid, include this "
+                                "reason and the settings when reporting the failure.",
+                                cell->id, cell->editorId, error.what(),
+                                PathUtf8(std::filesystem::absolute(options.output))));
             }
             const auto jsonPath = options.output / "candidate-navm.json";
             const auto objPath = options.output / "candidate-navm.obj";
@@ -1250,14 +1312,19 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
             "Exported combined GLB scene to {} ({} objects, {} triangles, {} geometry triangles culled)\n",
             navmesh::core::PathToUtf8(scenePath), sceneExport.objects, sceneExport.triangles,
             sceneExport.culledTriangles);
+        if (!unavailableGeometry.empty())
+        {
+            return failedCell("skipped_extraction_failed", unavailableGeometry, &failedAssets);
+        }
         if (candidate && !candidate->topology.valid)
         {
             const auto failure = std::format(
                 "Candidate topology validation failed: {}. Inspection scene saved to {}; see candidate-navm.json.",
                 candidate->topology.findings.empty() ? "invalid candidate" : candidate->topology.findings.front(),
                 navmesh::core::PathToUtf8(scenePath));
-            return fail(failure + " Plugin export stopped. Inspect the reported geometry; include the validation "
-                                  "reason and candidate exports when reporting the issue.");
+            return failedCell("skipped_generation_failed",
+                              failure + " Plugin export stopped. Inspect the reported geometry; include the validation "
+                                        "reason and candidate exports when reporting the issue.");
         }
         // Serialization requires a valid candidate and retains the resolved source master ordering.
         if (options.generatePlugin && candidate->mesh.polygons.empty())

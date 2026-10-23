@@ -7,6 +7,15 @@ this reference. The showcase utilities and renderer are described in the
 
 ## Code map
 
+- `navmesh::skyrim::GeometryFailure`, `DescribeGeometryFailure`: required model
+  failures with provider and resolved source evidence, separate from exclusions.
+  `GeometryExtraction::failures` must be checked before candidate acceptance.
+  `CollisionImpactInput::failedGeometry` permits recovery only when the caller
+  excludes the complete uncertain ownership scope. `BsaModelExtractor::Failures`
+  identifies unreadable providers and payloads; allocation/storage errors propagate.
+- `navmesh::app::detail::AssetFailureCatalog`: run-owned diagnostic identities,
+  deduplicated references and affected targets, with batch/single-cell JSON output.
+
 - `navmesh::app::Run`, `RunEvent`, `RunEventCallback`: shared CLI/desktop run
   boundary and serialized activity snapshots, including idle heartbeats and
   terminal results. `app/run_progress` owns log flushing and timer shutdown;

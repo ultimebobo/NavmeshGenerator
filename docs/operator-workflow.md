@@ -124,11 +124,15 @@ time since completion. Worker counts describe the last published snapshot. Log
 failures warn without changing the processing result; include `batch-report.json`
 and the named input reports alongside the log when reporting failures.
 
-Candidate warnings do not fail a run. A candidate topology validation error is a
-failure and appears in red with the validation reason. The inspection scene and
-candidate exports are written before this check so they remain available for
-diagnosis; a viewable scene does not establish that navigation links are valid.
-Plugin writing requires a valid candidate.
+Candidate warnings do not fail a run. **Cell error policy** in Advanced settings
+controls recoverable generation and required-geometry failures and is saved for
+the next session. Choose **Continue with recoverable failures** to preserve
+unavailable targets' authored navigation and finish a verified partial result,
+or **Stop on first failure** for diagnosis. Completion reports identify skips;
+review them before installing the output. See [batch failure and dependency
+rules](batch-rebuilding.md#outputs-and-failure-policy) for recovery boundaries.
+Inspection scenes and candidate exports, when available, remain diagnostic
+evidence; plugin writing requires valid navigation.
 
 ## Advanced generation settings
 

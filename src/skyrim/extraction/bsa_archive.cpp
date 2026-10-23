@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -30,6 +31,17 @@ namespace navmesh::skyrim
 {
     namespace
     {
+        /// Cache publication failures are fatal even when the supplying asset is recoverable.
+        struct CacheWriteError : std::runtime_error
+        {
+            using std::runtime_error::runtime_error;
+        };
+        /// Logical path validation fails before requesting payloads or writing any cache file.
+        struct UnsafeModelPathError : std::runtime_error
+        {
+            using std::runtime_error::runtime_error;
+        };
+
         constexpr std::uint64_t MaximumAssetBytes = 256ULL * 1024 * 1024;
 
         std::string Normalize(std::string value)
@@ -46,7 +58,7 @@ namespace navmesh::skyrim
         {
             if (!logical.starts_with("meshes/") || !logical.ends_with(".nif"))
             {
-                throw std::runtime_error("Unsupported BSA model path: " + logical);
+                throw UnsafeModelPathError("Unsupported BSA model path: " + logical);
             }
             std::size_t start{};
             while (start < logical.size())
@@ -56,7 +68,7 @@ namespace navmesh::skyrim
                 if (part.empty() || part == "." || part == ".." || part.find(':') != std::string::npos ||
                     part.find('\0') != std::string::npos)
                 {
-                    throw std::runtime_error("Unsafe BSA model path: " + logical);
+                    throw UnsafeModelPathError("Unsafe BSA model path: " + logical);
                 }
                 if (end == std::string::npos)
                 {
@@ -304,23 +316,33 @@ namespace navmesh::skyrim
                     std::filesystem::remove(path, error);
                 }
             } cleanup{temporary};
-            std::filesystem::create_directories(path.parent_path());
+            std::error_code directoryError;
+            std::filesystem::create_directories(path.parent_path(), directoryError);
+            if (directoryError)
+            {
+                throw CacheWriteError("Cannot prepare BSA cache directory: " + directoryError.message());
+            }
             std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
             stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
             stream.close();
             if (!stream)
             {
-                throw std::runtime_error("Cannot write BSA cache file");
+                throw CacheWriteError("Cannot write BSA cache file");
             }
             // Replace atomically so readers never observe a partially written model,
             // negative-cache list, or statistics file, including concurrent publishers.
 #ifdef _WIN32
             if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
             {
-                throw std::runtime_error("Cannot publish BSA cache file: " + std::to_string(GetLastError()));
+                throw CacheWriteError("Cannot publish BSA cache file: " + std::to_string(GetLastError()));
             }
 #else
-            std::filesystem::rename(temporary, path);
+            std::error_code renameError;
+            std::filesystem::rename(temporary, path, renameError);
+            if (renameError)
+            {
+                throw CacheWriteError("Cannot publish BSA cache file: " + renameError.message());
+            }
 #endif
         }
 
@@ -366,26 +388,47 @@ namespace navmesh::skyrim
         {
             std::filesystem::path path;
             std::optional<Index> index;
+            std::string indexFailure;
+            std::map<std::string, std::string> failedEntries;
         };
         std::vector<Provider> providers;
         std::filesystem::path snapshot;
         std::set<std::string> missing;
+        std::vector<BsaFailure> failures;
+        std::set<std::pair<std::filesystem::path, std::string>> reported;
         std::array<std::uint64_t, 4> statistics{};
         static constexpr std::array<const char *, 4> CounterNames = {"metadata_bytes_read", "payload_bytes_read",
                                                                      "entries_extracted", "index_hits"};
 
         Index &GetIndex(Provider &provider)
         {
+            if (!provider.indexFailure.empty())
+            {
+                throw std::runtime_error(provider.indexFailure);
+            }
             if (!provider.index)
             {
                 try
                 {
                     provider.index = ReadIndex(provider.path, statistics[0]);
                 }
+                catch (const std::bad_alloc &)
+                {
+                    throw;
+                }
+                catch (const std::length_error &)
+                {
+                    throw;
+                }
+                catch (const CacheWriteError &)
+                {
+                    throw;
+                }
                 catch (const std::exception &error)
                 {
-                    throw std::runtime_error("Cannot index archive '" + core::PathToUtf8(provider.path) +
-                                             "': " + error.what());
+                    provider.indexFailure =
+                        "Cannot index archive '" + core::PathToUtf8(provider.path) + "': " + error.what();
+                    throw std::runtime_error(provider.indexFailure);
                 }
             }
             else
@@ -414,26 +457,72 @@ namespace navmesh::skyrim
                     // substitute different geometry from a lower-priority archive.
                     const auto logical = *name;
                     name = remaining.erase(name);
+                    if (const auto failed = provider.failedEntries.find(logical);
+                        failed != provider.failedEntries.end())
+                    {
+                        failures.push_back({provider.path, logical, failed->second});
+                        reliable = false;
+                        continue;
+                    }
                     try
                     {
                         ExtractEntry(stream, provider.path, index, found->second, snapshot / ModelPath(logical));
                         statistics[1] += found->second.size;
                         ++statistics[2];
                     }
+                    catch (const std::bad_alloc &)
+                    {
+                        throw;
+                    }
+                    catch (const std::length_error &)
+                    {
+                        throw;
+                    }
+                    catch (const CacheWriteError &)
+                    {
+                        throw;
+                    }
                     catch (const std::exception &error)
                     {
+                        provider.failedEntries.emplace(logical, error.what());
+                        failures.push_back({provider.path, logical, error.what()});
                         reliable = false;
-                        std::cerr << "BSA extraction: unreadable winner "
-                                  << navmesh::core::PathToUtf8(provider.path.filename()) << '/' << logical << ": "
-                                  << error.what() << '\n';
+                        if (reported.emplace(provider.path, logical).second)
+                        {
+                            std::cerr << "BSA extraction: unreadable winner "
+                                      << navmesh::core::PathToUtf8(provider.path.filename()) << '/' << logical << ": "
+                                      << error.what() << '\n';
+                        }
                     }
                 }
             }
+            catch (const std::bad_alloc &)
+            {
+                throw;
+            }
+            catch (const std::length_error &)
+            {
+                throw;
+            }
+            catch (const CacheWriteError &)
+            {
+                throw;
+            }
             catch (const std::exception &error)
             {
+                for (const auto &logical : remaining)
+                {
+                    failures.push_back({provider.path, logical, error.what()});
+                }
+                // An unreadable higher-priority index leaves every remaining winner unknown.
+                // Never publish lower-priority payloads for those names into the shared cache.
+                remaining.clear();
                 reliable = false;
-                std::cerr << "BSA extraction: skipped " << navmesh::core::PathToUtf8(provider.path.filename()) << ": "
-                          << error.what() << '\n';
+                if (reported.emplace(provider.path, "").second)
+                {
+                    std::cerr << "BSA extraction: skipped " << navmesh::core::PathToUtf8(provider.path.filename())
+                              << ": " << error.what() << '\n';
+                }
             }
             return reliable;
         }
@@ -489,6 +578,7 @@ namespace navmesh::skyrim
 
     bool BsaModelExtractor::Extract(const std::set<std::string> &requested)
     {
+        impl_->failures.clear();
         bool reliable = true;
         try
         {
@@ -526,12 +616,34 @@ namespace navmesh::skyrim
             }
             impl_->SaveStatistics();
         }
+        catch (const std::bad_alloc &)
+        {
+            throw;
+        }
+        catch (const std::length_error &)
+        {
+            throw;
+        }
+        catch (const CacheWriteError &)
+        {
+            throw;
+        }
+        catch (const UnsafeModelPathError &error)
+        {
+            std::cerr << "BSA extraction: " << error.what() << '\n';
+            return false;
+        }
         catch (const std::exception &error)
         {
             std::cerr << "BSA extraction: " << error.what() << '\n';
-            reliable = false;
+            throw;
         }
         return reliable;
+    }
+
+    const std::vector<BsaFailure> &BsaModelExtractor::Failures() const
+    {
+        return impl_->failures;
     }
 
     bool BsaModelExtractor::ChangedModels(const std::set<std::filesystem::path> &changed, std::set<std::string> &models)
@@ -560,6 +672,18 @@ namespace navmesh::skyrim
             impl_->SaveStatistics();
             models = std::move(result);
             return true;
+        }
+        catch (const std::bad_alloc &)
+        {
+            throw;
+        }
+        catch (const std::length_error &)
+        {
+            throw;
+        }
+        catch (const CacheWriteError &)
+        {
+            throw;
         }
         catch (const std::exception &error)
         {

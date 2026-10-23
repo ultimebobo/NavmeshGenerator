@@ -41,7 +41,8 @@ namespace navmesh::skyrim
     {
         const auto archives = ModelArchives(dataDirectory, assets);
         core::ContentHash hash;
-        hash.Add("navmesh-assets-schema-2\n");
+        // Snapshot compatibility includes reliable provider precedence for every published NIF.
+        hash.Add("navmesh-assets-schema-3\n");
         hash.Add(navmesh::core::PathToUtf8(std::filesystem::absolute(dataDirectory).lexically_normal()));
         for (const auto &archive : archives)
         {
@@ -77,33 +78,25 @@ namespace navmesh::skyrim
         {
             return true;
         }
-        try
+        BsaModelExtractor extractor(ModelArchives(dataDirectory, &assets), snapshot);
+        std::set<std::string> changedModels;
+        if (!extractor.ChangedModels(changedArchives, changedModels))
         {
-            BsaModelExtractor extractor(ModelArchives(dataDirectory, &assets), snapshot);
-            std::set<std::string> changedModels;
-            if (!extractor.ChangedModels(changedArchives, changedModels))
-            {
-                return false;
-            }
-            for (auto model = changedModels.begin(); model != changedModels.end();)
-            {
-                if (assets.looseModels.contains(*model))
-                {
-                    model = changedModels.erase(model);
-                }
-                else
-                {
-                    ++model;
-                }
-            }
-            models.insert(changedModels.begin(), changedModels.end());
-            return true;
-        }
-        catch (const std::exception &error)
-        {
-            std::cerr << "BSA model indexing: " << error.what() << '\n';
             return false;
         }
+        for (auto model = changedModels.begin(); model != changedModels.end();)
+        {
+            if (assets.looseModels.contains(*model))
+            {
+                model = changedModels.erase(model);
+            }
+            else
+            {
+                ++model;
+            }
+        }
+        models.insert(changedModels.begin(), changedModels.end());
+        return true;
     }
 
     namespace

@@ -143,9 +143,11 @@ expand horizontal coverage. Triangle/cell intersection excludes empty corners of
 triangle bounds. Terrain changes select their owning CELL; no whole-cell impact
 halo is added. `--neighboring-cell-radius` controls geometry suppliers without
 expanding regeneration targets. Models absent after a completed loose-asset and
-archive search supply no collision. Selection continues with a warning and lists
-unique missing paths in `selection_missing_models` in `batch-report.json`.
-Unreadable models and incomplete archive searches stop selection.
+archive search are required-geometry failures, as are unreadable models, incomplete
+archive searches and unsupported solid collision. When selection cannot establish
+a failed input's historical footprint, recovery excludes its complete worldspace
+or interior. Unresolved ownership stops export. `selection_missing_models` retains
+unique missing paths; `asset_failures` records the excluded targets and evidence.
 Model replacements compare winning collision against the preceding available asset
 providers; added model paths have no prior collider. Archive-index failures compare
 all model uses rather than select every model's bounding sphere.
@@ -198,7 +200,7 @@ plugin-only output for writing or estimates, and full output for inspection.
 Source-triangle and geometry-source evidence are compacted together. Batch runs
 omit the large per-cell scene and discrepancy exports.
 
-Every selected live cell generates a candidate, including cells without an existing
+Every selected live cell is considered for generation, including cells without an existing
 NAVM. With `--skip-existing-navmesh`, any winning NAVM record protects its CELL and
 is reported as `skipped_existing_navm` before extraction. Empty, unsupported and
 deleted NAVM records also protect their identities when that option is enabled.
@@ -208,13 +210,25 @@ unrelated earlier load-order plugins do not affect their placement.
 Deleted CELLs are skipped. Valid empty candidates are completed replacements when
 no supported walkable floor survives; they clear replaced authored geometry rather
 than inventing a floor. Cell-local Recast generation, height-range and topology
-failures are logged as `skipped_generation_failed`, with the CELL identity, error
-and validation findings in `batch-report.json`. These cells produce no replacement
-NAVM; their authored geometry stays intact. Other cells continue generating and
-the verified plugin can complete. Reports use `complete_with_skips` when generation
-failures occurred and count them in `generation_failed_cells`; the completion
-message also reports that count. Input, extraction, allocation exceptions, evidence-storage,
-global seam refinement and writer failures still stop publishing.
+failures are logged as `skipped_generation_failed`. Required supplier-geometry
+failures use `skipped_extraction_failed`; every target requesting that unavailable
+input is skipped. Neither status creates replacement NAVM geometry. Authored
+geometry remains available for border reconciliation, including reciprocal link
+updates needed by successful neighbors. Decorative, non-solid and intentionally
+excluded geometry does not cause a skip.
+
+**Cell error policy** / `--cell-error-policy` is shared by CLI and desktop and
+persisted with desktop settings. `continue` permits recoverable skips; `stop`
+aborts publication on the first recoverable selection, extraction or generation
+failure. Input, allocation, cache/evidence-storage, global seam/reachability and
+writer validation failures always stop publication. A verified partial plugin can
+complete only after the successful target set passes the usual global checks.
+`complete_with_skips`, `generation_failed_cells` and `extraction_failed_cells`
+identify incomplete coverage, including runs with no successful replacements.
+`asset_failures` deduplicates model/provider/category evidence, stages, references
+and affected CELLs; per-cell `asset_failure_ids` refer to those entries. Physical
+providers and attempted NIF paths are retained. Single-cell generation uses
+`generation-report.json` for skips and keeps inspection evidence where available.
 
 Generation and border linking are separate stages. Workers retain all surviving
 walkable components without requiring authored portals or door anchors. Authored
@@ -228,7 +242,7 @@ border cavities handle partitions spanning several generated fans. Continuous
 floor repairs precede strips connected through climb-compatible interior edges;
 the supporting floor keeps its heights and every replacement obeys its slope
 envelope. Unsupported gaps and incompatible floor levels remain unlinked.
-Targets skipped after generation failure become untouched neighbors for border
+Targets skipped after recoverable failure become untouched neighbors for border
 matching, including reciprocal connection updates when required.
 Recovery validates the complete set of established authored portal destinations
 together with the skipped neighbors. A skipped neighbor without authored NAVM

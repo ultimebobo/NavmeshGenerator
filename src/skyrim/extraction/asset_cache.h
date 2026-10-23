@@ -26,6 +26,7 @@ namespace navmesh::skyrim
      * @param changedArchives Archive paths belonging to the requested rebuild scope.
      * @param models Receives normalized logical model paths only on complete index success.
      * @return False on archive/index failure; callers must retain conservative archive impact.
+     * Allocation and cache/storage errors propagate and must stop publishing.
      */
     [[nodiscard]] bool ChangedArchiveModels(const std::filesystem::path &dataDirectory, const ModelAssetSources &assets,
                                             const std::filesystem::path &snapshot,

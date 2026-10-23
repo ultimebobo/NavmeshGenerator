@@ -76,6 +76,7 @@ namespace navmesh::ui
         result.listCells = listOnly;
         if (listOnly)
         {
+            result.cellErrorPolicy = app::Options{}.cellErrorPolicy;
             result.rebuildScope = app::RebuildScope::Cell;
             result.generateCandidate = false;
             result.generatePlugin = false;
@@ -158,6 +159,10 @@ namespace navmesh::ui
                 std::format("Invalid Neighboring cells / --neighboring-cell-radius: {}. Enter a nonnegative whole "
                             "number in Advanced settings or the CLI option.",
                             result.neighboringCellRadius));
+        }
+        if (result.cellErrorPolicy != "continue" && result.cellErrorPolicy != "stop")
+        {
+            throw std::invalid_argument("Cell error policy / --cell-error-policy must be continue or stop.");
         }
         if (result.workers == 0 || result.workers > 64)
         {

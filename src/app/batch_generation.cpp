@@ -152,6 +152,12 @@ namespace navmesh::app::detail
         auto result = std::move(input.result);
         try
         {
+            if (!input.geometry.failures.empty())
+            {
+                result.status = options.cellErrorPolicy == "stop" ? "failed" : "skipped_extraction_failed";
+                result.error = skyrim::DescribeGeometryFailure(input.geometry.failures.front());
+                return result;
+            }
             const auto algorithm =
                 options.partitioningAlgorithm == core::RegionPartitioningAlgorithm::Monotone ? "monotone"
                 : options.partitioningAlgorithm == core::RegionPartitioningAlgorithm::Layers ? "layers"
@@ -201,11 +207,15 @@ namespace navmesh::app::detail
             {
                 throw;
             }
+            catch (const std::length_error &)
+            {
+                throw;
+            }
             catch (const std::exception &error)
             {
                 result.generationSeconds =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-                result.status = "skipped_generation_failed";
+                result.status = options.cellErrorPolicy == "stop" ? "failed" : "skipped_generation_failed";
                 result.error = std::format("CELL {:08X}: {}", result.cell->id, error.what());
                 result.candidate = {};
                 result.auditPath.clear();
@@ -261,7 +271,8 @@ namespace navmesh::app::detail
         std::vector<const BatchCellResult *> skippedExteriors;
         for (auto &result : results)
         {
-            if (result.status == "skipped_generation_failed" && result.cell->exteriorCoordinates)
+            if ((result.status == "skipped_generation_failed" || result.status == "skipped_extraction_failed") &&
+                result.cell->exteriorCoordinates)
             {
                 skippedExteriors.push_back(&result);
             }

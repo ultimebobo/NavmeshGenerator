@@ -72,6 +72,7 @@ target("navmesh-tests")
     add_files("src/app/cell_scene.cpp")
     add_files("src/app/main.cpp", "src/app/batch_runner.cpp", "src/cli/**.cpp")
     add_files("src/app/run_progress.cpp")
+    add_files("src/app/asset_failures.cpp")
 
 -- Development-only probe for archive differential tests and stage benchmarks.
 target("navmesh-bsa-probe")

@@ -3,6 +3,7 @@
 #endif
 
 #include "skyrim/extraction/asset_cache.h"
+#include "skyrim/extraction/bsa_archive.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "core/navmesh/generator.h"
 #include "core/geometry/convex_hull.h"
@@ -1130,6 +1131,34 @@ void TestNativeBsaGeometry()
     std::ostringstream model(std::ios::binary);
     assert(nif.Save(model) == 0);
     WriteModelArchive(root / "Fixture.BSA", model.str());
+    {
+        const auto unknownWinner = root / "invalid-provider" / "UnknownWinner.bsa";
+        std::filesystem::create_directory(unknownWinner.parent_path());
+        std::ofstream(unknownWinner) << "invalid archive";
+        const auto uncertain = root / "uncertain-cache";
+        skyrim::BsaModelExtractor extractor({root / "Fixture.BSA", unknownWinner}, uncertain);
+        for (int attempt{}; attempt < 2; ++attempt)
+        {
+            assert(!extractor.Extract({"meshes/fixture.nif"}));
+            assert(extractor.Failures().size() == 1 && extractor.Failures().front().archive == unknownWinner);
+            assert(!std::filesystem::exists(uncertain / "meshes/fixture.nif"));
+        }
+    }
+    {
+        const auto blocked = root / "blocked-cache";
+        skyrim::BsaModelExtractor extractor({root / "Fixture.BSA"}, blocked);
+        std::ofstream(blocked / "meshes") << "not a directory";
+        bool fatalStorageFailure{};
+        try
+        {
+            (void)extractor.Extract({"meshes/fixture.nif"});
+        }
+        catch (const std::runtime_error &)
+        {
+            fatalStorageFailure = true;
+        }
+        assert(fatalStorageFailure && extractor.Failures().empty());
+    }
     const auto snapshot = skyrim::ModelAssetCacheDirectory(root, nullptr, root / "cache");
     assert(skyrim::ModelArchives(root, nullptr).size() == 1);
     core::Cell cell;
@@ -1140,6 +1169,9 @@ void TestNativeBsaGeometry()
                                .position = {10, 20, 30},
                                .baseRecordType = "STAT"});
     skyrim::ModelGeometryCache cache;
+    const auto withoutArchiveCache = skyrim::ExtractGeometry(root, cell);
+    assert(!withoutArchiveCache.archiveSearchComplete && !withoutArchiveCache.failures.empty());
+    assert(withoutArchiveCache.failures.front().category == "archive_lookup");
     const auto geometry = skyrim::ExtractGeometry(root, cell, snapshot, {}, {}, nullptr, &cache);
     assert(geometry.modelsLoaded == 1 && geometry.scene.mesh.triangles.size() == 1);
     assert(geometry.scene.mesh.vertices[0].x == 10 && geometry.scene.mesh.vertices[0].z == 30);

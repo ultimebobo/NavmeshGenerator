@@ -125,6 +125,8 @@ void TestActionableErrors()
     CheckParseError({"--mo2", "--profile", "Fixture"}, "--mo2", "requires a value");
     CheckParseError({"--scene-bounds", "0", "0", "--generate-candidate"}, "--scene-bounds", "four numbers");
     CheckParseError({"--generate-plguin"}, "--generate-plguin", "Unknown option");
+    CheckParseError({"--cell-error-policy", "invalid"}, "--cell-error-policy", "continue or stop");
+    CheckParseError({"--cell-error-policy"}, "--cell-error-policy", "requires a value");
     CheckParseError({"--cells", "Fixture", "unquoted"}, "unquoted", "quote paths or names");
     const auto parsed = Parse({"--cell-formid", "0xFFFFFFFF", "--cell-x", "-2", "--cell-y", "3", "--scene-bounds",
                                "-10", "-20", "30", "40", "--workers", "2"});

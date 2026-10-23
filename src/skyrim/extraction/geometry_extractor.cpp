@@ -206,9 +206,12 @@ namespace
         navmesh::core::AABB hearthBedBounds;
         std::vector<std::string> collisionShapeTypes;
         bool nonSolidCollision{};
+        /// Physical collision presence and decode completeness distinguish unavailable colliders from visual-only NIFs.
+        bool solidCollision{}, incompleteCollision{};
         bool operablePartsExcluded{};
         bool operablePassage{};
         std::string version;
+        std::string readFailure;
     };
 
     using OperableNodes = std::unordered_set<const nifly::NiAVObject *>;
@@ -830,7 +833,8 @@ namespace
 
     /// Decode each reachable shape placement. The active path prevents cycles without discarding shared instances.
     void LoadPackedCollision(const nifly::NifFile &nif, TriangleGeometry &result, std::vector<std::string> &shapeTypes,
-                             bool &nonSolidCollision, const OperableNodes &operableNodes, bool &operablePartsExcluded)
+                             bool &nonSolidCollision, const OperableNodes &operableNodes, bool &operablePartsExcluded,
+                             bool &solidCollision, bool &incompleteCollision)
     {
         const auto &header = nif.GetHeader();
         std::function<void(nifly::bhkShape *, CollisionTransform, std::vector<std::uint32_t>)> visit =
@@ -838,15 +842,18 @@ namespace
         {
             if (!shape)
             {
+                incompleteCollision = true;
                 return;
             }
             const auto id = header.GetBlockID(shape);
             if (std::find(path.begin(), path.end(), id) != path.end())
             {
+                incompleteCollision = true;
                 return;
             }
             path.push_back(id);
             const std::string shapeName = shape->GetBlockName();
+            const auto trianglesBefore = result.triangles.size();
             if (std::find(shapeTypes.begin(), shapeTypes.end(), shapeName) == shapeTypes.end())
             {
                 shapeTypes.push_back(shapeName);
@@ -918,14 +925,25 @@ namespace
             {
                 if (const auto *data = header.GetBlock(compressed->dataRef))
                 {
-                    const auto trianglesBefore = result.triangles.size();
+                    const auto compressedTrianglesBefore = result.triangles.size();
                     AddCompressedBigTriangles(*data, transform, result);
                     AddCompressedChunkTriangles(*data, transform, result);
-                    if (result.triangles.size() > trianglesBefore)
+                    if (result.triangles.size() > compressedTrianglesBefore)
                     {
                         result.shapes.push_back("bhkCompressedMeshShape");
                     }
                 }
+            }
+            else
+            {
+                incompleteCollision = true;
+            }
+            const bool container =
+                dynamic_cast<nifly::bhkTransformShape *>(shape) || dynamic_cast<nifly::bhkMoppBvTreeShape *>(shape) ||
+                dynamic_cast<nifly::bhkListShape *>(shape) || dynamic_cast<nifly::bhkConvexListShape *>(shape);
+            if (!container && result.triangles.size() == trianglesBefore)
+            {
+                incompleteCollision = true;
             }
         };
         for (std::uint32_t block = 0; block < header.GetNumBlocks(); ++block)
@@ -944,6 +962,8 @@ namespace
                 dynamic_cast<nifly::bhkRigidBody *>(header.GetBlock<nifly::NiObject>(collision->bodyRef));
             if (!body)
             {
+                incompleteCollision = true;
+                solidCollision = true;
                 continue;
             }
             if (!HasSolidNavigationCollision(*body, header.GetVersion()))
@@ -951,9 +971,11 @@ namespace
                 nonSolidCollision = true;
                 continue;
             }
+            solidCollision = true;
             const auto target = ModelSpaceTransform(nif, header.GetBlock(collision->targetRef));
             if (!target)
             {
+                incompleteCollision = true;
                 continue;
             }
             CollisionTransform transform{.body = body, .target = *target};
@@ -1197,7 +1219,7 @@ namespace
         const auto operableNodes = operableActivator ? FindOperableNodes(nif, passageAsset) : OperableNodes{};
         result.operablePassage = !operableNodes.empty();
         LoadPackedCollision(nif, result.collision, result.collisionShapeTypes, result.nonSolidCollision, operableNodes,
-                            result.operablePartsExcluded);
+                            result.operablePartsExcluded, result.solidCollision, result.incompleteCollision);
         if (includeHearth)
         {
             result.hearthBedBounds = FindHearthBedBounds(nif);
@@ -1463,11 +1485,10 @@ namespace
         }
         if (cacheDirectory.empty())
         {
-            return false;
+            return navmesh::skyrim::ModelArchives(dataDirectory, assets).empty();
         }
         if (!extract(requested))
         {
-            std::cerr << "BSA model extraction incomplete; see archive diagnostics.\n";
             return false;
         }
         return true;
@@ -1476,6 +1497,14 @@ namespace
 
 namespace navmesh::skyrim
 {
+    std::string DescribeGeometryFailure(const GeometryFailure &failure)
+    {
+        return std::format("{} geometry: '{}' (provider '{}'); REFR {:08X} in '{}', base {:08X} in '{}': {}",
+                           failure.category, failure.model, failure.provider, failure.reference.formId,
+                           failure.reference.plugin, failure.baseObject.formId, failure.baseObject.plugin,
+                           failure.reason);
+    }
+
     bool IsHearthModelPath(const std::string &modelPath)
     {
         return IsHearthAsset(modelPath);
@@ -1525,7 +1554,8 @@ namespace navmesh::skyrim
         std::filesystem::path archiveSnapshot;
 
         bool ExtractArchives(const std::set<std::string> &requested, const std::filesystem::path &dataDirectory,
-                             const std::filesystem::path &snapshot, const ModelAssetSources *assets)
+                             const std::filesystem::path &snapshot, const ModelAssetSources *assets,
+                             std::vector<BsaFailure> &failures)
         {
             std::lock_guard lock(mutex);
             if (!archives || archiveSnapshot != snapshot)
@@ -1533,7 +1563,9 @@ namespace navmesh::skyrim
                 archives = std::make_unique<BsaModelExtractor>(ModelArchives(dataDirectory, assets), snapshot);
                 archiveSnapshot = snapshot;
             }
-            return archives->Extract(requested);
+            const bool complete = archives->Extract(requested);
+            failures = archives->Failures();
+            return complete;
         }
 
         mutable std::mutex mutex;
@@ -1600,6 +1632,16 @@ namespace navmesh::skyrim
                                          "workers, then retry. If the same NIF still fails, inspect that model for "
                                          "corrupt or unsupported data.");
             }
+            catch (const std::length_error &)
+            {
+                throw std::runtime_error("NIF decoder allocation limit exceeded for '" + core::PathToUtf8(path) + "'");
+            }
+            catch (const std::exception &error)
+            {
+                NifGeometry unreadable;
+                unreadable.readFailure = error.what();
+                value = std::make_shared<const NifGeometry>(std::move(unreadable));
+            }
             ++statistics.modelsDecoded;
             std::size_t shapeBytes = value->collisionShapeTypes.capacity() * sizeof(std::string);
             for (const auto &shape : value->collisionShapeTypes)
@@ -1609,7 +1651,7 @@ namespace navmesh::skyrim
             const auto bytes = GeometryBytes(value->render) + GeometryBytes(value->collision) +
                                GeometryBytes(value->fireExclusion) + key.capacity() + sizeof(NifGeometry) -
                                3 * sizeof(TriangleGeometry) + shapeBytes + value->version.capacity() +
-                               sizeof(Entry<NifGeometry>) + 64;
+                               value->readFailure.capacity() + sizeof(Entry<NifGeometry>) + 64;
             if (bytes <= budget)
             {
                 models.emplace(key, Entry<NifGeometry>{value, bytes, ++clock});
@@ -1681,6 +1723,7 @@ namespace navmesh::skyrim
                    (navigationOnly ? ":navigation-snapshot" : ":display-snapshot") +
                    (IsHearthAsset(navmesh::core::PathToUtf8(relative)) ? ":hearth" : "");
         };
+        std::vector<BsaFailure> archiveFailures;
         output.archiveSearchComplete = ExtractBsaModels(
             dataDirectory, cacheDirectory, cell, assets,
             [&](const auto &relative)
@@ -1691,7 +1734,47 @@ namespace navmesh::skyrim
                                          cache.impl_->ContainsReadableModel(key + ":operable-activator:passage"));
             },
             [&](const auto &requested)
-            { return cache.impl_->ExtractArchives(requested, dataDirectory, cacheDirectory, assets); });
+            {
+                return cache.impl_->ExtractArchives(requested, dataDirectory, cacheDirectory, assets, archiveFailures);
+            });
+        std::set<std::uint32_t> archiveFailureReferences;
+        for (const auto &failure : archiveFailures)
+        {
+            for (const auto &reference : cell.references)
+            {
+                if (AssetKey(ModelRelativePath(reference.modelPath)) == failure.model)
+                {
+                    output.failures.push_back(
+                        {"archive_lookup",
+                         reference.modelPath,
+                         core::PathToUtf8(failure.archive),
+                         failure.reason,
+                         {reference.sourcePlugin, reference.id, reference.recordType},
+                         {reference.basePlugin, reference.baseObjectId, reference.baseRecordType}});
+                }
+            }
+        }
+        if (!output.archiveSearchComplete && output.failures.empty())
+        {
+            if (!cacheDirectory.empty())
+            {
+                throw std::runtime_error("Required archive search failed without recoverable asset evidence");
+            }
+            for (const auto &reference : cell.references)
+            {
+                if (!reference.modelPath.empty() && !reference.deleted && !reference.initiallyDisabled &&
+                    !IsFilteredReference(reference))
+                {
+                    output.failures.push_back(
+                        {"archive_lookup",
+                         reference.modelPath,
+                         {},
+                         "Archive lookup requires a writable cache directory",
+                         {reference.sourcePlugin, reference.id, reference.recordType},
+                         {reference.basePlugin, reference.baseObjectId, reference.baseRecordType}});
+                }
+            }
+        }
         const auto totalReferences = cell.references.size();
         std::vector<HearthPlacement> hearths;
         for (std::size_t referenceIndex{}; referenceIndex < totalReferences; ++referenceIndex)
@@ -1773,6 +1856,15 @@ namespace navmesh::skyrim
             const auto model = cache.impl_->Model(modelPath, includeRender, hearthAsset, operableActivator,
                                                   IsPassageAsset(reference.modelPath), modelIdentity);
             const auto &nifGeometry = *model;
+            const auto addFailure = [&](std::string category, std::string reason)
+            {
+                if (archiveFailureReferences.contains(reference.id))
+                {
+                    return;
+                }
+                output.failures.push_back({std::move(category), reference.modelPath, core::PathToUtf8(modelPath),
+                                           std::move(reason), source.reference, source.baseObject});
+            };
             if (operableActivator && IsAnimatedAsset(reference.modelPath) && !nifGeometry.version.empty() &&
                 !nifGeometry.operablePassage)
             {
@@ -1798,7 +1890,11 @@ namespace navmesh::skyrim
                                : !nifGeometry.collision.triangles.empty() ? nifGeometry.collision
                                                                           : nifGeometry.render;
             const bool hasCollision = !fireEffect && !nifGeometry.collision.triangles.empty();
-            if (mesh.triangles.empty() && nifGeometry.operablePartsExcluded)
+            if (nifGeometry.incompleteCollision || nifGeometry.collision.invalidIndices)
+            {
+                addFailure("unsupported", "NIF contains incomplete or unsupported solid collision");
+            }
+            if (mesh.triangles.empty() && nifGeometry.operablePartsExcluded && !nifGeometry.solidCollision)
             {
                 report.failure = "excluded operable passage panels; no fixed geometry remains";
                 output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
@@ -1806,7 +1902,7 @@ namespace navmesh::skyrim
                 output.references.push_back(std::move(report));
                 continue;
             }
-            if (!fireEffect && !hasCollision && nifGeometry.nonSolidCollision)
+            if (!fireEffect && !hasCollision && nifGeometry.nonSolidCollision && !nifGeometry.solidCollision)
             {
                 report.failure = "excluded non-solid Havok collision; render fallback is forbidden";
                 output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
@@ -1829,6 +1925,13 @@ namespace navmesh::skyrim
                     : status == core::GeometryCoverage::Unreadable ? "NIF could not be read"
                     : fireEffect ? "fire effect contains no recognized fuel or flame triangle geometry"
                                  : "NIF contains no supported triangle geometry";
+                if (nifGeometry.version.empty() || fireEffect || nifGeometry.solidCollision)
+                {
+                    addFailure(status == core::GeometryCoverage::Missing      ? "missing"
+                               : status == core::GeometryCoverage::Unreadable ? "unreadable"
+                                                                              : "unsupported",
+                               nifGeometry.readFailure.empty() ? report.failure : nifGeometry.readFailure);
+                }
                 if (status == core::GeometryCoverage::Unsupported)
                 {
                     ++output.modelsUnsupported;

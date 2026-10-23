@@ -121,6 +121,7 @@ namespace navmesh::app
                                           "--geometry-layers",
                                           "--output-detail",
                                           "--batch-output",
+                                          "--cell-error-policy",
                                           "--asset-cache",
                                           "--cache-budget-mib",
                                           "--working-memory-mib",
@@ -350,6 +351,14 @@ namespace navmesh::app
                 options.copyPlugin = true;
                 options.generatePlugin = true;
                 options.generateCandidate = true;
+            }
+            else if (argument == "--cell-error-policy" && index + 1 < argc)
+            {
+                options.cellErrorPolicy = argv[++index];
+                if (options.cellErrorPolicy != "continue" && options.cellErrorPolicy != "stop")
+                {
+                    throw std::invalid_argument("--cell-error-policy must be continue or stop");
+                }
             }
             else if (argument == "--copy-plugin-source" && index + 1 < argc)
             {

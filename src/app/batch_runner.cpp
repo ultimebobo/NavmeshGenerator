@@ -1,6 +1,7 @@
 #include "app/batch_runner.h"
 #include "core/io/file_path.h"
 #include "app/cell_scene.h"
+#include "app/asset_failures.h"
 
 #include "app/geometry_pipeline.h"
 #include "app/candidate_artifacts.h"
@@ -351,6 +352,62 @@ namespace navmesh::app::detail
         const auto previousAssetCache =
             skyrim::ModelAssetCacheDirectory(options.data, assets ? &previousAssets : nullptr, options.assetCache);
         skyrim::ImpactSelectionStatistics selectionStatistics;
+        AssetFailureCatalog assetFailures;
+        std::set<std::size_t> loggedFailures;
+        std::map<std::uint32_t, std::set<std::size_t>> selectionFailures;
+        std::set<std::tuple<std::size_t, bool, std::uint32_t>> excludedScopes;
+        const auto rememberFailure =
+            [&](const skyrim::GeometryFailure &failure, std::string_view stage, std::uint32_t cell)
+        {
+            const auto id = assetFailures.Add(failure, stage, cell);
+            if (loggedFailures.insert(id).second)
+            {
+                const auto message =
+                    std::format("Asset failure {} during {}: {}", id, stage, skyrim::DescribeGeometryFailure(failure));
+                if (events)
+                {
+                    events({.kind = app::RunEventKind::Warning, .percent = lastPercent, .message = message});
+                }
+                else
+                {
+                    std::cerr << message << '\n';
+                }
+            }
+            return id;
+        };
+        const auto selectionFailure = [&](const skyrim::GeometryFailure &failure, const skyrim::RecordOrigin &origin)
+        {
+            // Missing historical collision cannot establish an exact footprint. Excluding the complete
+            // ownership scope covers moves, rotations, persistent placements and their distant suppliers.
+            const auto issue = rememberFailure(failure, "selection", 0);
+            const auto scope = std::tuple{issue, origin.worldspaceFormId.has_value(),
+                                          origin.worldspaceFormId.value_or(origin.cellFormId.value_or(0))};
+            if (excludedScopes.contains(scope))
+            {
+                return options.cellErrorPolicy == "continue";
+            }
+            bool bounded{};
+            for (const auto &cell : resolved.cells)
+            {
+                const auto *record = resolved.FindWinning(cell.id);
+                const bool affected = origin.worldspaceFormId
+                                          ? record && record->worldspaceFormId == origin.worldspaceFormId
+                                          : origin.cellFormId && cell.id == *origin.cellFormId && cell.isInterior;
+                if (affected)
+                {
+                    selectionFailures[cell.id].insert(rememberFailure(failure, "selection", cell.id));
+                    bounded = true;
+                }
+            }
+            if (!bounded)
+            {
+                rememberFailure(failure, "selection", 0);
+                throw std::runtime_error("Cannot bound affected targets for unavailable collision: " +
+                                         skyrim::DescribeGeometryFailure(failure));
+            }
+            excludedScopes.insert(scope);
+            return options.cellErrorPolicy == "continue";
+        };
         if (progress)
         {
             progress(30, options.rebuildScope == app::RebuildScope::Cell
@@ -391,13 +448,38 @@ namespace navmesh::app::detail
                          {
                              progress(30, message);
                          }
-                     }},
+                     },
+                     .failedGeometry = selectionFailure},
                     modelCache, selectionStatistics);
             }
         }
         catch (const std::runtime_error &error)
         {
             selectionError = error.what();
+        }
+        if (!selectionFailures.empty())
+        {
+            std::set<std::uint32_t> selected;
+            for (const auto *cell : targets)
+            {
+                selected.insert(cell->id);
+            }
+            for (const auto &cell : resolved.cells)
+            {
+                if (selectionFailures.contains(cell.id) && selected.insert(cell.id).second)
+                {
+                    targets.push_back(&cell);
+                }
+            }
+            std::sort(targets.begin(), targets.end(),
+                      [&](const auto *left, const auto *right)
+                      {
+                          return std::tuple{!left->exteriorCoordinates.has_value(),
+                                            resolved.FindWinning(left->id)->worldspaceFormId, left->exteriorCoordinates,
+                                            left->id} < std::tuple{!right->exteriorCoordinates.has_value(),
+                                                                   resolved.FindWinning(right->id)->worldspaceFormId,
+                                                                   right->exteriorCoordinates, right->id};
+                      });
         }
         const auto selectedCells = targets.size();
         std::map<std::optional<std::uint32_t>, std::size_t> selectedWorlds;
@@ -409,7 +491,8 @@ namespace navmesh::app::detail
         const auto eligible = [&](const core::Cell *cell)
         {
             const auto *record = resolved.FindWinning(cell->id);
-            return (!options.skipExistingNavmesh || !existingNavmeshCells.contains(cell->id)) &&
+            return !selectionFailures.contains(cell->id) &&
+                   (!options.skipExistingNavmesh || !existingNavmeshCells.contains(cell->id)) &&
                    !(record && record->raw && (record->raw->flags & 0x20U)) && !IsPersistentExteriorCell(*cell, record);
         };
         const auto fullEligibleCells =
@@ -456,7 +539,8 @@ namespace navmesh::app::detail
                 sampled.insert(cells[cells.size() / 2]->id);
                 sampled.insert(cells.back()->id);
             }
-            std::erase_if(targets, [&](const auto *cell) { return !sampled.contains(cell->id); });
+            std::erase_if(targets, [&](const auto *cell)
+                          { return !sampled.contains(cell->id) && !selectionFailures.contains(cell->id); });
         }
         // Retain compact candidate evidence and status for every target, including skips and failures.
         using Result = BatchCellResult;
@@ -465,6 +549,14 @@ namespace navmesh::app::detail
         for (const auto *target : targets)
         {
             results.push_back({.cell = target, .status = "pending"});
+            if (const auto failures = selectionFailures.find(target->id); failures != selectionFailures.end())
+            {
+                auto &result = results.back();
+                result.status = "skipped_extraction_failed";
+                result.assetFailures.assign(failures->second.begin(), failures->second.end());
+                result.error = "Selection excluded this ownership scope because its collision footprint is unknown: " +
+                               skyrim::DescribeGeometryFailure(assetFailures.Failure(result.assetFailures.front()));
+            }
         }
         std::map<std::uint32_t, skyrim::GeometryExtraction> cache;
         std::deque<std::uint32_t> cacheOrder;
@@ -506,7 +598,7 @@ namespace navmesh::app::detail
         const auto missingModelWarning =
             selectionStatistics.missingModels.empty()
                 ? std::string{}
-                : std::format("Warning: {} missing NIF model paths supply no collision; see "
+                : std::format("Warning: {} missing NIF model paths exclude affected targets; see "
                               "selection_missing_models in batch-report.json.",
                               selectionStatistics.missingModels.size());
         if (!missingModelWarning.empty())
@@ -632,6 +724,12 @@ namespace navmesh::app::detail
             out << "},\n";
             out << "  \"skip_existing_navmesh\":" << (options.skipExistingNavmesh ? "true" : "false") << ",\n";
             out << "  \"copy_plugin\":" << (options.copyPlugin ? "true" : "false") << ",\n";
+            out << "  \"cell_error_policy\":\"" << options.cellErrorPolicy << "\",\n  \"asset_failures\":";
+            assetFailures.WriteJson(out);
+            out << ",\n  \"extraction_failed_cells\":"
+                << std::count_if(results.begin(), results.end(),
+                                 [](const auto &result) { return result.status == "skipped_extraction_failed"; })
+                << ",\n";
             out << std::format("  \"scope\":\"{}\",\"plugin\":\"{}\",\"status\":\"{}\",\"error\":\"{}\",\n",
                                options.rebuildScope == app::RebuildScope::Cell     ? "cell"
                                : options.rebuildScope == app::RebuildScope::Plugin ? "plugin"
@@ -658,6 +756,11 @@ namespace navmesh::app::detail
                 for (std::size_t finding{}; finding < results[i].diagnostics.size(); ++finding)
                 {
                     out << (finding ? "," : "") << "\"" << JsonEscape(results[i].diagnostics[finding]) << "\"";
+                }
+                out << "],\"asset_failure_ids\":[";
+                for (std::size_t failure{}; failure < results[i].assetFailures.size(); ++failure)
+                {
+                    out << (failure ? "," : "") << results[i].assetFailures[failure];
                 }
                 out << "]}" << (i + 1 == results.size() ? "" : ",") << '\n';
             }
@@ -914,6 +1017,14 @@ namespace navmesh::app::detail
                 batchActivity(std::format("CELL {:08X}: {}", cell.id, result.status), app::RunEventKind::CellCompleted);
                 continue;
             }
+            if (result.status == "skipped_extraction_failed")
+            {
+                ++observedFailed;
+                batchActivity(
+                    std::format("CELL {:08X}: skipped unavailable selection geometry; see batch-report.json", cell.id),
+                    app::RunEventKind::CellCompleted);
+                continue;
+            }
             const auto update = [&](std::string_view status)
             {
                 if (progress)
@@ -1039,6 +1150,33 @@ namespace navmesh::app::detail
             {
                 ++observedSkipped;
                 batchActivity(std::format("CELL {:08X}: {}", cell.id, result.status), app::RunEventKind::CellCompleted);
+                continue;
+            }
+            if (!geometry.failures.empty())
+            {
+                std::set<std::size_t> failures;
+                for (const auto &failure : geometry.failures)
+                {
+                    failures.insert(rememberFailure(failure, "extraction", cell.id));
+                }
+                result.status = "skipped_extraction_failed";
+                result.assetFailures.assign(failures.begin(), failures.end());
+                result.error =
+                    std::format("CELL {:08X}: required supplier geometry unavailable; asset failure {}: {}", cell.id,
+                                result.assetFailures.front(),
+                                skyrim::DescribeGeometryFailure(assetFailures.Failure(result.assetFailures.front())));
+                ++observedFailed;
+                ++completedCells;
+                extractionSeconds += result.extractionSeconds;
+                batchActivity(result.error, app::RunEventKind::CellCompleted);
+                if (options.cellErrorPolicy == "stop")
+                {
+                    return fail(result.error);
+                }
+                if (!summary("running"))
+                {
+                    return fail("Cannot checkpoint extraction failure");
+                }
                 continue;
             }
             std::vector<core::CandidateExit> exits;
@@ -1218,14 +1356,16 @@ namespace navmesh::app::detail
         skyrim::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL);
         const auto generationFailures = std::count_if(results.begin(), results.end(), [](const auto &result)
                                                       { return result.status == "skipped_generation_failed"; });
-        if (!summary(generationFailures ? "complete_with_skips" : "complete"))
+        const auto extractionFailures = std::count_if(results.begin(), results.end(), [](const auto &result)
+                                                      { return result.status == "skipped_extraction_failed"; });
+        if (!summary(generationFailures || extractionFailures ? "complete_with_skips" : "complete"))
         {
             return fail("Cannot finalize batch-report.json");
         }
         const auto status = std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; "
-                                        "generated polygons: {}; generation failures: {}",
+                                        "generated polygons: {}; generation failures: {}; extraction failures: {}",
                                         targets.size(), generatedByCell.size(), targets.size() - generatedByCell.size(),
-                                        originalPolygons, generatedPolygons, generationFailures) +
+                                        originalPolygons, generatedPolygons, generationFailures, extractionFailures) +
                             (missingModelWarning.empty() ? "" : "; " + missingModelWarning);
         std::cout << status << '\n';
         if (progress)

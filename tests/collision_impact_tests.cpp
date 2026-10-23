@@ -110,10 +110,11 @@ namespace
         order.records.push_back(std::move(reference));
     }
 
-    std::set<std::uint32_t> Select(const skyrim::ResolvedLoadOrder &order, const std::filesystem::path &root,
-                                   const skyrim::ModelAssetSources *assets = nullptr,
-                                   std::set<std::string> changedModels = {},
-                                   skyrim::ImpactSelectionStatistics *outputStatistics = nullptr)
+    std::set<std::uint32_t> Select(
+        const skyrim::ResolvedLoadOrder &order, const std::filesystem::path &root,
+        const skyrim::ModelAssetSources *assets = nullptr, std::set<std::string> changedModels = {},
+        skyrim::ImpactSelectionStatistics *outputStatistics = nullptr,
+        std::function<bool(const skyrim::GeometryFailure &, const skyrim::RecordOrigin &)> failedGeometry = {})
     {
         const skyrim::CellImpactIndex index(order);
         skyrim::ModelGeometryCache cache;
@@ -125,7 +126,8 @@ namespace
                                                                    .cacheDirectory = root / "cache",
                                                                    .previousCacheDirectory = root / "previous-cache",
                                                                    .assets = assets,
-                                                                   .changedModels = std::move(changedModels)},
+                                                                   .changedModels = std::move(changedModels),
+                                                                   .failedGeometry = std::move(failedGeometry)},
                                                                   cache, counts);
         std::set<std::uint32_t> ids;
         for (const auto *cell : targets)
@@ -153,6 +155,25 @@ void TestCollisionImpactSelection()
     } cleanup{root};
     WriteModel(root / "meshes/TallSolid.nif", true);
     WriteModel(root / "meshes/VisualOnly.nif", false);
+    {
+        nifly::NifFile nif;
+        nif.Create({nifly::V20_2_0_7, 12, 130});
+        auto sphere = std::make_unique<nifly::bhkSphereShape>();
+        sphere->radius = 1;
+        auto body = std::make_unique<nifly::bhkRigidBody>();
+        body->shapeRef.index = nif.GetHeader().AddBlock(std::move(sphere));
+        auto collision = std::make_unique<nifly::bhkCollisionObject>();
+        collision->bodyRef.index = nif.GetHeader().AddBlock(std::move(body));
+        collision->targetRef.index = nif.GetBlockID(nif.GetRootNode());
+        nif.GetRootNode()->collisionRef.index = nif.GetHeader().AddBlock(std::move(collision));
+        Require(nif.Save(root / "meshes/UnsupportedSolid.nif") == 0);
+        core::Cell cell;
+        cell.references.push_back({.id = 90, .modelPath = "UnsupportedSolid.nif", .baseRecordType = "STAT"});
+        const auto unsupported = skyrim::ExtractGeometry(root, cell, root / "cache", {}, {}, nullptr, nullptr, true);
+        Require(!unsupported.failures.empty() && unsupported.failures.front().category == "unsupported");
+        cell.references.front().modelPath = "VisualOnly.nif";
+        Require(skyrim::ExtractGeometry(root, cell, root / "cache", {}, {}, nullptr, nullptr, true).failures.empty());
+    }
     {
         nifly::NifFile fire;
         fire.Create({nifly::V20_2_0_7, 12, 130});
@@ -334,7 +355,24 @@ void TestCollisionImpactSelection()
         base.winning = base.origins.front();
         PutReference(order, {added});
         skyrim::ImpactSelectionStatistics counts;
-        Require(Select(order, root, nullptr, {}, &counts).empty());
+        bool rejected{};
+        try
+        {
+            Select(order, root);
+        }
+        catch (const std::runtime_error &)
+        {
+            rejected = true;
+        }
+        Require(rejected);
+        std::set<std::uint32_t> unsafeOwners;
+        const auto recover = [&](const skyrim::GeometryFailure &failure, const skyrim::RecordOrigin &origin)
+        {
+            Require(failure.category == "missing" && failure.reference.formId == 20 && origin.cellFormId);
+            unsafeOwners.insert(*origin.cellFormId);
+            return true;
+        };
+        Require(Select(order, root, nullptr, {}, &counts, recover).empty());
         Require(counts.missingModels == std::set<std::string>{"meshes/absent.nif"});
         auto before = added;
         before.plugin = "Base.esm";
@@ -342,8 +380,9 @@ void TestCollisionImpactSelection()
         moved.position = core::Vec3{9216, 1024, 0};
         order.records.pop_back();
         PutReference(order, {before, moved});
-        Require(Select(order, root).empty());
-        Require(Select(order, root).empty());
+        Require(Select(order, root, nullptr, {}, nullptr, recover).empty());
+        Require(Select(order, root, nullptr, {}, nullptr, recover).empty());
+        Require(!unsafeOwners.empty());
     }
     {
         auto order = Fixture();
@@ -357,7 +396,8 @@ void TestCollisionImpactSelection()
         auto before = added;
         before.plugin = "Base.esm";
         PutReference(order, {before});
-        Require(Select(order, root) == std::set<std::uint32_t>{101});
+        Require(Select(order, root, nullptr, {}, nullptr, [](const auto &, const auto &) { return true; }) ==
+                std::set<std::uint32_t>{101});
     }
     {
         auto order = Fixture();
@@ -378,7 +418,7 @@ void TestCollisionImpactSelection()
                 failed = true;
                 const std::string message = error.what();
                 Require(message.find("in 'Edit.esp'") != std::string::npos);
-                Require(message.find("base plugin 'Base.esm'") != std::string::npos);
+                Require(message.find("in 'Base.esm'") != std::string::npos);
                 Require(message.find("Unresolved.nif") != std::string::npos);
             }
             Require(failed);
