@@ -22,8 +22,8 @@ clutter furniture and static assets in the clutter directory retain supported
 collision with the same obstacle-only tag. Seats, barrels, crates, sacks and other
 fixed clutter cannot become floor evidence or seam-repair anchors. Inventory
 placements retain their existing exclusion policy. Extraction triangulates closed
-`bhkConvexVerticesShape` vertex hulls and boxes, and tessellates capsule sides
-and hemispherical ends, including through list and shape-transform wrappers.
+`bhkConvexVerticesShape` vertex hulls and boxes, and tessellates spheres and capsule
+sides with hemispherical ends, including through list and shape-transform wrappers.
 Shape and compressed-chunk transforms apply in Havok space; active `bhkRigidBodyT`
 transforms precede conversion to model units and the collision target's non-root
 node ancestry, then the placed-reference transform, which replaces the NIF root transform. Ordinary `bhkRigidBody`
@@ -32,8 +32,11 @@ Convex skin radii are not expanded; degenerate hulls and invalid primitive dimen
 supply no collision. Without supported collision these obstacles
 remain unsupported for generation; visual fallback meshes do not supply permanent obstruction.
 Shape decoding requires physical contact response and excludes nonphysical Skyrim
-collision layers, including NonCollidable, triggers and query volumes. A shape's
-presence or an asset's clutter classification cannot create solid collision.
+collision layers, including NonCollidable and triggers. Havok phantom bodies are
+query volumes: extraction excludes them without a required-geometry failure while
+retaining physical siblings in the same asset. Unknown bodies and incomplete solid
+collision remain failures. A shape's presence or an asset's clutter classification
+cannot create solid collision.
 The same filter applies to inspection, generation and collision-impact selection.
 
 Persistent static fire effects supply a `navigation_exclusion` source even when their

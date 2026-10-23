@@ -158,10 +158,10 @@ void TestCollisionImpactSelection()
     {
         nifly::NifFile nif;
         nif.Create({nifly::V20_2_0_7, 12, 130});
-        auto sphere = std::make_unique<nifly::bhkSphereShape>();
-        sphere->radius = 1;
+        auto cylinder = std::make_unique<nifly::bhkCylinderShape>();
+        cylinder->radius = 1;
         auto body = std::make_unique<nifly::bhkRigidBody>();
-        body->shapeRef.index = nif.GetHeader().AddBlock(std::move(sphere));
+        body->shapeRef.index = nif.GetHeader().AddBlock(std::move(cylinder));
         auto collision = std::make_unique<nifly::bhkCollisionObject>();
         collision->bodyRef.index = nif.GetHeader().AddBlock(std::move(body));
         collision->targetRef.index = nif.GetBlockID(nif.GetRootNode());

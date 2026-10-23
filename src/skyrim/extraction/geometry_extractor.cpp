@@ -712,14 +712,12 @@ namespace
         AddHullTriangles(vertices, transform, "bhkBoxShape", result);
     }
 
-    /// Tessellate the capsule's cylindrical side and hemispherical ends in its arbitrary local axis.
-    /// A closed hull removes coincident equators for zero-length capsules and supplies outward winding.
-    void AddCapsuleTriangles(const nifly::bhkCapsuleShape &shape, const CollisionTransform &transform,
-                             TriangleGeometry &result)
+    /// Tessellate a rounded segment in Havok units along its arbitrary local axis.
+    /// Coincident endpoints describe a sphere; a closed hull joins equators and supplies outward winding.
+    void AddRoundedSegmentTriangles(const nifly::Vector3 &first, const nifly::Vector3 &second, float radius,
+                                    const std::string &shapeName, const CollisionTransform &transform,
+                                    TriangleGeometry &result)
     {
-        const auto &first = shape.point1;
-        const auto &second = shape.point2;
-        const float radius = shape.radius;
         if (!std::isfinite(radius) || radius <= 0 || !std::isfinite(first.x) || !std::isfinite(first.y) ||
             !std::isfinite(first.z) || !std::isfinite(second.x) || !std::isfinite(second.y) || !std::isfinite(second.z))
         {
@@ -759,7 +757,7 @@ namespace
                 }
             }
         }
-        AddHullTriangles(vertices, transform, "bhkCapsuleShape", result);
+        AddHullTriangles(vertices, transform, shapeName, result);
     }
 
     /// Skyrim's nonphysical layers describe queries or event volumes, even when their bodies have contact response.
@@ -892,7 +890,12 @@ namespace
             }
             else if (auto *capsule = dynamic_cast<nifly::bhkCapsuleShape *>(shape))
             {
-                AddCapsuleTriangles(*capsule, transform, result);
+                AddRoundedSegmentTriangles(capsule->point1, capsule->point2, capsule->radius, shapeName, transform,
+                                           result);
+            }
+            else if (auto *sphere = dynamic_cast<nifly::bhkSphereShape *>(shape))
+            {
+                AddRoundedSegmentTriangles({}, {}, sphere->radius, shapeName, transform, result);
             }
             else if (auto *box = dynamic_cast<nifly::bhkBoxShape *>(shape))
             {
@@ -958,8 +961,15 @@ namespace
                 operablePartsExcluded = true;
                 continue;
             }
-            const auto *body =
-                dynamic_cast<nifly::bhkRigidBody *>(header.GetBlock<nifly::NiObject>(collision->bodyRef));
+            const auto *collisionBody = header.GetBlock<nifly::NiObject>(collision->bodyRef);
+            // Phantoms are overlap/query volumes, independent of their layer and enclosed shape type.
+            // Exclude only that body so physical siblings still supply their complete collision.
+            if (dynamic_cast<const nifly::bhkPhantom *>(collisionBody))
+            {
+                nonSolidCollision = true;
+                continue;
+            }
+            const auto *body = dynamic_cast<const nifly::bhkRigidBody *>(collisionBody);
             if (!body)
             {
                 incompleteCollision = true;

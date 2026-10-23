@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <set>
 
@@ -732,6 +733,127 @@ namespace
         assert(flat.modelsUnsupported == 1 && flat.collisionTriangles == 0);
     }
 
+    /// Query volumes must neither fail extraction nor hide a physical sibling in the same model.
+    void CheckPhantomCollision(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        for (const bool withSolid : {false, true})
+        {
+            nifly::NifFile nif;
+            nif.Create({nifly::V20_2_0_7, 12, 130});
+            if (withSolid)
+            {
+                auto box = std::make_unique<nifly::bhkBoxShape>();
+                box->dimensions = {1, 1, 1};
+                AttachCollision(nif, nif.GetRootNode(), nif.GetHeader().AddBlock(std::move(box)));
+            }
+            for (const bool aabb : {false, true})
+            {
+                std::unique_ptr<nifly::bhkPhantom> phantom;
+                if (aabb)
+                {
+                    phantom = std::make_unique<nifly::bhkAabbPhantom>();
+                }
+                else
+                {
+                    phantom = std::make_unique<nifly::bhkSimpleShapePhantom>();
+                }
+                // An unsupported query shape on a physical layer is still not a contact body.
+                phantom->collisionFilter.layer = 1;
+                phantom->shapeRef.index = nif.GetHeader().AddBlock(std::make_unique<nifly::bhkCylinderShape>());
+                auto object = std::make_unique<nifly::bhkSPCollisionObject>();
+                object->bodyRef.index = nif.GetHeader().AddBlock(std::move(phantom));
+                nifly::MatTransform targetTransform;
+                targetTransform.Clear();
+                auto *target = nif.AddNode(aabb ? "AabbQuery" : "ShapeQuery", targetTransform, nif.GetRootNode());
+                object->targetRef.index = nif.GetBlockID(target);
+                target->collisionRef.index = nif.GetHeader().AddBlock(std::move(object));
+            }
+            const std::vector<nifly::Vector3> vertices = {{-512, -512, 0}, {512, -512, 0}, {0, 512, 64}};
+            const std::vector<nifly::Triangle> triangles = {{0, 1, 2}};
+            assert(nif.CreateShapeFromData("Display", &vertices, &triangles, nullptr));
+            assert(nif.Save(root / "meshes/query-volumes.nif") == 0);
+            core::Cell cell;
+            cell.references = {{.id = 1, .modelPath = "query-volumes.nif", .baseRecordType = "STAT"}};
+            for (const bool navigationOnly : {false, true})
+            {
+                const auto geometry =
+                    skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+                assert(geometry.failures.empty());
+                assert(geometry.collisionTriangles == (withSolid ? 12 : 0));
+                assert(geometry.modelsExcluded == (withSolid ? 0 : 1));
+                if (!withSolid)
+                {
+                    assert(geometry.scene.mesh.triangles.empty());
+                    assert(geometry.scene.renderFallbackMesh.triangles.empty());
+                    assert(geometry.scene.coverage[0].status == core::GeometryCoverage::Excluded);
+                }
+            }
+        }
+    }
+
+    /// Spheres supply closed collision in world units, including through shape, body and reference transforms.
+    void CheckSphereCollision(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        constexpr float units = 69.99125F;
+        for (const float radius : {32 / units, 0.0F, -1.0F, std::numeric_limits<float>::quiet_NaN()})
+        {
+            nifly::NifFile nif;
+            nif.Create({nifly::V20_2_0_7, 12, 130});
+            auto sphere = std::make_unique<nifly::bhkSphereShape>();
+            sphere->radius = radius;
+            auto wrapper = std::make_unique<nifly::bhkConvexTransformShape>();
+            wrapper->shapeRef.index = nif.GetHeader().AddBlock(std::move(sphere));
+            wrapper->xform[12] = 16 / units;
+            auto body = std::make_unique<nifly::bhkRigidBodyT>();
+            body->shapeRef.index = nif.GetHeader().AddBlock(std::move(wrapper));
+            body->translation = {0, 8 / units, 0, 0};
+            body->rotation = {0, 0, std::sqrt(0.5F), std::sqrt(0.5F)};
+            auto object = std::make_unique<nifly::bhkCollisionObject>();
+            object->bodyRef.index = nif.GetHeader().AddBlock(std::move(body));
+            object->targetRef.index = nif.GetBlockID(nif.GetRootNode());
+            nif.GetRootNode()->collisionRef.index = nif.GetHeader().AddBlock(std::move(object));
+            assert(nif.Save(root / "meshes/sphere.nif") == 0);
+            core::Cell cell;
+            cell.references = {{.id = 1,
+                                .modelPath = "sphere.nif",
+                                .position = {100, 200, 300},
+                                .rotation = {0, 0, 1.57079632679F},
+                                .scale = 2,
+                                .baseRecordType = "STAT"}};
+            for (const bool navigationOnly : {false, true})
+            {
+                const auto geometry =
+                    skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+                const bool valid = std::isfinite(radius) && radius > 0;
+                if (!valid)
+                {
+                    assert(!geometry.failures.empty() && geometry.collisionTriangles == 0);
+                    continue;
+                }
+                assert(geometry.failures.empty() && geometry.collisionModelsLoaded == 1);
+                assert(geometry.references[0].collisionType == "bhkSphereShape");
+                const auto bounds = geometry.scene.mesh.Bounds();
+                assert(std::abs(bounds.min.x - 84) < 0.01F && std::abs(bounds.max.x - 212) < 0.01F);
+                assert(std::abs(bounds.min.y - 136) < 0.01F && std::abs(bounds.max.y - 264) < 0.01F);
+                assert(std::abs(bounds.min.z - 236) < 0.01F && std::abs(bounds.max.z - 364) < 0.01F);
+                std::map<std::pair<std::uint32_t, std::uint32_t>, unsigned> edges;
+                for (const auto &triangle : geometry.scene.mesh.triangles)
+                {
+                    for (unsigned edge = 0; edge < 3; ++edge)
+                    {
+                        ++edges[{triangle.vertices[edge], triangle.vertices[(edge + 1) % 3]}];
+                    }
+                }
+                for (const auto &[edge, count] : edges)
+                {
+                    assert(count == 1 && edges.at({edge.second, edge.first}) == 1);
+                }
+            }
+        }
+    }
+
     void CheckCollisionEligibility(const std::filesystem::path &root)
     {
         using namespace navmesh;
@@ -1290,6 +1412,8 @@ void TestNativeBsaGeometry()
     CheckStripCollisionUnits(root);
     CheckCollisionShapes(root);
     CheckPlacedModelTransforms(root);
+    CheckPhantomCollision(root);
+    CheckSphereCollision(root);
     CheckCollisionEligibility(root);
     CheckFireFootprints(root);
     CheckHearthFireBounds(root);

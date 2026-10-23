@@ -145,14 +145,15 @@ namespace navmesh::skyrim
     /// navigationOnly excludes render-only support.
     /// Landscape rock assets are tagged as navigation obstacles while retaining their collision geometry.
     /// Furniture, containers and STAT assets in the clutter directory retain supported collision as obstacles
-    /// without supplying walkable floors. Supported meshes, convex hulls, boxes and tessellated capsules follow
+    /// without supplying walkable floors. Supported meshes, convex hulls, boxes and tessellated spheres/capsules follow
     /// shape/chunk transforms, active T-body transforms, non-root collision-target ancestry and the placed reference.
     /// The placed reference replaces the NIF root transform. Render shapes and fire bounds include their own
     /// local transform and non-root ancestors, resolved by block identity rather than node name.
     /// Ordinary body translation/rotation are inactive. Shared shapes retain distinct placements.
     /// Degenerate hulls, invalid dimensions and unsupported primitives supply no collision; skin radii are not expanded.
-    /// Bodies with nonphysical Skyrim layers or without physical contact response supply no solid geometry;
-    /// their shapes and visual meshes cannot substitute for navigation collision.
+    /// Phantom query volumes and bodies with nonphysical Skyrim layers or without physical contact response supply
+    /// no solid geometry or required-geometry failure; their visual meshes cannot substitute for navigation collision.
+    /// Physical siblings remain eligible, and unknown or incomplete solid bodies remain extraction failures.
     /// Persistent static fires supply obstacle-only rectangular fuel bounds, or flame bounds when fuel is absent.
     /// A containing decoded hearth bed determines XY dimensions/orientation; otherwise the fire keeps its own bounds.
     /// Transient effects, hazards and scripted activators supply no fire exclusion. Fitting preserves shared caches.
