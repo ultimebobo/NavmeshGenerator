@@ -352,6 +352,7 @@ namespace navmesh::skyrim
                             reference.deleted = reference.deleted || version->deleted;
                             reference.localBounds = version->localBounds;
                             reference.automaticDoor = version->automaticDoor;
+                            reference.editorMarker = version->editorMarker;
                         }
                     }
                 }

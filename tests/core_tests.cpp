@@ -2082,6 +2082,60 @@ namespace
         }
     }
 
+    void TestEditorMarkerInputResolution()
+    {
+        using namespace navmesh;
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-editor-marker-input-test";
+        std::filesystem::create_directories(root);
+        for (const auto *type : {"STAT", "ACTI", "FURN", "DOOR"})
+        {
+            for (const bool marker : {false, true})
+            {
+                std::vector<std::uint8_t> base;
+                PutText(base, "MODL", {'a', 'b', 's', 'e', 'n', 't', '.', 'n', 'i', 'f', 0});
+                std::vector<std::uint8_t> placement, name;
+                PutU32(name, 0x310);
+                PutText(placement, "NAME", name);
+                std::vector<std::uint8_t> references, cells, plugin;
+                PutRecord(references, "REFR", 0x300, placement);
+                PutRecord(cells, "CELL", 0x100, CellPayload("EditorMarkerCell"));
+                PutGroup(cells, 0x100, 6, references);
+                PutRecord(plugin, "TES4", 0, {});
+                PutRecord(plugin, type, 0x310, base, marker ? 1U << 23 : 0);
+                PutGroup(plugin, 0, 0, cells);
+                const auto source = root / "Markers.esm";
+                {
+                    std::ofstream file(source, std::ios::binary);
+                    file.write(reinterpret_cast<const char *>(plugin.data()),
+                               static_cast<std::streamsize>(plugin.size()));
+                }
+                const auto resolved = skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source}});
+                Require(resolved.cells.size() == 1 && resolved.FindWinning(0x310)->winning.editorMarker == marker);
+                const auto direct = skyrim::ListCells(source);
+                Require(direct.size() == 1);
+                for (const auto &cell : {resolved.cells.front(), direct.front()})
+                {
+                    Require(cell.references.size() == 1 && cell.references.front().editorMarker == marker);
+                    for (const bool navigationOnly : {false, true})
+                    {
+                        const auto geometry =
+                            skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+                        if (marker)
+                        {
+                            Require(geometry.failures.empty() && geometry.modelsExcluded == 1);
+                            Require(geometry.scene.mesh.triangles.empty() && geometry.modelsMissing == 0);
+                        }
+                        else if (std::string_view(type) != "DOOR")
+                        {
+                            Require(!geometry.failures.empty() && geometry.modelsMissing == 1);
+                        }
+                    }
+                }
+            }
+        }
+        Require(!skyrim::IsEditorMarker("TREE", 1U << 23));
+    }
+
     void TestSceneTransforms()
     {
         using navmesh::core::Transform;
@@ -3099,6 +3153,7 @@ int main(int argc, char **argv)
     TestFormIdResolution();
     TestNativeBsaGeometry();
     TestTeleportInputResolution();
+    TestEditorMarkerInputResolution();
     TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();
     TestMo2UnicodeProfileImport();

@@ -12,12 +12,16 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <unordered_map>
 
 /// Skyrim plugin input, asset extraction, and guarded navigation export.
 namespace navmesh::skyrim
 {
+    /// Return whether a supported base-record type's header flags identify an editor-only marker.
+    [[nodiscard]] bool IsEditorMarker(std::string_view recordType, std::uint32_t flags);
+
     /** Decode the external and door tables from supported NVNM trailing bytes for inspection.
      * @param trailing Bytes immediately after the owning mesh's triangle array.
      * @param mesh Geometry whose edge flags consume the external table; connection arrays are replaced.
@@ -89,6 +93,8 @@ namespace navmesh::skyrim
         std::optional<core::AABB> localBounds;
         /// Base DOOR FNAM automatic flag; its bounds describe a traversable activation volume.
         bool automaticDoor{};
+        /// This base-record version uses the editor-marker flag; its model is not runtime geometry.
+        bool editorMarker{};
         /// Resolved XTEL destination reference; absent without a supported teleport subrecord.
         std::optional<std::uint32_t> teleportDestinationId;
         /// XTEL standing position in the destination's Skyrim world space; absent for invalid coordinates.

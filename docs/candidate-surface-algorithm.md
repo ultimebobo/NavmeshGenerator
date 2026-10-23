@@ -28,6 +28,8 @@ Shape and compressed-chunk transforms apply in Havok space; active `bhkRigidBody
 transforms precede conversion to model units and the collision target's non-root
 node ancestry, then the placed-reference transform, which replaces the NIF root transform. Ordinary `bhkRigidBody`
 translation and rotation are inactive. Shared shapes retain each distinct placement.
+Convex hull construction uses exact orientation signs for nearly coplanar samples,
+preserving closed, consistently wound boundaries without moving source vertices.
 Convex skin radii are not expanded; degenerate hulls and invalid primitive dimensions
 supply no collision. Without supported collision these obstacles
 remain unsupported for generation; visual fallback meshes do not supply permanent obstruction.
@@ -38,6 +40,10 @@ retaining physical siblings in the same asset. Unknown bodies and incomplete sol
 collision remain failures. A shape's presence or an asset's clutter classification
 cannot create solid collision.
 The same filter applies to inspection, generation and collision-impact selection.
+Base records carrying the supported editor-marker flag supply no runtime geometry
+and do not request model assets. The flag follows winning and historical base records
+and effective runtime swaps; names and model availability do not determine this exclusion.
+The supported flag types follow [xEdit's record definitions](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsTES5.pas).
 
 Persistent static fire effects supply a `navigation_exclusion` source even when their
 NIF has no supported solid collision. Extraction bounds visible coal, ember and

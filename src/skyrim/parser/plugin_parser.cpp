@@ -76,6 +76,7 @@ namespace
         std::string modelPath;
         std::optional<navmesh::core::AABB> localBounds;
         bool automaticDoor{};
+        bool editorMarker{};
     };
 
     struct ParsedReference
@@ -266,6 +267,12 @@ namespace
 
 namespace navmesh::skyrim
 {
+    bool IsEditorMarker(std::string_view recordType, std::uint32_t flags)
+    {
+        return (flags & (1U << 23)) != 0 &&
+               (recordType == "STAT" || recordType == "ACTI" || recordType == "FURN" || recordType == "DOOR");
+    }
+
     std::vector<core::Cell> ListCells(const std::filesystem::path &pluginPath)
     {
         if (!std::filesystem::exists(pluginPath))
@@ -415,7 +422,7 @@ namespace navmesh::skyrim
                 }
                 else
                 {
-                    BaseRecord record{.type = type};
+                    BaseRecord record{.type = type, .editorMarker = IsEditorMarker(type, header->flags)};
                     std::string femaleArmorModel;
                     const auto payload = DecompressNavMesh(buffer, dataStart, dataEnd, header->flags);
                     if (payload)
@@ -507,6 +514,7 @@ namespace navmesh::skyrim
                     parsed.reference.modelPath = base->second.modelPath;
                     parsed.reference.localBounds = base->second.localBounds;
                     parsed.reference.automaticDoor = base->second.automaticDoor;
+                    parsed.reference.editorMarker = base->second.editorMarker;
                 }
                 const auto partner = teleportReferences.find(parsed.teleportDestinationId);
                 if (partner != teleportReferences.end() &&

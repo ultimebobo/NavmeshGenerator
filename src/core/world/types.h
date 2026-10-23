@@ -42,6 +42,8 @@ namespace navmesh::core
         bool initiallyDisabled{};
         /// True when the winning placed-record header marks this reference deleted.
         bool deleted{};
+        /// Base record supplies an editor-only marker model rather than runtime navigation geometry.
+        bool editorMarker{};
         /// Winning placement has a teleport destination (XTEL), including non-physical cave exits.
         bool teleportExit{};
         /// Base DOOR activates by entering its trigger volume; its OBND does not describe a solid threshold.

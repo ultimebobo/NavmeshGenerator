@@ -1415,6 +1415,10 @@ namespace
 
     [[nodiscard]] bool IsFilteredReference(const navmesh::core::Reference &reference)
     {
+        if (reference.editorMarker)
+        {
+            return true;
+        }
         // Indexing a base for runtime rule resolution does not make every ordinary
         // placement navigation input. Additional classes require an effective BOS
         // placement; unclassified reference-local models remain eligible.
@@ -1818,10 +1822,11 @@ namespace navmesh::skyrim
                 .navigationObstacle = IsLandscapeRock(reference.modelPath) || IsFurniture(reference) ||
                                       IsFixedClutter(reference) || fireEffect || reference.envelope.has_value(),
                 .inputConfig = reference.inputConfig};
-            if (reference.deleted || reference.initiallyDisabled)
+            if (reference.deleted || reference.initiallyDisabled || reference.editorMarker)
             {
-                report.failure = reference.deleted ? "winning reference record is deleted"
-                                                   : "winning reference record is initially disabled";
+                report.failure = reference.deleted        ? "winning reference record is deleted"
+                                 : reference.editorMarker ? "base record supplies an editor-only marker"
+                                                          : "winning reference record is initially disabled";
                 output.scene.coverage.push_back({core::GeometryCoverage::Excluded, std::move(source), report.failure});
                 ++output.modelsExcluded;
                 output.references.push_back(std::move(report));

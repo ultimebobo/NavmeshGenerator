@@ -191,6 +191,22 @@ void TestCollisionImpactSelection()
                                      .baseFormId = 10,
                                      .position = core::Vec3{1024, 1024, 0}};
     {
+        auto order = Fixture();
+        for (auto &record : order.records)
+        {
+            if (record.formId == 10)
+            {
+                record.winning.editorMarker = true;
+                record.winning.modelPath = "UnavailableEditorModel.nif";
+                record.origins = {record.winning};
+            }
+        }
+        PutReference(order, {added});
+        skyrim::ImpactSelectionStatistics statistics;
+        Require(Select(order, root, nullptr, {}, &statistics).empty());
+        Require(statistics.missingModels.empty());
+    }
+    {
         // Fixed clutter footprints use decoded convex collision for additions, moves and removal.
         nifly::NifFile nif;
         nif.Create({nifly::V20_2_0_7, 12, 130});

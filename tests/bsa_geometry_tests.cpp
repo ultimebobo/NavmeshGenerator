@@ -314,6 +314,65 @@ namespace
                                            {1.00000036F, -0.268090487F, 0.310449958F}};
         const auto preciseHull = TriangulateConvexHull(precise);
         assert(preciseHull && !preciseHull->empty());
+
+        // Closely spaced ellipsoid samples create narrow facets at single-precision coordinates.
+        // Every insertion order must preserve a closed outward hull without dropping the collider.
+        for (const float scale : {0.125F, 1.0F, 4096.0F})
+        {
+            std::vector<Vec3> samples;
+            for (int ring = -2; ring <= 2; ++ring)
+            {
+                const double latitude = ring * 0.5;
+                for (int sector = 0; sector < 8; ++sector)
+                {
+                    for (int offset = -1; offset <= 1; ++offset)
+                    {
+                        const double angle = sector * 0.7853981633974483 + 0.1 + offset * 0.00001;
+                        samples.push_back(Vec3{static_cast<float>(std::cos(latitude) * std::cos(angle)),
+                                               static_cast<float>(2 * std::cos(latitude) * std::sin(angle)),
+                                               static_cast<float>(0.5 * std::sin(latitude))} *
+                                          scale);
+                    }
+                }
+            }
+            for (int order = 0; order < 3; ++order)
+            {
+                const auto hull = TriangulateConvexHull(samples);
+                assert(hull && !hull->empty());
+                std::set<std::pair<std::uint32_t, std::uint32_t>> edges;
+                std::set<std::uint32_t> used;
+                double volume = 0;
+                for (const auto &triangle : *hull)
+                {
+                    const auto a = samples[triangle.vertices[0]];
+                    const auto b = samples[triangle.vertices[1]];
+                    const auto c = samples[triangle.vertices[2]];
+                    const std::array<double, 3> ab = {double(b.x) - a.x, double(b.y) - a.y, double(b.z) - a.z};
+                    const std::array<double, 3> ac = {double(c.x) - a.x, double(c.y) - a.y, double(c.z) - a.z};
+                    const std::array<double, 3> normal = {ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2],
+                                                          ab[0] * ac[1] - ab[1] * ac[0]};
+                    volume += (a.x * normal[0] + a.y * normal[1] + a.z * normal[2]) / 6;
+                    for (const auto &point : samples)
+                    {
+                        const auto side = normal[0] * (double(point.x) - a.x) + normal[1] * (double(point.y) - a.y) +
+                                          normal[2] * (double(point.z) - a.z);
+                        assert(side <= 1.0e-12 * scale * scale * scale);
+                    }
+                    for (std::size_t edge = 0; edge < 3; ++edge)
+                    {
+                        used.insert(triangle.vertices[edge]);
+                        assert(edges.emplace(triangle.vertices[edge], triangle.vertices[(edge + 1) % 3]).second);
+                    }
+                }
+                assert(volume > 0 && used.size() + hull->size() == edges.size() / 2 + 2);
+                for (const auto &[a, b] : edges)
+                {
+                    assert(edges.contains({b, a}));
+                }
+                std::reverse(samples.begin(), samples.end());
+                std::rotate(samples.begin(), samples.begin() + samples.size() / 3, samples.end());
+            }
+        }
     }
 
     void WriteConvexModel(const std::filesystem::path &path, bool solid = true, bool flat = false,

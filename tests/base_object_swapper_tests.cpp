@@ -755,6 +755,22 @@ void TestBaseObjectSwapper()
     WriteModel(root / "meshes" / "Solid.nif");
     TestPrecedenceAndUnits();
     TestConfigSyntax(root);
+    {
+        auto order = Fixture();
+        order.cells.front().references.front().editorMarker = true;
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20\n"));
+        assert(!First(order).editorMarker);
+        order = Fixture();
+        for (auto &record : order.records)
+        {
+            if (record.formId == 20)
+            {
+                record.winning.editorMarker = true;
+            }
+        }
+        (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20\n"));
+        assert(First(order).editorMarker);
+    }
     TestRuntimeCompatibility();
     TestPermissivePropertyGrammar();
     TestPermissiveIdentityAndChanceGrammar();

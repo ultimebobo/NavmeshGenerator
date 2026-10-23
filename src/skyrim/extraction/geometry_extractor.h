@@ -143,6 +143,7 @@ namespace navmesh::skyrim
     /// archiveSearchComplete distinguishes absence from lookup failure. NIF decoding errors become unreadable failures;
     /// allocation and cache/storage exceptions propagate and must stop publishing.
     /// navigationOnly excludes render-only support.
+    /// Editor-marker bases are excluded before asset lookup; their model paths do not imply missing runtime geometry.
     /// Landscape rock assets are tagged as navigation obstacles while retaining their collision geometry.
     /// Furniture, containers and STAT assets in the clutter directory retain supported collision as obstacles
     /// without supplying walkable floors. Supported meshes, convex hulls, boxes and tessellated spheres/capsules follow

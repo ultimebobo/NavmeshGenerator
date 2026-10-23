@@ -1,6 +1,7 @@
 #include "core/geometry/convex_hull.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <set>
@@ -10,8 +11,8 @@ namespace navmesh::core
 {
     namespace
     {
-        // Normalize before double-precision plane tests so the tolerance is independent of units and translation.
-        // Distinct float samples near a common face must remain distinguishable by the visibility tests.
+        // Scale geometric degeneracy tests independently of input units. Visibility uses exact orientation
+        // signs so nearly coplanar samples cannot create inconsistent visible-face horizons.
         constexpr double Tolerance = 1.0e-10;
 
         struct Point
@@ -36,11 +37,97 @@ namespace navmesh::core
             return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
         }
 
+        /// Nonoverlapping doubles, ordered by increasing magnitude, retain the exact sum of predicate terms.
+        using Expansion = std::vector<double>;
+
+        /// Add one term without discarding the rounding residual; zero terms carry no sign information.
+        void AddTerm(Expansion &expansion, double term)
+        {
+            Expansion sum;
+            for (const auto component : expansion)
+            {
+                const double combined = term + component;
+                const double recovered = combined - term;
+                const double residual = (term - (combined - recovered)) + (component - recovered);
+                if (residual != 0)
+                {
+                    sum.push_back(residual);
+                }
+                term = combined;
+            }
+            if (term != 0)
+            {
+                sum.push_back(term);
+            }
+            expansion = std::move(sum);
+        }
+
+        Expansion Difference(double left, double right)
+        {
+            Expansion result;
+            AddTerm(result, left);
+            AddTerm(result, -right);
+            return result;
+        }
+
+        /// Fused multiply-add recovers each product's rounding error before summing exact expansion terms.
+        Expansion Product(const Expansion &left, const Expansion &right)
+        {
+            Expansion result;
+            for (const auto a : left)
+            {
+                for (const auto b : right)
+                {
+                    const double product = a * b;
+                    AddTerm(result, std::fma(a, b, -product));
+                    AddTerm(result, product);
+                }
+            }
+            return result;
+        }
+
+        /// Classify a point against an oriented face, falling back to an exact determinant near coplanarity.
+        /// Power-of-two-scaled float coordinates keep predicate products finite and preserve input positions.
+        int Orientation(const Point &a, const Point &b, const Point &c, const Point &point)
+        {
+            const auto ab = b - a;
+            const auto ac = c - a;
+            const auto ap = point - a;
+            const double positive = ab.x * ac.y * ap.z + ab.y * ac.z * ap.x + ab.z * ac.x * ap.y;
+            const double negative = ab.z * ac.y * ap.x + ab.y * ac.x * ap.z + ab.x * ac.z * ap.y;
+            const double determinant = positive - negative;
+            const double magnitude = std::abs(ab.x * ac.y * ap.z) + std::abs(ab.y * ac.z * ap.x) +
+                                     std::abs(ab.z * ac.x * ap.y) + std::abs(ab.z * ac.y * ap.x) +
+                                     std::abs(ab.y * ac.x * ap.z) + std::abs(ab.x * ac.z * ap.y);
+            const double error = 16 * std::numeric_limits<double>::epsilon() * magnitude;
+            if (std::abs(determinant) > error)
+            {
+                return determinant > 0 ? 1 : -1;
+            }
+            const std::array<Expansion, 3> exactAB = {Difference(b.x, a.x), Difference(b.y, a.y), Difference(b.z, a.z)};
+            const std::array<Expansion, 3> exactAC = {Difference(c.x, a.x), Difference(c.y, a.y), Difference(c.z, a.z)};
+            const std::array<Expansion, 3> exactAP = {Difference(point.x, a.x), Difference(point.y, a.y),
+                                                      Difference(point.z, a.z)};
+            Expansion exact;
+            for (std::size_t axis = 0; axis < 3; ++axis)
+            {
+                const auto next = (axis + 1) % 3;
+                const auto last = (axis + 2) % 3;
+                for (const auto term : Product(Product(exactAB[axis], exactAC[next]), exactAP[last]))
+                {
+                    AddTerm(exact, term);
+                }
+                for (const auto term : Product(Product(exactAB[axis], exactAC[last]), exactAP[next]))
+                {
+                    AddTerm(exact, -term);
+                }
+            }
+            return exact.empty() ? 0 : exact.back() > 0 ? 1 : -1;
+        }
+
         struct Face
         {
             Triangle triangle;
-            Point normal;
-            double offset{};
         };
 
         /// The seed tetrahedron's interior remains inside every expanded hull and fixes outward winding.
@@ -53,13 +140,11 @@ namespace navmesh::core
             {
                 return std::nullopt;
             }
-            normal = {normal.x / length, normal.y / length, normal.z / length};
-            if (Dot(normal, interior - points[a]) > 0)
+            if (Orientation(points[a], points[b], points[c], interior) > 0)
             {
                 std::swap(b, c);
-                normal = {-normal.x, -normal.y, -normal.z};
             }
-            return Face{{{a, b, c}}, normal, Dot(normal, points[a])};
+            return Face{{{a, b, c}}};
         }
 
         /// Reject open or overlapping hulls rather than publish partial collision geometry.
@@ -70,7 +155,8 @@ namespace navmesh::core
             {
                 for (const auto &point : points)
                 {
-                    if (Dot(face.normal, point) - face.offset > 2 * Tolerance)
+                    const auto &indices = face.triangle.vertices;
+                    if (Orientation(points[indices[0]], points[indices[1]], points[indices[2]], point) > 0)
                     {
                         return false;
                     }
@@ -112,15 +198,16 @@ namespace navmesh::core
             return std::nullopt;
         }
 
+        // Binary scaling preserves every float coordinate exactly, including narrow bevels. Translation and
+        // division by an arbitrary extent would introduce rounding before the exact orientation predicates.
+        const double scale = std::scalbn(1.0, -std::ilogb(extent));
         // Keep original indices while discarding duplicate samples from the working hull.
         std::vector<Point> points;
         std::vector<std::uint32_t> originalIndices;
         for (std::size_t index = 0; index < vertices.size(); ++index)
         {
             const auto &vertex = vertices[index];
-            const Point point{(static_cast<double>(vertex.x) - bounds.min.x) / extent,
-                              (static_cast<double>(vertex.y) - bounds.min.y) / extent,
-                              (static_cast<double>(vertex.z) - bounds.min.z) / extent};
+            const Point point{vertex.x * scale, vertex.y * scale, vertex.z * scale};
             if (std::none_of(points.begin(), points.end(),
                              [&](const auto &other)
                              {
@@ -208,7 +295,8 @@ namespace navmesh::core
             std::vector<Face> retained;
             for (const auto &face : faces)
             {
-                if (Dot(face.normal, points[index]) - face.offset <= Tolerance)
+                const auto &vertices = face.triangle.vertices;
+                if (Orientation(points[vertices[0]], points[vertices[1]], points[vertices[2]], points[index]) <= 0)
                 {
                     retained.push_back(face);
                     continue;
