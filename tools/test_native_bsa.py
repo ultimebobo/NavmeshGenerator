@@ -68,6 +68,29 @@ class NativeBsa(unittest.TestCase):
         changed = self.probe([low, high], [low], mode='changed')
         self.assertEqual((changed / 'changed-models.txt').read_text().splitlines(), ['meshes/low.nif'])
 
+    def test_long_cache_paths_publish_and_reuse_models_and_metadata(self):
+        archive = self.root / 'Fixture.bsa'
+        filename = 'large weathered planter.nif'
+        write_bsa(archive, [(filename, b'cached model', True)])
+        for length in (245, 310):
+            with self.subTest(length=length):
+                snapshot = self.root / f'cache-{length}'
+                while len(str(snapshot / 'meshes' / filename)) < length:
+                    remaining = length - len(str(snapshot / 'meshes' / filename))
+                    if remaining == 1:
+                        snapshot = snapshot.with_name(snapshot.name + 'c')
+                    else:
+                        snapshot /= 'c' * min(60, remaining - 1)
+                cache = self.probe([archive], [f'meshes/{filename}', 'meshes/missing.nif'],
+                                   snapshot=snapshot)
+                self.assertEqual((cache / 'meshes' / filename).read_bytes(), b'cached model')
+                statistics = (cache / '.archive-statistics.json').read_bytes()
+                missing = (cache / '.missing-models.txt').read_bytes()
+                self.probe([archive], [f'meshes/{filename}', 'meshes/missing.nif'], snapshot=snapshot)
+                self.assertEqual((cache / '.archive-statistics.json').read_bytes(), statistics)
+                self.assertEqual((cache / '.missing-models.txt').read_bytes(), missing)
+                self.assertEqual(list(cache.rglob('*.tmp')), [])
+
     def test_unreadable_winner_never_falls_back_and_failure_is_retryable(self):
         low, high = self.root / 'Low.bsa', self.root / 'High.bsa'
         write_bsa(low, [('shared.nif', b'low', False)])
@@ -141,7 +164,7 @@ class NativeBsa(unittest.TestCase):
         env = os.environ.copy()
         env['NAVMESH_PYTHON'] = str(self.root / 'absent-python.exe')
         env['PATH'] = ''
-        cache_root = self.root / 'shared-cache'
+        cache_root = self.root / 'shared-cache' / ('nested-' * 10) / ('cache-' * 12)
         result = subprocess.run([str(exe), '--data', str(self.root), '--plugin', str(plugin),
                                  '--cell-formid', '100', '--asset-cache', str(cache_root),
                                  '--output', str(self.root / 'inspection')], cwd=self.root,

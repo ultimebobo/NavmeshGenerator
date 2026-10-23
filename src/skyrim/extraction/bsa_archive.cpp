@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <charconv>
 #include <chrono>
 #include <cctype>
@@ -41,6 +42,18 @@ namespace navmesh::skyrim
         {
             using std::runtime_error::runtime_error;
         };
+
+        [[noreturn]] void FailCacheWrite(const char *operation, const std::filesystem::path &path,
+                                         std::error_code error)
+        {
+            if (!error)
+            {
+                error = std::make_error_code(std::errc::io_error);
+            }
+            throw CacheWriteError(std::string(operation) + " '" + core::PathToUtf8(path) + "': " + error.message() +
+                                  ". Check free space and permissions, or choose a writable shared asset cache "
+                                  "(--asset-cache).");
+        }
 
         constexpr std::uint64_t MaximumAssetBytes = 256ULL * 1024 * 1024;
 
@@ -118,8 +131,9 @@ namespace navmesh::skyrim
 
         Index ReadIndex(const std::filesystem::path &path, std::uint64_t &bytesRead)
         {
-            const auto fileSize = std::filesystem::file_size(path);
-            std::ifstream stream(path, std::ios::binary);
+            const auto nativePath = core::NativeFilePath(path);
+            const auto fileSize = std::filesystem::file_size(nativePath);
+            std::ifstream stream(nativePath, std::ios::binary);
             const auto header = Read(stream, 36);
             const auto version = U32(header, 4);
             const auto offset = U32(header, 8);
@@ -307,6 +321,10 @@ namespace navmesh::skyrim
             auto temporary = path;
             temporary += "." + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "." +
                          std::to_string(++sequence) + ".tmp";
+            // Apply the native representation after adding the temporary suffix;
+            // either sibling may exceed the Windows legacy path limit.
+            const auto nativePath = core::NativeFilePath(path);
+            const auto nativeTemporary = core::NativeFilePath(temporary);
             struct Cleanup
             {
                 std::filesystem::path path;
@@ -315,33 +333,45 @@ namespace navmesh::skyrim
                     std::error_code error;
                     std::filesystem::remove(path, error);
                 }
-            } cleanup{temporary};
+            } cleanup{nativeTemporary};
             std::error_code directoryError;
-            std::filesystem::create_directories(path.parent_path(), directoryError);
+            std::filesystem::create_directories(nativePath.parent_path(), directoryError);
             if (directoryError)
             {
-                throw CacheWriteError("Cannot prepare BSA cache directory: " + directoryError.message());
+                FailCacheWrite("Cannot prepare BSA cache directory", path.parent_path(), directoryError);
             }
-            std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+            errno = 0;
+            std::ofstream stream(nativeTemporary, std::ios::binary | std::ios::trunc);
+            if (!stream)
+            {
+                FailCacheWrite("Cannot open BSA cache file", temporary, {errno, std::generic_category()});
+            }
+            errno = 0;
             stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            if (!stream)
+            {
+                FailCacheWrite("Cannot write BSA cache file", temporary, {errno, std::generic_category()});
+            }
+            errno = 0;
             stream.close();
             if (!stream)
             {
-                throw CacheWriteError("Cannot write BSA cache file");
+                FailCacheWrite("Cannot close BSA cache file", temporary, {errno, std::generic_category()});
             }
             // Replace atomically so readers never observe a partially written model,
             // negative-cache list, or statistics file, including concurrent publishers.
 #ifdef _WIN32
-            if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
+            if (!MoveFileExW(nativeTemporary.c_str(), nativePath.c_str(), MOVEFILE_REPLACE_EXISTING))
             {
-                throw CacheWriteError("Cannot publish BSA cache file: " + std::to_string(GetLastError()));
+                const std::error_code error(static_cast<int>(GetLastError()), std::system_category());
+                FailCacheWrite("Cannot publish BSA cache file", path, error);
             }
 #else
             std::error_code renameError;
-            std::filesystem::rename(temporary, path, renameError);
+            std::filesystem::rename(nativeTemporary, nativePath, renameError);
             if (renameError)
             {
-                throw CacheWriteError("Cannot publish BSA cache file: " + renameError.message());
+                FailCacheWrite("Cannot publish BSA cache file", path, renameError);
             }
 #endif
         }
@@ -351,7 +381,7 @@ namespace navmesh::skyrim
         {
             if (!stream.is_open())
             {
-                stream.open(archive, std::ios::binary);
+                stream.open(core::NativeFilePath(archive), std::ios::binary);
                 if (!stream)
                 {
                     throw std::runtime_error("Cannot open BSA payload stream");
@@ -544,17 +574,18 @@ namespace navmesh::skyrim
         : impl_(std::make_unique<Impl>())
     {
         impl_->snapshot = std::move(snapshot);
-        std::filesystem::create_directories(impl_->snapshot);
+        const auto nativeSnapshot = core::NativeFilePath(impl_->snapshot);
+        std::filesystem::create_directories(nativeSnapshot);
         for (auto &path : archives)
         {
             impl_->providers.push_back({std::move(path), {}});
         }
-        std::ifstream missing(impl_->snapshot / ".missing-models.txt");
+        std::ifstream missing(nativeSnapshot / ".missing-models.txt");
         for (std::string name; std::getline(missing, name);)
         {
             impl_->missing.insert(Normalize(name));
         }
-        std::ifstream statistics(impl_->snapshot / ".archive-statistics.json");
+        std::ifstream statistics(nativeSnapshot / ".archive-statistics.json");
         const std::string json((std::istreambuf_iterator<char>(statistics)), {});
         for (std::size_t index{}; index < Impl::CounterNames.size(); ++index)
         {
@@ -587,7 +618,8 @@ namespace navmesh::skyrim
             {
                 const auto logical = Normalize(name);
                 const auto relative = ModelPath(logical);
-                if (!impl_->missing.contains(logical) && !std::filesystem::is_regular_file(impl_->snapshot / relative))
+                if (!impl_->missing.contains(logical) &&
+                    !std::filesystem::is_regular_file(core::NativeFilePath(impl_->snapshot / relative)))
                 {
                     remaining.insert(logical);
                 }

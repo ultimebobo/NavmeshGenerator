@@ -97,11 +97,15 @@ generation. Both source-triangle and geometry-source evidence tables are
 compacted and written to private gzip cache data. Inspection audits are pinned
 through reconciliation/export and staging links or copies are removed on exit.
 
-On Windows, candidate gzip I/O and cache publication use normalized native
-extended paths, including UNC paths. Digest-named candidate files and their
-temporary siblings can exceed the legacy file-path limit without preventing
-spooling, reuse, audit pinning or retention-budget cleanup. Cache identities and stored formats remain
-independent of this file-opening representation.
+On Windows, archive extraction, cached NIF loading, candidate gzip I/O and cache
+publication use normalized native extended paths, including UNC paths. Nested
+model paths, digest-named candidate files and their temporary siblings can exceed
+the legacy file-path limit without preventing publication, reuse, audit pinning or
+retention-budget cleanup. Cache identities and stored formats remain independent
+of this file-opening representation. Archive cache publication failures identify
+the attempted path and operating-system reason; check free space and permissions
+or choose another shared asset cache folder. These storage failures stop the run
+rather than treating required collision as absent.
 
 Eviction only touches recognized generated cache files inside the cache root.
 Game inputs and operator-owned exports are excluded. Ownership/statistics markers

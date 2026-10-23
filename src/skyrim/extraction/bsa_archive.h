@@ -39,6 +39,7 @@ namespace navmesh::skyrim
          * Missing names are persisted only after a reliable search of every provider.
          * Updates the snapshot's cumulative archive statistics after each nonempty request.
          * Allocation and cache/storage failures throw and must stop publishing.
+         * Cache publication errors identify the physical path and operating-system reason.
          */
         [[nodiscard]] bool Extract(const std::set<std::string> &requested);
         /// Asset failures from the latest Extract call; borrowed until the next extraction or destruction.

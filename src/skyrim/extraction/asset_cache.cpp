@@ -49,16 +49,19 @@ namespace navmesh::skyrim
             hash.Add("\n");
             hash.Add(navmesh::core::PathToUtf8(std::filesystem::absolute(archive).lexically_normal()));
             std::error_code error;
-            hash.Add(":" + std::to_string(std::filesystem::file_size(archive, error)));
-            hash.Add(":" + std::to_string(std::filesystem::last_write_time(archive, error).time_since_epoch().count()));
+            const auto nativeArchive = core::NativeFilePath(archive);
+            hash.Add(":" + std::to_string(std::filesystem::file_size(nativeArchive, error)));
+            hash.Add(":" +
+                     std::to_string(std::filesystem::last_write_time(nativeArchive, error).time_since_epoch().count()));
         }
         const auto root =
             cacheRoot.empty() ? std::filesystem::temp_directory_path() / "NavmeshGenerator" / "assets" : cacheRoot;
         const auto snapshot = root / hash.Hex();
-        std::filesystem::create_directories(snapshot);
-        std::ofstream marker(snapshot / ".navmesh-assets.json", std::ios::trunc);
+        const auto nativeSnapshot = core::NativeFilePath(snapshot);
+        std::filesystem::create_directories(nativeSnapshot);
+        std::ofstream marker(nativeSnapshot / ".navmesh-assets.json", std::ios::trunc);
         marker << "{\"schema\":1}";
-        std::ofstream manifest(snapshot / "archives.txt", std::ios::trunc);
+        std::ofstream manifest(nativeSnapshot / "archives.txt", std::ios::trunc);
         for (const auto &archive : archives)
         {
             manifest << navmesh::core::PathToUtf8(archive) << '\n';

@@ -1211,7 +1211,7 @@ namespace
     {
         NifGeometry result;
         nifly::NifFile nif;
-        if (nif.Load(path) != 0 || !nif.IsValid())
+        if (nif.Load(navmesh::core::NativeFilePath(path)) != 0 || !nif.IsValid())
         {
             return result;
         }
@@ -1465,11 +1465,12 @@ namespace
             {
                 continue;
             }
-            if (std::filesystem::exists(dataDirectory / relative))
+            if (std::filesystem::exists(navmesh::core::NativeFilePath(dataDirectory / relative)))
             {
                 continue;
             }
-            if (alreadyDecoded(relative) || std::filesystem::exists(cacheDirectory / relative))
+            if (alreadyDecoded(relative) ||
+                std::filesystem::exists(navmesh::core::NativeFilePath(cacheDirectory / relative)))
             {
                 continue;
             }
@@ -1521,8 +1522,9 @@ namespace navmesh::skyrim
         std::string ModelKey(const std::filesystem::path &path, bool includeRender)
         {
             std::error_code error;
-            const auto size = std::filesystem::file_size(path, error);
-            const auto stamp = std::filesystem::last_write_time(path, error).time_since_epoch().count();
+            const auto nativePath = core::NativeFilePath(path);
+            const auto size = std::filesystem::file_size(nativePath, error);
+            const auto stamp = std::filesystem::last_write_time(nativePath, error).time_since_epoch().count();
             return navmesh::core::PathToUtf8(path.lexically_normal()) + ":" + std::to_string(size) + ":" +
                    std::to_string(stamp) + (includeRender ? ":display" : ":navigation");
         }
@@ -1716,7 +1718,8 @@ namespace navmesh::skyrim
         GeometryExtraction output;
         ModelGeometryCache localCache;
         auto &cache = modelCache ? *modelCache : localCache;
-        const bool snapshotOwned = std::filesystem::exists(cacheDirectory / ".navmesh-assets.json");
+        const bool snapshotOwned =
+            std::filesystem::exists(core::NativeFilePath(cacheDirectory / ".navmesh-assets.json"));
         const auto cachedKey = [&](const std::filesystem::path &relative)
         {
             return navmesh::core::PathToUtf8((cacheDirectory / relative).lexically_normal()) +
@@ -1842,9 +1845,9 @@ namespace navmesh::skyrim
             const auto cachedPath = cacheDirectory.empty() ? loosePath : cacheDirectory / relativePath;
             const auto looseWinner = assets ? assets->looseModels.find(AssetKey(relativePath))
                                             : std::unordered_map<std::string, std::filesystem::path>::const_iterator{};
-            const auto modelPath = assets && looseWinner != assets->looseModels.end() ? looseWinner->second
-                                   : std::filesystem::exists(loosePath)               ? loosePath
-                                                                                      : cachedPath;
+            const auto modelPath = assets && looseWinner != assets->looseModels.end()         ? looseWinner->second
+                                   : std::filesystem::exists(core::NativeFilePath(loosePath)) ? loosePath
+                                                                                              : cachedPath;
             const bool operableActivator = reference.baseRecordType == "ACTI";
             const auto modelIdentity =
                 (snapshotOwned && modelPath == cachedPath
@@ -1912,7 +1915,7 @@ namespace navmesh::skyrim
             }
             if (nifGeometry.version.empty() || mesh.vertices.empty() || mesh.triangles.empty())
             {
-                const auto exists = std::filesystem::exists(modelPath);
+                const auto exists = std::filesystem::exists(core::NativeFilePath(modelPath));
                 const bool unavailableLooseWinner = assets && looseWinner != assets->looseModels.end() && !exists;
                 const auto status = unavailableLooseWinner        ? core::GeometryCoverage::Unreadable
                                     : !exists                     ? core::GeometryCoverage::Missing

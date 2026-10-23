@@ -72,7 +72,7 @@ namespace
 
     ArchiveCounters ReadArchiveCounters(const std::filesystem::path &snapshot)
     {
-        std::ifstream file(snapshot / ".archive-statistics.json");
+        std::ifstream file(navmesh::core::NativeFilePath(snapshot / ".archive-statistics.json"));
         std::string json((std::istreambuf_iterator<char>(file)), {});
         ArchiveCounters counters;
         for (const auto *key : {"metadata_bytes_read", "payload_bytes_read", "entries_extracted", "index_hits"})

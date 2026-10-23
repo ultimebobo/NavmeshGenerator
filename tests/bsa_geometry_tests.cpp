@@ -144,6 +144,75 @@ namespace
         }
     }
 
+    void CheckLongModelCachePaths(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        const auto loose = root / "collision-source.nif";
+        WriteCollisionModel(loose, 64, 16);
+        std::ifstream input(loose, std::ios::binary);
+        const std::string payload((std::istreambuf_iterator<char>(input)), {});
+        const std::string folder = "meshes/architecture/interior/catacombs/decorative furniture";
+        const std::string filename = "large_weathered_planter.nif";
+        const auto deepRoot = root / "long-paths" / std::string(70, 'a') / std::string(70, 'b') / std::string(70, 'c');
+        std::filesystem::create_directories(core::NativeFilePath(deepRoot));
+        const auto archive = deepRoot / "Fixture.bsa";
+        WriteModelArchive(core::NativeFilePath(archive), payload, filename, folder);
+        skyrim::ModelAssetSources assets;
+        assets.archives = {archive};
+        const auto snapshot = skyrim::ModelAssetCacheDirectory(root, &assets, deepRoot / "cache");
+        const auto relative = core::PathFromUtf8(folder + '/' + filename);
+        const auto cached = core::NativeFilePath(snapshot / relative);
+        assert(core::PathToUtf8(snapshot / relative).size() > 260);
+        core::Cell cell;
+        cell.references = {
+            {.id = 1, .recordType = "REFR", .modelPath = folder + '/' + filename, .baseRecordType = "STAT"}};
+        skyrim::ModelGeometryCache cache;
+        const auto geometry = skyrim::ExtractGeometry(root, cell, snapshot, {}, {}, &assets, &cache, true);
+        assert(geometry.archiveSearchComplete && geometry.failures.empty());
+        assert(geometry.collisionModelsLoaded == 1 && geometry.collisionTriangles == 2);
+        assert(std::filesystem::is_regular_file(cached));
+        // A fresh reader must reopen the published NIF rather than relying on decoded reuse.
+        const auto reopened = skyrim::ExtractGeometry(root, cell, snapshot, {}, {}, &assets, nullptr, true);
+        assert(reopened.archiveSearchComplete && reopened.failures.empty());
+        assert(reopened.collisionModelsLoaded == 1 && reopened.collisionTriangles == 2);
+        skyrim::TrimModelAssetCache(snapshot, 0);
+        assert(!std::filesystem::exists(cached));
+        const auto reused = skyrim::ExtractGeometry(root, cell, snapshot, {}, {}, &assets, &cache, true);
+        assert(reused.collisionModelsLoaded == 1 && cache.Statistics().modelHits == 1);
+        assert(!std::filesystem::exists(cached));
+    }
+
+    void CheckCachePublicationFailure(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        const auto snapshot = root / "blocked-publication";
+        const auto destination = snapshot / "meshes/fixture.nif";
+        skyrim::BsaModelExtractor extractor({root / "Fixture.BSA"}, snapshot);
+        std::filesystem::create_directories(destination);
+        bool fatalStorageFailure{};
+        try
+        {
+            (void)extractor.Extract({"meshes/fixture.nif", "meshes/missing.nif"});
+        }
+        catch (const std::runtime_error &error)
+        {
+            const std::string message = error.what();
+            assert(message.contains(core::PathToUtf8(destination)));
+            assert(message.contains("Cannot publish BSA cache file"));
+            assert(message.contains("permissions") && message.contains("--asset-cache"));
+            fatalStorageFailure = true;
+        }
+        assert(fatalStorageFailure && extractor.Failures().empty());
+        assert(!std::filesystem::exists(snapshot / ".missing-models.txt"));
+        for (const auto &entry : std::filesystem::directory_iterator(destination.parent_path()))
+        {
+            assert(entry.path().extension() != ".tmp");
+        }
+        std::filesystem::remove(destination);
+        assert(extractor.Extract({"meshes/fixture.nif"}));
+        assert(std::filesystem::is_regular_file(destination));
+    }
+
     bool HasNavigationAt(const navmesh::core::CandidateNavMesh &candidate, navmesh::core::Vec3 point)
     {
         const auto cross = [](auto a, auto b, auto c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); };
@@ -1120,9 +1189,10 @@ void TestNativeBsaGeometry()
             std::error_code error;
             std::filesystem::remove_all(path, error);
         }
-    } cleanup{root};
+    } cleanup{core::NativeFilePath(root)};
 
     CheckUnicodeModelPaths(root);
+    CheckLongModelCachePaths(root);
     nifly::NifFile nif;
     nif.Create({nifly::V20_2_0_7, 12, 130});
     const std::vector<nifly::Vector3> vertices = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
@@ -1131,6 +1201,7 @@ void TestNativeBsaGeometry()
     std::ostringstream model(std::ios::binary);
     assert(nif.Save(model) == 0);
     WriteModelArchive(root / "Fixture.BSA", model.str());
+    CheckCachePublicationFailure(root);
     {
         const auto unknownWinner = root / "invalid-provider" / "UnknownWinner.bsa";
         std::filesystem::create_directory(unknownWinner.parent_path());
