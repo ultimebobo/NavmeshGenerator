@@ -545,6 +545,7 @@ namespace navmesh::app::detail
         // Retain compact candidate evidence and status for every target, including skips and failures.
         using Result = BatchCellResult;
         std::vector<Result> results;
+        std::vector<std::filesystem::path> writtenPlugins;
         results.reserve(targets.size());
         for (const auto *target : targets)
         {
@@ -724,6 +725,14 @@ namespace navmesh::app::detail
             out << "},\n";
             out << "  \"skip_existing_navmesh\":" << (options.skipExistingNavmesh ? "true" : "false") << ",\n";
             out << "  \"copy_plugin\":" << (options.copyPlugin ? "true" : "false") << ",\n";
+            out << "  \"auto_split_plugins\":" << (options.autoSplitPlugins ? "true" : "false") << ",\n";
+            out << "  \"written_plugins\":[";
+            for (std::size_t pluginIndex = 0; pluginIndex < writtenPlugins.size(); ++pluginIndex)
+            {
+                out << (pluginIndex ? "," : "") << '"'
+                    << JsonEscape(core::PathToUtf8(writtenPlugins[pluginIndex].filename())) << '"';
+            }
+            out << "],\n";
             out << "  \"cell_error_policy\":\"" << options.cellErrorPolicy << "\",\n  \"asset_failures\":";
             assetFailures.WriteJson(out);
             out << ",\n  \"extraction_failed_cells\":"
@@ -1346,12 +1355,18 @@ namespace navmesh::app::detail
                 return fail("BOS configurations changed during generation; rerun with coherent inputs");
             }
             if (!skyrim::WriteNavmeshOverrides(options.output, paths, resolved, replacements, written, error,
-                                               options.copyPlugin ? copySource : ""))
+                                               options.copyPlugin ? copySource : "", options.autoSplitPlugins,
+                                               &writtenPlugins))
             {
                 return fail(error);
             }
             std::cout << (options.copyPlugin ? "Generated plugin copy: " : "Generated batch NAVM override plugin: ")
                       << navmesh::core::PathToUtf8(written) << '\n';
+            for (std::size_t pluginIndex = 1; pluginIndex < writtenPlugins.size(); ++pluginIndex)
+            {
+                std::cout << "Generated batch NAVM override plugin: " << core::PathToUtf8(writtenPlugins[pluginIndex])
+                          << '\n';
+            }
         }
         skyrim::TrimModelAssetCache(assetCache, options.cacheBudgetMiB * 1024ULL * 1024ULL);
         const auto generationFailures = std::count_if(results.begin(), results.end(), [](const auto &result)

@@ -15,7 +15,7 @@ namespace navmesh::skyrim
         const core::Cell *cell{};
         const core::CandidateNavMesh *candidate{};
     };
-    /** Serialize generated navigation into a verified patch or source copy, allocating NAVMs for uncovered cells.
+    /** Serialize generated navigation into a verified patch set or source copy, allocating NAVMs for uncovered cells.
      * @param outputDirectory Writable output folder; existing plugins are refused.
      * Patch names receive a numeric suffix when their default filename is already
      * an active input, preventing a self dependency on an earlier generated plugin.
@@ -49,12 +49,15 @@ namespace navmesh::skyrim
      * other fields, scripts, locks, flags and group placement. Patch exports place partial WRLD/CELL
      * parent declarations immediately before persistent door groups to establish their loading context.
      * Changed input snapshots fail export.
-     * @param writtenPath Receives the finalized plugin path on success.
+     * @param writtenPath Receives the first finalized plugin path on success; cleared on failure.
      * @param error Receives a failure reason; no final plugin is published on failure.
      * @param copyPlugin Optional active filename to copy with generated NAVMs. Preserves
      * unrelated records, the filename, TES4 flags, and existing master indices. Generated
      * references must belong to that plugin or its existing masters; new IDs must fit
      * its existing full/light format. The copy replaces the source when installed.
+     * @param autoSplit Automatically partition navigation patches that exceed the reduced master limit.
+     * Exports requiring both splitting and newly allocated NAVM identities fail explicitly; copies stay single-file.
+     * @param writtenPaths Optional complete list of published plugins, in installation order; cleared on failure.
      * @return True after read-back and validation against the effective input navigation graph.
      * @warning Unrepresentable connector constraints, localized reference resources, unknown
      * reference fields and traversal portals without a safe replacement route reject export instead of being discarded.
@@ -64,7 +67,8 @@ namespace navmesh::skyrim
                                              const ResolvedLoadOrder &resolved,
                                              const std::vector<NavmeshReplacement> &replacements,
                                              std::filesystem::path &writtenPath, std::string &error,
-                                             const std::string &copyPlugin = {});
+                                             const std::string &copyPlugin = {}, bool autoSplit = true,
+                                             std::vector<std::filesystem::path> *writtenPaths = nullptr);
     /** Write generated navigation as overrides, or a new NAVM when the selected cell has none.
      * @param outputDirectory Directory for a new ESP; existing files are never replaced.
      * @param inputPlugins Physical active plugin paths in resolved load order.
@@ -76,8 +80,10 @@ namespace navmesh::skyrim
      * bounded border fan edits recorded in the candidate are verified and serialized.
      * Incoming portals into replaced triangle spaces are cleared before matched
      * reciprocal portals are written; unmatched edges remain open boundaries.
-     * @param writtenPath Receives the final plugin path after read-back verification.
+     * @param writtenPath Receives the first final plugin path after read-back verification.
      * @param error Human-readable reason when the source cannot be safely serialized.
+     * @param autoSplit Permit automatic splitting after dependency reduction, using the combined writer's rules.
+     * @param writtenPaths Optional complete list of published plugins in installation order.
      * @return True only after a successful write and independent reader round trip;
      * false with an error when a required border portal cannot be serialized.
      * @note The ESP is ESL-flagged when its master table and new identities fit a light plugin.
@@ -88,5 +94,6 @@ namespace navmesh::skyrim
                                             const std::vector<std::filesystem::path> &inputPlugins,
                                             const ResolvedLoadOrder &resolved, const core::Cell &cell,
                                             const core::CandidateNavMesh &candidate, std::filesystem::path &writtenPath,
-                                            std::string &error);
+                                            std::string &error, bool autoSplit = true,
+                                            std::vector<std::filesystem::path> *writtenPaths = nullptr);
 } // namespace navmesh::skyrim

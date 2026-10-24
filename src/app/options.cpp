@@ -342,6 +342,10 @@ namespace navmesh::app
                 options.generatePlugin = true;
                 options.generateCandidate = true;
             }
+            else if (argument == "--no-auto-split")
+            {
+                options.autoSplitPlugins = false;
+            }
             else if (argument == "--skip-existing-navmesh")
             {
                 options.skipExistingNavmesh = true;

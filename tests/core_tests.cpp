@@ -251,7 +251,7 @@ namespace
         Require(manyOrder.cells.size() == 1 && manyOrder.cells.front().navMeshes.size() == 1);
         Require(navmesh::skyrim::WriteNavmeshOverride(root / "full-slot-output", manyPaths, manyOrder,
                                                       manyOrder.cells.front(), candidate, target, error) &&
-                target.extension() == ".esp" && !eslFlagged(target));
+                target.extension() == ".esp" && eslFlagged(target));
     }
     void TestNewNavmeshRecords()
     {
@@ -2995,6 +2995,7 @@ void TestNavmeshCover();
 void TestFormIdResolution();
 void TestOperablePassages();
 void TestNativeBsaGeometry();
+void TestNavigationPatchExport();
 
 int main(int argc, char **argv)
 {
@@ -3006,6 +3007,11 @@ int main(int argc, char **argv)
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 #endif
     TestOperablePassages();
+    TestNavigationPatchExport();
+    if (argc == 2 && std::string_view(argv[1]) == "--patch-export-only")
+    {
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--bsa-only")
     {
         TestNativeBsaGeometry();

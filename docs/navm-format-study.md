@@ -68,8 +68,8 @@ See [generated triangle tagging](command-line.md#generated-triangle-tagging).
 
 The writer accepts a resolved load order and the selected cell's existing NAVMs.
 It copies their group placement and record headers, while leaving parent CELL and
-worldspace records in their source plugins. Its TES4 master list contains each
-NAVM source plugin and its dependencies in load order; record and group FormIDs
+worldspace records in their source plugins. Its TES4 master list contains the
+winning navigation sources and owners referenced by emitted records, in input order; record and group FormIDs
 are rebased into that table. It places generated world-space vertices and triangles in the
 largest original NAVM and writes empty geometry into the other NAVM overrides.
 Generated geometry has matched external and door links, rebuilt cover metadata,
@@ -199,13 +199,14 @@ The generated trailing section layout follows
 ## Combined affected-cell overrides
 
 `WriteNavmeshOverrides` accepts multiple cell/candidate pairs from the same
-resolved snapshot and writes one ESP with a shared master table. Each cell keeps
+resolved snapshot and prepares the complete navigation graph before patch-file partitioning. Each cell keeps
 its own primary NAVM identity. Generated-to-generated links must target matching
 edges in the generated primary meshes and have reciprocal generated targets;
 replaced secondary NAVMs cannot serve as portal destinations. Authored neighbor
 records shared by several replacements are serialized once. Read-back checks
 include every cell's geometry, door table and portal entries. Any failure occurs
-before the temporary plugin is finalized. See [batch rebuilding](batch-rebuilding.md).
+before any output is finalized. The [batch export contract](batch-rebuilding.md#outputs-and-failure-policy)
+defines automatic splitting, dependency reduction, installation order and unsupported new-identity splits.
 
 `--skip-existing-navmesh` selects uncovered targets and protects all cells owning
 winning NAVM records. Generation retains the largest connected floor in each

@@ -227,6 +227,9 @@ this reference. The showcase utilities and renderer are described in the
 - `navmesh::skyrim::WriteNavmeshOverrides`: combined batch serialization
   of existing overrides and new plugin-owned NAVMs, with generated-to-generated
   and authored-neighbor reciprocal portal checks, cover, NAVI and reciprocal XNDP.
+- `navmesh::skyrim::detail::WriteNavigationPatchSet`: finalized resolved-ID record
+  export with dependency reduction, automatic existing-ID partitioning, per-file NAVI,
+  reverse read-back, complete-graph validation and staged publication with an installation manifest.
 - `navmesh::core::CaptureCoverGeometry`, `BuildNavmeshCover`: physical wall evidence
   retained through seam refinement and final cover-slot encoding without triangle renumbering.
 - `navmesh::skyrim::detail::RebuildNavmeshMetadata`, `RewriteReferenceNavigation`:

@@ -62,6 +62,9 @@ namespace navmesh::app
         std::string copySourcePlugin;
         /// Write generated navigation as NAVM overrides or new records in uncovered cells.
         bool generatePlugin{};
+        /// Partition oversized navigation patches after reducing masters; source copies remain single-file.
+        /// Splitting exports containing newly allocated NAVMs is unsupported and fails without publishing plugins.
+        bool autoSplitPlugins{true};
         /// Detect generated water and preferred-route triangles; disable to export unclassified geometry.
         bool tagTriangles{true};
         /// Copy the named source plugin with finalized navigation instead of writing a separate navigation patch.

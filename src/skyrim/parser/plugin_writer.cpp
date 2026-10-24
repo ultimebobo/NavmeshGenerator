@@ -1,4 +1,5 @@
 #include "skyrim/parser/plugin_writer.h"
+#include "skyrim/parser/patch_export.h"
 #include "core/io/file_path.h"
 #include "skyrim/parser/text_encoding.h"
 #include "skyrim/parser/plugin_copy.h"
@@ -232,6 +233,29 @@ namespace
         }
         return static_cast<std::uint32_t>(std::distance(outputMasters.begin(), it)) << 24 | (raw & 0xFFFFFFU);
     }
+    /// Planning uses resolved full/light prefixes, so dependency discovery never truncates a master index.
+    std::optional<std::uint32_t> ResolveSourceIdentity(const SourceInfo &source,
+                                                       const navmesh::skyrim::ResolvedLoadOrder &resolved,
+                                                       std::uint32_t raw)
+    {
+        if (!raw)
+        {
+            return 0;
+        }
+        const auto index = raw >> 24;
+        const auto &owner = index < source.masters.size() ? source.masters[index] : source.name;
+        auto key = owner;
+        std::transform(key.begin(), key.end(), key.begin(),
+                       [](unsigned char value) { return char(std::tolower(value)); });
+        const auto found = resolved.pluginFormPrefixes.find(key);
+        if (found != resolved.pluginFormPrefixes.end())
+        {
+            const auto prefix = found->second;
+            return prefix | (raw & (prefix >> 24 == 0xfeU ? 0xfffU : 0xffffffU));
+        }
+        return std::nullopt;
+    }
+
     /// Resolve a load-order FormID through the record that introduced it, including light-plugin IDs.
     std::optional<std::uint32_t> RebaseResolvedFormId(const navmesh::skyrim::ResolvedLoadOrder &resolved,
                                                       const std::vector<std::string> &outputMasters,
@@ -713,8 +737,8 @@ namespace
         const navmesh::skyrim::ResolvedLoadOrder &resolved,
         const std::map<std::uint32_t, const ResolvedRecord *> &doorReferences,
         const std::map<std::uint32_t, std::optional<navmesh::skyrim::NavmeshDoorAssociation>> &outputAssociations,
-        const std::string &copiedName, Group &root, std::map<std::uint32_t, Bytes> &expectedReferences,
-        std::string &error)
+        const std::string &copiedName, bool resolvedIdentities, Group &root,
+        std::map<std::uint32_t, Bytes> &expectedReferences, std::string &error)
     {
         const auto fail = [&](const char *reason)
         {
@@ -727,13 +751,18 @@ namespace
         {
             const auto source = std::find_if(sources.begin(), sources.end(), [&](const auto &item)
                                              { return SameName(item.name, reference->winning.plugin); });
-            const auto outputId = RebaseResolvedFormId(resolved, masters, id);
+            const auto outputId =
+                (resolvedIdentities ? std::optional{id} : RebaseResolvedFormId(resolved, masters, id));
             if (source == sources.end() || !outputId || !reference->raw)
             {
                 return fail("Cannot resolve a door reference's source snapshot.");
             }
             Bytes payload;
-            const auto rebase = [&](std::uint32_t raw) { return RebaseFormId(*source, masters, raw); };
+            const auto rebase = [&](std::uint32_t raw)
+            {
+                return resolvedIdentities ? ResolveSourceIdentity(*source, resolved, raw)
+                                          : RebaseFormId(*source, masters, raw);
+            };
             const bool retainsStrings = !copiedName.empty() && SameName(copiedName, source->name);
             if (!navmesh::skyrim::detail::RewriteReferenceNavigation(
                     *reference->raw, rebase, outputAssociations.at(*outputId), retainsStrings,
@@ -759,7 +788,8 @@ namespace
                 const auto type = Get32(group, 12);
                 if (type == 1 || type == 6 || type == 8 || type == 9 || type == 10)
                 {
-                    const auto label = RebaseFormId(*source, masters, Get32(group, 8));
+                    const auto label = (resolvedIdentities ? ResolveSourceIdentity(*source, resolved, Get32(group, 8))
+                                                           : RebaseFormId(*source, masters, Get32(group, 8)));
                     if (!label)
                     {
                         return fail("Cannot rebase a door reference's group placement.");
@@ -1035,9 +1065,21 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                                             const ResolvedLoadOrder &resolved,
                                             const std::vector<NavmeshReplacement> &replacements,
                                             std::filesystem::path &writtenPath, std::string &error,
-                                            const std::string &copyPlugin)
+                                            const std::string &copyPlugin, bool autoSplit,
+                                            std::vector<std::filesystem::path> *writtenPaths)
 {
     error.clear();
+    writtenPath.clear();
+    if (writtenPaths)
+    {
+        writtenPaths->clear();
+    }
+    const bool resolvedIdentities = copyPlugin.empty();
+    const auto rebaseSource = [&](const SourceInfo &source, const std::vector<std::string> &table, std::uint32_t raw)
+    { return resolvedIdentities ? ResolveSourceIdentity(source, resolved, raw) : RebaseFormId(source, table, raw); };
+    const auto rebaseResolved =
+        [&](const ResolvedLoadOrder &snapshot, const std::vector<std::string> &table, std::uint32_t id)
+    { return resolvedIdentities ? std::optional{id} : RebaseResolvedFormId(snapshot, table, id); };
     const auto fail = [&](const char *reason)
     {
         error = reason;
@@ -1723,8 +1765,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         // Record identities must remain meaningful when the copy replaces the source.
         // Winning overrides may come from other plugins, but their introducing owners
         // must be addressable through this unchanged table before serialization starts.
-        const auto representable = [&](std::uint32_t id)
-        { return RebaseResolvedFormId(resolved, masters, id).has_value(); };
+        const auto representable = [&](std::uint32_t id) { return rebaseResolved(resolved, masters, id).has_value(); };
         for (const auto *record : records)
         {
             if (!representable(record->formId))
@@ -1746,7 +1787,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     {
         for (auto &[triangle, doorId] : entries)
         {
-            const auto rebased = RebaseResolvedFormId(resolved, masters, doorId);
+            const auto rebased = rebaseResolved(resolved, masters, doorId);
             if (!rebased)
             {
                 return fail("Cannot rebase an entrance door reference.");
@@ -1754,7 +1795,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             doorId = *rebased;
         }
     }
-    if (masters.size() > (copy ? 255U : 254U))
+    if (copy && masters.size() > 255U)
     {
         return fail("Too many masters for a generated plugin.");
     }
@@ -1767,7 +1808,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     }
     else if (navigationSource)
     {
-        navigationId = RebaseResolvedFormId(resolved, masters, navigationSource->formId);
+        navigationId = rebaseResolved(resolved, masters, navigationSource->formId);
         if (!navigationId)
         {
             return fail("Cannot encode the NAVI owner in the output master table.");
@@ -1777,7 +1818,19 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         std::find_if(masters.begin(), masters.end(), [](const auto &name) { return SameName(name, "Skyrim.esm"); });
     if (!navigationId && skyrimMaster != masters.end())
     {
-        navigationId = static_cast<std::uint32_t>(std::distance(masters.begin(), skyrimMaster)) << 24 | 0x12FB4U;
+        if (resolvedIdentities)
+        {
+            const auto prefix = resolved.pluginFormPrefixes.find("skyrim.esm");
+            if (prefix == resolved.pluginFormPrefixes.end())
+            {
+                return fail("Cannot resolve the Skyrim navigation-map owner.");
+            }
+            navigationId = prefix->second | 0x12FB4U;
+        }
+        else
+        {
+            navigationId = static_cast<std::uint32_t>(std::distance(masters.begin(), skyrimMaster)) << 24 | 0x12FB4U;
+        }
     }
     const auto newRecordCount = newNavmeshCount + (navigationId ? 0U : 1U);
     const std::uint32_t firstNewObjectId = copy ? copy->nextObjectId : 0x800U;
@@ -1788,7 +1841,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     {
         return fail("New navigation identities do not fit the output plugin's full/light format.");
     }
-    const auto selfIndex = static_cast<std::uint32_t>(masters.size() - (copy ? 1 : 0));
+    const auto selfIndex = resolvedIdentities ? 0xffU : static_cast<std::uint32_t>(masters.size() - 1);
     std::uint32_t nextObjectId = firstNewObjectId;
     for (const auto &master : masters)
     {
@@ -1840,7 +1893,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             const auto primary =
                 std::max_element(cell.navMeshes.begin(), cell.navMeshes.end(),
                                  [](const auto &a, const auto &b) { return a.polygons.size() < b.polygons.size(); });
-            const auto identity = RebaseResolvedFormId(resolved, masters, primary->id);
+            const auto identity = rebaseResolved(resolved, masters, primary->id);
             if (!identity)
             {
                 return fail("Cannot rebase a generated primary NAVM identity.");
@@ -1851,7 +1904,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     std::map<std::uint32_t, std::optional<NavmeshDoorAssociation>> outputAssociations;
     for (const auto &[id, reference] : doorReferences)
     {
-        const auto outputId = RebaseResolvedFormId(resolved, masters, id);
+        const auto outputId = rebaseResolved(resolved, masters, id);
         if (!outputId)
         {
             return fail("Cannot encode a door reference in the output master table.");
@@ -1864,7 +1917,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
         else if (const auto authored = authoredDoorAssignments.find(id); authored != authoredDoorAssignments.end())
         {
-            const auto target = RebaseResolvedFormId(resolved, masters, authored->second.navmeshId);
+            const auto target = rebaseResolved(resolved, masters, authored->second.navmeshId);
             if (!target)
             {
                 return fail("Cannot rebase a neighboring door's NAVM association.");
@@ -1888,7 +1941,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         {
             const auto target = link.generatedNeighborCell
                                     ? std::optional<std::uint32_t>{outputPrimaryByCell.at(*link.generatedNeighborCell)}
-                                    : RebaseResolvedFormId(resolved, masters, link.neighborNavmeshId);
+                                    : rebaseResolved(resolved, masters, link.neighborNavmeshId);
             if (!target)
             {
                 return fail("Cannot rebase a neighboring NAVM FormID.");
@@ -1914,7 +1967,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             const auto source = std::find_if(sources.begin(), sources.end(), [&](const auto &item)
                                              { return SameName(item.name, record->winning.plugin); });
             metadataSources.push_back({&*record->raw, &authored,
-                                       [&, source](std::uint32_t raw) { return RebaseFormId(*source, masters, raw); }});
+                                       [&, source](std::uint32_t raw) { return rebaseSource(*source, masters, raw); }});
         }
         Bytes auxiliary;
         if (!detail::RebuildNavmeshMetadata(
@@ -1944,9 +1997,8 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                 // CELL group labels remain source-local until placement is rebased below.
                 U32(nvnm, 12);
                 U32(nvnm, PathingCellCrc);
-                const auto world = navm->worldspaceFormId
-                                       ? RebaseResolvedFormId(resolved, masters, *navm->worldspaceFormId)
-                                       : std::optional<std::uint32_t>{0};
+                const auto world = navm->worldspaceFormId ? rebaseResolved(resolved, masters, *navm->worldspaceFormId)
+                                                          : std::optional<std::uint32_t>{0};
                 if (!world || (cell.exteriorCoordinates && !*world && !navm->worldspaceFormId))
                 {
                     return fail("Cannot resolve new NAVM worldspace.");
@@ -1965,7 +2017,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                 }
                 else
                 {
-                    const auto cellId = RebaseResolvedFormId(resolved, masters, cell.id);
+                    const auto cellId = rebaseResolved(resolved, masters, cell.id);
                     if (!cellId)
                     {
                         return fail("Cannot resolve new NAVM interior CELL.");
@@ -1981,7 +2033,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             }
             if (!newNavmesh && Get32(nvnm, 8))
             {
-                const auto world = RebaseFormId(source, masters, Get32(nvnm, 8));
+                const auto world = rebaseSource(source, masters, Get32(nvnm, 8));
                 if (!world)
                 {
                     return fail("Cannot rebase NAVM worldspace FormID.");
@@ -1990,7 +2042,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             }
             else if (!newNavmesh && !cell.exteriorCoordinates)
             {
-                const auto interiorCell = RebaseFormId(source, masters, Get32(nvnm, 12));
+                const auto interiorCell = rebaseSource(source, masters, Get32(nvnm, 12));
                 if (!interiorCell)
                 {
                     return fail("Cannot rebase NAVM interior CELL FormID.");
@@ -2128,7 +2180,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             Set32(bytes, 4, static_cast<std::uint32_t>(payload.size()));
             Set32(bytes, 8, Get32(bytes, 8) & ~(0x40000U | 0x20U));
             const auto rebasedId = newNavmesh ? std::optional<std::uint32_t>{outputPrimaryByCell.at(cell.id)}
-                                              : RebaseFormId(source, masters, Get32(bytes, 12));
+                                              : rebaseSource(source, masters, Get32(bytes, 12));
             if (!rebasedId)
             {
                 return fail("Cannot rebase source NAVM FormID.");
@@ -2137,7 +2189,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             navigationGeometry.emplace(*rebasedId, std::move(nvnm));
             bytes.insert(bytes.end(), payload.begin(), payload.end());
             expected.emplace_back(Get32(bytes, 12), mesh);
-            const auto cellId = RebaseResolvedFormId(resolved, masters, cell.id);
+            const auto cellId = rebaseResolved(resolved, masters, cell.id);
             if (!cellId)
             {
                 return fail("Cannot rebase selected CELL FormID.");
@@ -2159,7 +2211,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                 const auto groupType = Get32(group, 12);
                 if (groupType == 1 || groupType == 6 || groupType == 8 || groupType == 9 || groupType == 10)
                 {
-                    const auto label = RebaseFormId(source, masters, Get32(group, 8));
+                    const auto label = rebaseSource(source, masters, Get32(group, 8));
                     if (!label)
                     {
                         return fail("Cannot rebase NAVM group placement.");
@@ -2181,7 +2233,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                 // Retained ancestor labels above are source-local. Synthetic child
                 // labels originate from a resolved CELL identity and must be encoded
                 // directly in output-master space after those ancestors are rebased.
-                const auto outputCell = RebaseResolvedFormId(resolved, masters, cell.id);
+                const auto outputCell = rebaseResolved(resolved, masters, cell.id);
                 if (!outputCell || (outputCellGroup && *outputCellGroup != *outputCell))
                 {
                     return fail("Cannot resolve new NAVM CELL group placement.");
@@ -2202,7 +2254,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             Add(root, placement, std::move(bytes));
         }
         const auto primaryFormId = newNavmesh ? std::optional<std::uint32_t>{expected.back().first}
-                                              : RebaseResolvedFormId(resolved, masters, cell.navMeshes[primary].id);
+                                              : rebaseResolved(resolved, masters, cell.navMeshes[primary].id);
         if (!primaryFormId)
         {
             return fail("Cannot rebase generated NAVM FormID.");
@@ -2217,7 +2269,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     std::set<std::uint32_t> replacedIds;
     for (const auto *replaced : records)
     {
-        const auto id = RebaseResolvedFormId(resolved, masters, replaced->formId);
+        const auto id = rebaseResolved(resolved, masters, replaced->formId);
         if (!id)
         {
             return fail("Cannot rebase an incoming portal destination.");
@@ -2269,7 +2321,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         for (std::uint32_t i{}; i < oldExternalCount; ++i)
         {
             const auto offset = trailing + 4 + i * 10 + 4;
-            const auto rebased = RebaseFormId(source, masters, Get32(nvnm, offset));
+            const auto rebased = rebaseSource(source, masters, Get32(nvnm, offset));
             if (!rebased)
             {
                 return fail("Cannot rebase a neighboring NAVM external link.");
@@ -2288,14 +2340,14 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         for (std::uint32_t i{}; i < oldDoorCount; ++i)
         {
             const auto offset = insertion + 4 + i * 10 + 6;
-            const auto rebased = RebaseFormId(source, masters, Get32(nvnm, offset));
+            const auto rebased = rebaseSource(source, masters, Get32(nvnm, offset));
             if (!rebased)
             {
                 return fail("Cannot rebase a neighboring NAVM door link.");
             }
             Set32(nvnm, offset, *rebased);
         }
-        const auto outputNeighborId = RebaseResolvedFormId(resolved, masters, neighborId);
+        const auto outputNeighborId = rebaseResolved(resolved, masters, neighborId);
         if (!outputNeighborId)
         {
             return fail("Cannot rebase a door's authored NAVM.");
@@ -2339,7 +2391,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         doorsByMesh.emplace(*outputNeighborId, std::move(neighborDoors));
         if (Get32(nvnm, 8))
         {
-            const auto world = RebaseFormId(source, masters, Get32(nvnm, 8));
+            const auto world = rebaseSource(source, masters, Get32(nvnm, 8));
             if (!world)
             {
                 return fail("Cannot rebase neighboring NAVM worldspace.");
@@ -2348,7 +2400,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
         else
         {
-            const auto interior = RebaseFormId(source, masters, Get32(nvnm, 12));
+            const auto interior = rebaseSource(source, masters, Get32(nvnm, 12));
             if (!interior)
             {
                 return fail("Cannot rebase neighboring NAVM CELL.");
@@ -2451,7 +2503,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                 for (std::size_t offset{}; offset < sub.data.size(); offset += 4)
                 {
                     const auto raw = Get32(sub.data, offset);
-                    const auto form = raw ? RebaseFormId(source, masters, raw) : std::optional<std::uint32_t>{0};
+                    const auto form = raw ? rebaseSource(source, masters, raw) : std::optional<std::uint32_t>{0};
                     if (!form)
                     {
                         return fail("Cannot rebase a neighboring NAVM base-object dependency.");
@@ -2473,7 +2525,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         bytes.resize(24);
         Set32(bytes, 4, static_cast<std::uint32_t>(payload.size()));
         Set32(bytes, 8, Get32(bytes, 8) & ~(0x40000U | 0x20U));
-        const auto rebasedId = RebaseFormId(source, masters, Get32(bytes, 12));
+        const auto rebasedId = rebaseSource(source, masters, Get32(bytes, 12));
         if (!rebasedId)
         {
             return fail("Cannot rebase neighboring NAVM FormID.");
@@ -2482,7 +2534,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         navigationGeometry.emplace(*rebasedId, std::move(nvnm));
         bytes.insert(bytes.end(), payload.begin(), payload.end());
         expected.emplace_back(*rebasedId, mesh);
-        const auto cellId = RebaseResolvedFormId(resolved, masters, *navm->cellFormId);
+        const auto cellId = rebaseResolved(resolved, masters, *navm->cellFormId);
         if (!cellId)
         {
             return fail("Cannot rebase neighboring CELL FormID.");
@@ -2503,7 +2555,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             const auto type = Get32(group, 12);
             if (type == 1 || type == 6 || type == 8 || type == 9 || type == 10)
             {
-                const auto label = RebaseFormId(source, masters, Get32(group, 8));
+                const auto label = rebaseSource(source, masters, Get32(group, 8));
                 if (!label)
                 {
                     return fail("Cannot rebase neighboring NAVM group.");
@@ -2514,10 +2566,33 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
         Add(root, placement, std::move(bytes));
     }
-    if (!SerializeDoorReferences(sources, masters, resolved, doorReferences, outputAssociations, copiedName, root,
-                                 expectedReferences, error))
+    if (!SerializeDoorReferences(sources, masters, resolved, doorReferences, outputAssociations, copiedName,
+                                 resolvedIdentities, root, expectedReferences, error))
     {
         return false;
+    }
+    if (resolvedIdentities)
+    {
+        std::map<std::uint32_t, float> stepHeights;
+        for (const auto &replacement : replacements)
+        {
+            const auto &profile = replacement.candidate->profile;
+            stepHeights.emplace(outputPrimaryByCell.at(replacement.cell->id),
+                                profile.stepHeight + profile.weldTolerance);
+        }
+        std::vector<std::filesystem::path> outputs;
+        if (!detail::WriteNavigationPatchSet(outputDirectory, core::PathToUtf8(path.filename()), resolved,
+                                             Serialize(root), newNavmeshIds, navigationId, nextObjectId, stepHeights,
+                                             autoSplit, outputs, error))
+        {
+            return false;
+        }
+        writtenPath = outputs.front();
+        if (writtenPaths)
+        {
+            *writtenPaths = std::move(outputs);
+        }
+        return true;
     }
     const auto parentCount = copy ? 0 : AddPersistentDoorParents(root);
     if (!navigationId)
@@ -2635,6 +2710,10 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         return fail("Cannot finalize generated plugin.");
     }
     writtenPath = path;
+    if (writtenPaths)
+    {
+        writtenPaths->push_back(path);
+    }
     return true;
 }
 
@@ -2642,7 +2721,9 @@ bool navmesh::skyrim::WriteNavmeshOverride(const std::filesystem::path &outputDi
                                            const std::vector<std::filesystem::path> &inputPlugins,
                                            const ResolvedLoadOrder &resolved, const core::Cell &cell,
                                            const core::CandidateNavMesh &candidate, std::filesystem::path &writtenPath,
-                                           std::string &error)
+                                           std::string &error, bool autoSplit,
+                                           std::vector<std::filesystem::path> *writtenPaths)
 {
-    return WriteNavmeshOverrides(outputDirectory, inputPlugins, resolved, {{&cell, &candidate}}, writtenPath, error);
+    return WriteNavmeshOverrides(outputDirectory, inputPlugins, resolved, {{&cell, &candidate}}, writtenPath, error, {},
+                                 autoSplit, writtenPaths);
 }

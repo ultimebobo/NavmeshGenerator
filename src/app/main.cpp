@@ -142,20 +142,20 @@ namespace
         { return ReportFailure(progress, 0, message, code); };
         if (options.mo2.empty() && options.vortex.empty() && options.plugin.empty() && options.loadOrder.empty())
         {
-            return fail(
-                "Usage: NavmeshGenerator --mo2 <instance-or-portable-root> --profile <existing-profile> "
-                "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --cells <identifiers> | "
-                "--rebuild-plugin <active "
-                "filename> | --rebuild-load-order] [--generate-plugin] [--copy-plugin] [--skip-existing-navmesh] "
-                "[--no-triangle-tagging] [--cell-error-policy <continue|stop>] "
-                "[--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
-                "[--cache-budget-mib <MiB>] [--working-memory-mib <MiB>] [--workers <count>] [--estimate-only] "
-                "--output "
-                "<dir>\nVortex input: --vortex <Skyrim-installation> [--vortex-plugins "
-                "<game-application-data-folder>] "
-                "<operation> --output <dir>\nDeveloper/test override: "
-                "--data <Data> --load-order <plugins.txt>.\n",
-                1);
+            return fail("Usage: NavmeshGenerator --mo2 <instance-or-portable-root> --profile <existing-profile> "
+                        "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --cells <identifiers> | "
+                        "--rebuild-plugin <active "
+                        "filename> | --rebuild-load-order] [--generate-plugin] [--no-auto-split] [--copy-plugin] "
+                        "[--skip-existing-navmesh] "
+                        "[--no-triangle-tagging] [--cell-error-policy <continue|stop>] "
+                        "[--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
+                        "[--cache-budget-mib <MiB>] [--working-memory-mib <MiB>] [--workers <count>] [--estimate-only] "
+                        "--output "
+                        "<dir>\nVortex input: --vortex <Skyrim-installation> [--vortex-plugins "
+                        "<game-application-data-folder>] "
+                        "<operation> --output <dir>\nDeveloper/test override: "
+                        "--data <Data> --load-order <plugins.txt>.\n",
+                        1);
         }
         if ((!options.vortex.empty() &&
              (!options.mo2.empty() || !options.plugin.empty() || !options.loadOrder.empty() || !options.data.empty() ||
@@ -1358,6 +1358,7 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                 }
             }
             std::filesystem::path pluginPath;
+            std::vector<std::filesystem::path> pluginPaths;
             std::string error;
             update(89, "Writing NAVM override plugin");
             if (bosInputs && !navmesh::skyrim::BaseObjectSwapSnapshotMatches(*bosInputs))
@@ -1365,7 +1366,7 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                 return fail("BOS configurations changed during generation; rerun with coherent inputs.\n", 2);
             }
             if (!navmesh::skyrim::WriteNavmeshOverride(options.output, inputPaths, *resolved, *cell, *candidate,
-                                                       pluginPath, error))
+                                                       pluginPath, error, options.autoSplitPlugins, &pluginPaths))
             {
                 return fail(std::format(
                     "Plugin generation failed: {}. Review candidate-navm.json and scene.glb in '{}' before retrying. "
@@ -1379,6 +1380,10 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
             const bool eslFlagged = writtenPlugin && (pluginHeader[9] & 0x02U) != 0;
             std::cout << "Generated NAVM override plugin: " << navmesh::core::PathToUtf8(pluginPath)
                       << (eslFlagged ? " (ESL-flagged ESP)\n" : " (regular ESP)\n");
+            for (std::size_t index = 1; index < pluginPaths.size(); ++index)
+            {
+                std::cout << "Generated NAVM override plugin: " << PathUtf8(pluginPaths[index]) << '\n';
+            }
             std::cout << "Verified NAVM, NAVI, cover, reciprocal portals and door XNDP associations against the input "
                          "load order.\n";
         }

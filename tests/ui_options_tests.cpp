@@ -32,6 +32,8 @@ void TestDesktopOptionsAndRecastSettings()
     draft.estimateOnly = true;
     draft.skipExistingNavmesh = true;
     draft.tagTriangles = false;
+    assert(draft.autoSplitPlugins);
+    draft.autoSplitPlugins = false;
     draft.makeScene = true;
     draft.navigationProfile.agentRadius = 7;
     draft.recastSettings.cellSize = 8;
@@ -39,6 +41,7 @@ void TestDesktopOptionsAndRecastSettings()
     const auto plugin = ui::PrepareDesktopOptions(draft, false);
     assert(plugin.copyPlugin && plugin.generatePlugin && plugin.generateCandidate && !plugin.estimateOnly);
     assert(!plugin.tagTriangles);
+    assert(!plugin.autoSplitPlugins);
     assert(plugin.makeScene);
     assert(!plugin.cellFormId && plugin.editorId.empty() && !plugin.cellX && !plugin.cellY);
     assert(plugin.plugin.empty() && !plugin.terrainOnly && !plugin.diagnostics);
@@ -66,6 +69,7 @@ void TestDesktopOptionsAndRecastSettings()
     assert(selected.cellSelection == draft.cellSelection && selected.copySourcePlugin == "Fixture.esp" &&
            selected.affectedPlugin.empty());
     assert(selected.copyPlugin && selected.generatePlugin && selected.generateCandidate);
+    assert(!selected.autoSplitPlugins);
     assert(selected.modsDirectory.empty());
     assert(!selected.cellFormId && selected.editorId.empty() && !selected.estimateOnly && selected.makeScene);
     assert((app::ParseCellSelection(selected.cellSelection) ==

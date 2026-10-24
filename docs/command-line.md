@@ -85,8 +85,10 @@ evidence that cannot be read follows the shared [cell failure policy](batch-rebu
 The load order is resolved once, navigation-equivalent overrides are excluded,
 and bounded caches reuse terrain, models, placements, and generated candidates.
 `batch-report.json` checkpoints selection, timings, skips, and cache statistics.
-Add `--generate-plugin` to write one verified `generated-navmesh.esp`; its automatic
-batch output retains reports and the plugin. Choose `--batch-output compact` for
+Add `--generate-plugin` to write a verified patch set; `plugin-manifest.json` lists
+every required output. Oversized existing-identity patches split automatically;
+`--no-auto-split` disables splitting. See the [export contract](batch-rebuilding.md#outputs-and-failure-policy).
+Automatic batch output retains reports and the plugins. Choose `--batch-output compact` for
 gzip candidate JSON or `--batch-output full` for candidate JSON/OBJ beneath
 `cells/<FormID>/` and the complete winning-record report. Omit plugin writing for
 candidate inspection. `--estimate-only` samples the selected scope before a full

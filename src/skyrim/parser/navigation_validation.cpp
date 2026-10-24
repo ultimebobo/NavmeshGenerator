@@ -283,18 +283,20 @@ namespace
 
 } // namespace
 
-bool navmesh::skyrim::detail::ValidateNavigationGraph(const std::vector<ResolvedRecord> &records,
-                                                      const std::vector<std::string> &masters,
-                                                      const std::string &outputName, const ResolvedLoadOrder &input,
-                                                      const std::set<std::uint32_t> &modifiedMeshes,
-                                                      const std::set<std::uint32_t> &modifiedReferences,
-                                                      std::string &error,
-                                                      const std::map<std::uint32_t, float> &generatedStepHeights)
+bool navmesh::skyrim::detail::ValidateNavigationGraph(
+    const std::vector<ResolvedRecord> &records, const std::vector<std::string> &masters, const std::string &outputName,
+    const ResolvedLoadOrder &input, const std::set<std::uint32_t> &modifiedMeshes,
+    const std::set<std::uint32_t> &modifiedReferences, std::string &error,
+    const std::map<std::uint32_t, float> &generatedStepHeights, bool resolvedIdentities)
 {
     auto names = masters;
     names.push_back(outputName);
     const auto outputId = [&](std::uint32_t global) -> std::optional<std::uint32_t>
     {
+        if (resolvedIdentities)
+        {
+            return global;
+        }
         const auto *record = input.FindWinning(global);
         if (!record || record->origins.empty())
         {

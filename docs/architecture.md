@@ -281,7 +281,7 @@ fixture comparisons. Application runs use the Recast implementation.
 ## 6. NAVM override serialization
 
 The plugin writer is separate from candidate generation. It reuses the winning
-NAVM source plugin's master order and group hierarchy, writes an override for
+NAVM source plugin's group hierarchy, writes an override for
 every existing NAVM in the selected cell, and verifies each with the direct
 reader. Generated geometry occupies the largest original NAVM; the others get
 empty geometry. Parent CELL and worldspace records remain in the load order.
@@ -308,6 +308,16 @@ and stale input snapshots reject export.
 `skyrim/parser/navmesh_info` derives NAVI from the final serialized NVNM bodies,
 including changed neighbors, and the writer verifies its payload on read-back.
 See the [navigation information map contract](navm-format-study.md#navigation-information-map).
+
+`skyrim/parser/patch_export` owns patch-set serialization. The writer supplies
+finalized NAVM/REFR groups in resolved identity space, with reserved identities
+for new meshes, independently of file-local master indices. The exporter discovers
+embedded dependencies through the same field rewriter used for serialization,
+retains winning-source ordering dependencies, partitions representable existing-ID
+patches and derives each file's NAVI. Independent read-back reverses the per-file
+mapping and checks exact record payloads and group placement against the complete
+validated navigation graph. Publication stages the entire set and commits its
+installation manifest last. Source copies use the byte-preserving copy writer.
 
 Cell and Plugin scopes can instead copy the selected source with generated
 navigation. `skyrim/parser/plugin_copy` validates the complete raw record/group

@@ -18,6 +18,8 @@ namespace navmesh::skyrim::detail
      * in Skyrim world units including weld tolerance. Other meshes retain authored endpoint tolerance.
      * Generated and edited live faces require positive horizontal winding; connection-only overrides can retain
      * zero-area authored faces only at identical triangle/vertex indices and exactly unchanged coordinates.
+     * @param resolvedIdentities Records already use resolved input identities, with reserved FF identities for
+     * new meshes. Used to validate a complete patch set before per-file master encoding.
      * @return True when geometry, grid, cover, portal destinations and both directions of door associations agree.
      * Coordinates use Skyrim world units. Unrelated original records are inspected only when referenced.
      */
@@ -26,5 +28,6 @@ namespace navmesh::skyrim::detail
                                                const ResolvedLoadOrder &input,
                                                const std::set<std::uint32_t> &modifiedMeshes,
                                                const std::set<std::uint32_t> &modifiedReferences, std::string &error,
-                                               const std::map<std::uint32_t, float> &generatedStepHeights = {});
+                                               const std::map<std::uint32_t, float> &generatedStepHeights = {},
+                                               bool resolvedIdentities = false);
 } // namespace navmesh::skyrim::detail

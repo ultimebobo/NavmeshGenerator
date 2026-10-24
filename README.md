@@ -68,6 +68,7 @@ See [BOS support](docs/base-object-swapper.md).
   **Copy selected plugin**.
 - **Create a patch:** enable **Write plugin** to export `generated-navmesh.esp`.
   A numeric suffix is added when that filename is already active in the load order.
+  Oversized patches can split automatically; `plugin-manifest.json` lists every required output.
 - **Update your own mod:** select Plugin scope and enable **Copy selected plugin**
   to export a copy with regenerated navigation and the plugin's other records.
 - **Rebuild chosen cells in your mod:** select **Cell**, fill **Cells**, and enable
@@ -105,8 +106,8 @@ handling, and failure policies.
 
 ### Install and test
 
-Install a generated patch through your selected mod manager and load it after the plugins it depends
-on. A **Copy selected plugin** export replaces the selected plugin; use it with
+Install every patch listed in `plugin-manifest.json` through your selected mod manager,
+in the listed order after the input plugins. A **Copy selected plugin** export replaces the selected plugin; use it with
 the original mod's assets and language files.
 
 Input plugins, game files and mod-manager configuration are left untouched. Existing output plugins

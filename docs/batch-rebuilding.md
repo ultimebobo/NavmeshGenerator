@@ -282,8 +282,23 @@ original and adjusted coordinates. Conflicting plans or unsupported authored
 grid tails stop export, and edited neighbor spatial grids are rebuilt. Existing incoming links to replaced triangles are cleared
 and matched borders receive fresh return links. Every emitted NAVM is read back
 before the temporary plugin is finalized. Existing output plugins are refused.
-The patch is light-flagged only when its dependencies and allocated identities fit
-that format. Copy mode retains the selected source format and dependency limits.
+Patch export collects dependencies from finalized record identities, embedded
+references and group placement, retaining winning source plugins for load order.
+Unused entries from source master tables do not become patch dependencies.
+**Automatically split oversized patches** is enabled by default and persisted in
+the desktop; `--no-auto-split` disables it. Oversized patches that reuse existing
+NAVM identities are partitioned after global navigation finalization. Every NAVM
+and door override is emitted once, with its own file's master encoding and NAVI.
+`plugin-manifest.json` lists all required plugins in installation order; enable
+the complete set after the input plugins. `batch-report.json` also lists
+`written_plugins`. Each file is light-flagged only when its dependencies and new
+identities fit. Every file must pass independent reverse read-back against the
+complete validated graph before publication; the manifest is published last as
+the completion marker. Publication failures roll back files created by the run.
+A single record whose required dependencies exceed the format limit cannot be
+split. Exports that need both splitting and newly allocated NAVM identities are
+rejected with a selection-reduction diagnostic. Copy mode retains its source
+format, master table and single-file contract.
 
 Navigation finalization includes cover, NAVI and reciprocal door XNDP. Unsupported
 reference fields, connector constraints or traversal portals reject export; see

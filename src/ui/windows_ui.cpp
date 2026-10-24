@@ -170,6 +170,7 @@ namespace
                           std::pair{"skip_existing_navmesh", &options.skipExistingNavmesh},
                           std::pair{"triangle_tagging", &options.tagTriangles},
                           std::pair{"copy_plugin", &options.copyPlugin},
+                          std::pair{"auto_split_plugins", &options.autoSplitPlugins},
                           std::pair{"estimate_only", &options.estimateOnly}};
     }
 
@@ -807,6 +808,12 @@ namespace
                 PluginField(workspace, window, "copy_plugin_source", "Plugin to copy");
             }
         }
+        ImGui::BeginDisabled(!writing || (copyAllowed && options.copyPlugin));
+        ImGui::Checkbox("Automatically split oversized patches", &options.autoSplitPlugins);
+        ImGui::EndDisabled();
+        Help("Reduce unused masters, then split patches that reuse existing NAVM records when needed. "
+             "Enable every file listed in plugin-manifest.json after the input plugins. "
+             "Splitting with newly created NAVM records is unsupported. Source copies remain one file.");
         if (!cellScope || options.generateCandidate || options.generatePlugin || options.copyPlugin)
         {
             ImGui::Checkbox("Skip cells with existing navmesh", &options.skipExistingNavmesh);

@@ -16,6 +16,13 @@ def sub(kind, data):
     return kind.encode() + struct.pack("<H", len(data)) + data
 
 
+def stabilize_directory_times(*roots):
+    """Give unchanged cache fixtures explicit membership timestamps, independent of deferred directory updates."""
+    for root in roots:
+        for path in [root, *(entry for entry in root.rglob("*") if entry.is_dir())]:
+            os.utime(path, ns=(0, 0))
+
+
 def record(kind, form, data, flags=0):
     return kind.encode() + struct.pack("<IIIII", len(data), flags, form, 0, 44) + data
 
@@ -211,6 +218,10 @@ class BatchRebuild(unittest.TestCase):
         (game / "Patch.esp").write_bytes(broken_plugin)
         (lower / "Patch.esp").write_bytes(broken_plugin)
         (disabled / "Patch.esp").write_bytes(broken_plugin)
+        (higher / "backups").mkdir()
+        (higher / "backups" / "Patch.esp").write_bytes(broken_plugin)
+        (higher / "Inactive.esp").write_bytes(broken_plugin)
+        (higher / "Patch.esp.bak").write_bytes(broken_plugin)
         winner = higher / "pAtCh.EsP"
         winner.write_bytes(valid_plugin)
         for provider in (game, lower, higher, disabled):
@@ -219,6 +230,7 @@ class BatchRebuild(unittest.TestCase):
             (provider / "Shared.bsa").write_bytes(b"archive path fixture")
         (lower / "Lower.bsa").write_bytes(b"archive path fixture")
         (higher / "Higher.bsa").write_bytes(b"archive path fixture")
+        stabilize_directory_times(game, lower, higher, overwrite)
         for cached in (False, True):
             with self.subTest(cached=cached):
                 output = self.root / f"priority-{cached}"
@@ -271,6 +283,7 @@ class BatchRebuild(unittest.TestCase):
         (profile / "modlist.txt").write_text(f"+{mod.name}\n", encoding="utf-8")
         (profile / "plugins.txt").write_text("*Baseline.esm\n*Patch.esp\n", encoding="utf-8")
         (profile / "loadorder.txt").write_text("Baseline.esm\nPatch.esp\n", encoding="utf-8")
+        stabilize_directory_times(game, mod)
         for encoding in ("utf-8", "utf-8-sig", "utf-16"):
             with self.subTest(encoding=encoding):
                 ini = instance / "ModOrganizer.ini"
@@ -605,6 +618,149 @@ class BatchRebuild(unittest.TestCase):
         self.assertIn("generated-navmesh.esp", masters)
         self.assertNotIn(emitted_path.name, masters)
         self.assert_plugin_portals(emitted_path)
+
+    def test_patch_master_limit_depends_on_required_sources(self):
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
+        light_plugins = [f"Resource{index}.esl" for index in range(253)]
+        for name in light_plugins:
+            (self.root / name).write_bytes(record("TES4", 0, header, 0x200))
+        (self.root / "plugins.txt").write_text("\n".join(["Baseline.esm", *light_plugins, "Patch.esp"]) + "\n")
+
+        # A large active list can still produce a patch with only its navigation sources as masters.
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", output="unrelated-masters")
+        emitted = read_records(output / "generated-navmesh.esp")
+        payload = next(data for kind, _, _, data in emitted if kind == "TES4")
+        masters = [data.rstrip(b"\0").decode() for kind, data in read_subrecords(payload) if kind == b"MAST"]
+        self.assertEqual(masters, ["Baseline.esm"])
+
+        # Keep the winning source's ordering dependency, without its unrelated inherited masters.
+        dependencies = b"".join(sub("MAST", name.encode() + b"\0") + sub("DATA", bytes(8))
+                                for name in ["Baseline.esm", *light_plugins])
+        changes = group(0x400, 1, group(0x100, 6, group(0x100, 9,
+                        record("LAND", 0x300, land(0.001)) + record("NAVM", 0x200, navm(0)))))
+        (self.root / "Patch.esp").write_bytes(record("TES4", 0, header + dependencies)
+                                             + group(int.from_bytes(b"WRLD", "little"), 0, changes))
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin",
+                              output="required-masters")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["status"], "complete")
+        emitted = read_records(output / "generated-navmesh.esp")
+        payload = next(data for kind, _, _, data in emitted if kind == "TES4")
+        masters = [data.rstrip(b"\0").decode() for kind, data in read_subrecords(payload) if kind == b"MAST"]
+        self.assertEqual(masters, ["Baseline.esm", "Patch.esp"])
+        self.assertEqual(report["written_plugins"], ["generated-navmesh.esp"])
+
+    def oversized_navigation_fixture(self, uncovered=False):
+        count = 255
+        self.write_baseline(navmeshes={}, cell_count=count + int(uncovered))
+        with (self.root / "Baseline.esm").open("ab") as plugin:
+            plugin.write(group(int.from_bytes(b"NAVI", "little"), 0,
+                               record("NAVI", 0x12FB4, sub("NVER", struct.pack("<I", 12)))))
+        header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x801))
+        dependencies = sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
+        names = [f"Navigation{index}.esl" for index in range(count)]
+        for index, name in enumerate(names):
+            mesh = record("NAVM", 0x01000800, navm(index))
+            children = group(0x400, 1, group(0x100 + index, 6, group(0x100 + index, 9, mesh)))
+            (self.root / name).write_bytes(record("TES4", 0, header + dependencies, 0x200)
+                                           + group(int.from_bytes(b"WRLD", "little"), 0, children))
+        changes = group(0x400, 1, b"".join(group(0x100 + x, 6, group(0x100 + x, 9,
+                        record("LAND", 0x300 + x, land(0.001)))) for x in range(count + int(uncovered))))
+        (self.root / "Patch.esp").write_bytes(record("TES4", 0, header + dependencies)
+                                             + group(int.from_bytes(b"WRLD", "little"), 0, changes))
+        (self.root / "plugins.txt").write_text("\n".join(["Baseline.esm", *names, "Patch.esp"]) + "\n")
+
+    def assert_patch_set_portals(self, paths):
+        identities = {}
+
+        def identity(raw, masters, path):
+            owner = masters[raw >> 24] if raw >> 24 < len(masters) else path.name
+            return identities.setdefault((owner.lower(), raw & 0xFFFFFF), len(identities) + 1)
+
+        normalized = b""
+        seen = set()
+        for path in paths:
+            records = read_records(path)
+            header = next(data for kind, _, _, data in records if kind == "TES4")
+            masters = [data.rstrip(b"\0").decode() for kind, data in read_subrecords(header) if kind == b"MAST"]
+            self.assertLessEqual(len(masters), 254)
+            self.assertFalse(set(masters) & {item.name for item in paths})
+            mesh_ids = set()
+            info_ids = set()
+            for kind, form, flags, payload in records:
+                if kind == "NAVI":
+                    for field, data in read_subrecords(payload):
+                        if field == b"NVMI":
+                            info_ids.add(struct.unpack_from("<I", data)[0])
+                        elif field == b"NVPP":
+                            self.assertEqual(data, bytes(8))
+                if kind != "NAVM":
+                    continue
+                mesh_ids.add(form)
+                canonical = identity(form, masters, path)
+                self.assertNotIn(canonical, seen)
+                seen.add(canonical)
+                body = bytearray(payload[6:])
+                world = struct.unpack_from("<I", body, 8)[0]
+                struct.pack_into("<I", body, 8, identity(world, masters, path))
+                vertices = struct.unpack_from("<I", body, 16)[0]
+                triangle_at = 20 + vertices * 12
+                triangles = struct.unpack_from("<I", body, triangle_at)[0]
+                external_at = triangle_at + 4 + triangles * 16
+                links = struct.unpack_from("<I", body, external_at)[0]
+                for index in range(links):
+                    offset = external_at + 4 + index * 10 + 4
+                    target = struct.unpack_from("<I", body, offset)[0]
+                    struct.pack_into("<I", body, offset, identity(target, masters, path))
+                normalized += record("NAVM", canonical, sub("NVNM", bytes(body)), flags)
+            self.assertEqual(mesh_ids, info_ids)
+        combined = self.root / "normalized-verification.esp"
+        combined.write_bytes(normalized)
+        self.assert_plugin_portals(combined)
+        return seen
+
+    def test_automatic_split_preserves_light_owned_navmesh_graph(self):
+        self.oversized_navigation_fixture()
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--recast-cell-size", "64", output="split")
+        manifest = json.loads((output / "plugin-manifest.json").read_text())
+        self.assertTrue(manifest["complete"])
+        self.assertEqual(len(manifest["plugins"]), 2)
+        paths = [output / name for name in manifest["plugins"]]
+        self.assertEqual(len(self.assert_patch_set_portals(paths)), 255)
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["written_plugins"], manifest["plugins"])
+        self.assertTrue(report["auto_split_plugins"])
+        # The complete set can become the input to subsequent CLI operations.
+        with (self.root / "plugins.txt").open("a") as plugins:
+            for path in paths:
+                plugins.write(str(path) + "\n")
+        self.run_cli("--list-cells", output="split-read")
+
+    def test_oversized_patch_can_disable_splitting_and_refuses_output_collisions(self):
+        self.oversized_navigation_fixture()
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--no-auto-split",
+                              "--recast-cell-size", "64", code=2, output="split-disabled")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertIn("enable automatic splitting", report["error"])
+        self.assertFalse(report["auto_split_plugins"])
+        self.assertFalse((output / "plugin-manifest.json").exists())
+        self.assertEqual(list(output.glob("*.esp")), [])
+        collision = self.root / "collision"
+        collision.mkdir()
+        sentinel = collision / "generated-navmesh-part-2.esp"
+        sentinel.write_bytes(b"existing output")
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--recast-cell-size", "64", code=2, output="collision")
+        self.assertEqual(sentinel.read_bytes(), b"existing output")
+        self.assertEqual(list(output.glob("*.esp")), [sentinel])
+        self.assertFalse((output / "plugin-manifest.json").exists())
+
+    def test_split_with_new_navmesh_identity_fails_without_publication(self):
+        self.oversized_navigation_fixture(uncovered=True)
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--recast-cell-size", "64", code=2, output="new-split")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertIn("newly allocated NAVM identities", report["error"])
+        self.assertEqual(list(output.glob("*.esp")), [])
+        self.assertFalse((output / "plugin-manifest.json").exists())
 
     def test_persistent_worldspace_container_is_not_a_navmesh_destination(self):
         header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800))
@@ -1386,6 +1542,22 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(json.loads((output / "batch-report.json").read_text())["selected_cells"], 0)
         self.assertFalse((output / "generated-navmesh.esp").exists())
 
+    def test_unplaced_missing_models_do_not_block_rebuilding(self):
+        with (self.root / "Patch.esp").open("ab") as plugin:
+            plugin.write(group(int.from_bytes(b"STAT", "little"), 0,
+                               record("STAT", 0x01000800, sub("MODL", b"UnplacedMissing.nif\0"))))
+        for scope in ("--rebuild-plugin", "--rebuild-load-order"):
+            with self.subTest(scope=scope):
+                selection = (scope, "Patch.esp") if scope == "--rebuild-plugin" else (scope,)
+                output = self.run_cli(*selection, "--generate-plugin", "--cell-error-policy", "stop",
+                                      terrain_only=False, output=scope.lstrip("-"))
+                report = json.loads((output / "batch-report.json").read_text())
+                self.assertEqual(report["status"], "complete")
+                self.assertEqual(report["selected_cells"], 2)
+                self.assertEqual(report["selection_missing_models"], [])
+                self.assertEqual(report["asset_failures"], [])
+                self.assertTrue((output / "generated-navmesh.esp").exists())
+
     def test_missing_selection_geometry_excludes_ownership_scope(self):
         header = sub("HEDR", struct.pack("<fII", 1.7, 0, 0x800)) + sub("MAST", b"Baseline.esm\0") + sub("DATA", bytes(8))
         base = record("STAT", 0x01000800, sub("MODL", b"MissingSolid.nif\0"))
@@ -1546,7 +1718,11 @@ class BatchRebuild(unittest.TestCase):
                 emitted = [form for kind, form, _, _ in read_records(output / "generated-navmesh.esp")
                            if kind == "NAVM"]
                 self.assertEqual(len(set(emitted)), 3)
-                self.assertTrue(all(form >> 24 == 2 for form in emitted))
+                header = next(payload for kind, _, _, payload in read_records(output / "generated-navmesh.esp")
+                              if kind == "TES4")
+                masters = [data.rstrip(b"\0").decode() for kind, data in read_subrecords(header) if kind == b"MAST"]
+                self.assertEqual(masters, ["Patch.esp"])
+                self.assertTrue(all(form >> 24 == len(masters) for form in emitted))
 
     def test_water_only_change_generates_on_uncovered_terrain(self):
         self.write_baseline(navmeshes={}, water={0: sub("DATA", b"\x02\x00")},
