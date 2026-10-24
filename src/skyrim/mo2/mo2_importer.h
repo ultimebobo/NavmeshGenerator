@@ -19,6 +19,7 @@ namespace navmesh::skyrim
     {
         std::string name;
         std::filesystem::path path;
+        /// Relative rank among enabled mods, increasing from zero; higher ranks win file conflicts.
         std::size_t priority{};
     };
     struct Mo2ProfileInput
@@ -28,6 +29,7 @@ namespace navmesh::skyrim
         std::filesystem::path gameData;
         std::filesystem::path profileDirectory;
         std::filesystem::path modsDirectory;
+        /// Enabled mods in increasing virtual-file priority, independent of plugin load order.
         std::vector<EnabledMod> enabledMods;
         std::vector<std::filesystem::path> pluginPaths;
         std::vector<VirtualFile> looseAssetWinners;
@@ -45,6 +47,7 @@ namespace navmesh::skyrim
 
     /** Resolve an existing MO2 profile and its winning physical inputs without modifying configuration.
      * Configuration paths, enabled mod names and catalog paths are decoded from UTF-8 into native filesystem paths.
+     * Mod-list entries are read in MO2's descending priority order; only winning plugin copies supply masters.
      * @param instanceOrPortableRoot Directory containing ModOrganizer.ini.
      * @param profile Existing UTF-8 profile name beneath the configured profiles directory.
      * @param modsDirectoryOverride Optional developer override for physical mod storage.

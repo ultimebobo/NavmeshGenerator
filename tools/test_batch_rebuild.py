@@ -190,6 +190,70 @@ class BatchRebuild(unittest.TestCase):
                 self.assertEqual(ini.read_bytes(), original_ini)
                 self.assertTrue((output / "cells.json").exists())
 
+    def test_mo2_shadowed_plugin_missing_masters(self):
+        instance = self.root / "Instance"
+        profile = instance / "profiles" / "Default"
+        lower = instance / "mods" / "Lower"
+        higher = instance / "mods" / "Higher"
+        disabled = instance / "mods" / "Disabled"
+        overwrite = instance / "overwrite"
+        game = self.root / "Game" / "Data"
+        for directory in (profile, lower, higher, disabled, overwrite, game):
+            directory.mkdir(parents=True)
+        (game / "Baseline.esm").write_bytes((self.root / "Baseline.esm").read_bytes())
+        (instance / "ModOrganizer.ini").write_text(f"gamePath={game.parent.as_posix()}\n")
+        # MO2 writes the highest-priority mod first, independently of plugin load order.
+        (profile / "modlist.txt").write_text("+Higher\n-Disabled\n+Lower\n")
+        (profile / "plugins.txt").write_text("*Baseline.esm\n*Patch.esp\n")
+        (profile / "loadorder.txt").write_text("Baseline.esm\nPatch.esp\n")
+        valid_plugin = (self.root / "Patch.esp").read_bytes()
+        broken_plugin = record("TES4", 0, sub("MAST", b"Unavailable.esm\0"))
+        (game / "Patch.esp").write_bytes(broken_plugin)
+        (lower / "Patch.esp").write_bytes(broken_plugin)
+        (disabled / "Patch.esp").write_bytes(broken_plugin)
+        winner = higher / "pAtCh.EsP"
+        winner.write_bytes(valid_plugin)
+        for provider in (game, lower, higher, disabled):
+            (provider / "meshes").mkdir()
+            (provider / "meshes" / "shared.nif").write_bytes(b"model path fixture")
+            (provider / "Shared.bsa").write_bytes(b"archive path fixture")
+        (lower / "Lower.bsa").write_bytes(b"archive path fixture")
+        (higher / "Higher.bsa").write_bytes(b"archive path fixture")
+        for cached in (False, True):
+            with self.subTest(cached=cached):
+                output = self.root / f"priority-{cached}"
+                completed = subprocess.run(
+                    [str(EXE), "--mo2", str(instance), "--profile", "Default", "--list-cells",
+                     "--asset-cache", str(self.root / "cache"), "--output", str(output)],
+                    capture_output=True, text=True, timeout=90)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                report = json.loads((output / "input-report.json").read_text())
+                self.assertEqual(report["diagnostics"], [])
+                self.assertEqual(report["loose_asset_cache_used"], cached)
+                self.assertEqual([Path(path) for path in report["active_plugins"]],
+                                 [game / "Baseline.esm", winner])
+                self.assertEqual([mod["name"] for mod in report["enabled_mods"]], ["Lower", "Higher"])
+                self.assertEqual([mod["priority"] for mod in report["enabled_mods"]], [0, 1])
+                self.assertEqual([Path(path) for path in report["archives"]],
+                                 [lower / "Lower.bsa", higher / "Higher.bsa", higher / "Shared.bsa"])
+                shared = next(file for file in report["loose_asset_winners"]
+                              if file["logical_path"] == "meshes/shared.nif")
+                self.assertEqual(Path(shared["physical_path"]), higher / "meshes" / "shared.nif")
+                self.assertEqual(shared["source"], "Higher")
+                self.assertTrue((output / "cells.json").exists())
+
+        # A missing master in the actual winning copy must still stop resolution.
+        (overwrite / "Patch.esp").write_bytes(broken_plugin)
+        output = self.root / "missing-winning-master"
+        completed = subprocess.run(
+            [str(EXE), "--mo2", str(instance), "--profile", "Default", "--list-cells",
+             "--asset-cache", str(self.root / "cache"), "--output", str(output)],
+            capture_output=True, text=True, timeout=90)
+        self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
+        self.assertIn("Unavailable.esm", completed.stderr)
+        report = json.loads((output / "input-report.json").read_text())
+        self.assertEqual(Path(report["active_plugins"][-1]), overwrite / "Patch.esp")
+
     def test_mo2_unicode_paths_and_cached_winners(self):
         instance = self.root / "Instance"
         game = self.root / "Game" / "Data"

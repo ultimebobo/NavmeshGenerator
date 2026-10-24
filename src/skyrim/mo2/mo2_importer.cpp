@@ -484,7 +484,6 @@ namespace navmesh::skyrim
         }
         std::ifstream modInput(modlist);
         std::string line;
-        std::size_t priority{};
         while (std::getline(modInput, line))
         {
             line = Trim(line);
@@ -494,7 +493,7 @@ namespace navmesh::skyrim
             }
             const auto name = Trim(line.substr(1));
             const auto path = mods / PathFromUtf8(name);
-            result.enabledMods.push_back({name, path, priority++});
+            result.enabledMods.push_back({name, path});
             if (!std::filesystem::is_directory(path))
             {
                 result.diagnostics.push_back({DiagnosticKind::InvalidPlugin, name,
@@ -502,6 +501,13 @@ namespace navmesh::skyrim
                                               "MO2, or correct its configured mod storage path: " +
                                                   PathUtf8(path)});
             }
+        }
+        // MO2 serializes highest priority first. All virtual-file scans consume
+        // roots in increasing priority so that later providers replace earlier ones.
+        std::reverse(result.enabledMods.begin(), result.enabledMods.end());
+        for (std::size_t index = 0; index < result.enabledMods.size(); ++index)
+        {
+            result.enabledMods[index].priority = index;
         }
         std::set<std::string> active;
         std::ifstream activeInput(plugins);
@@ -538,7 +544,7 @@ namespace navmesh::skyrim
         // Profile identity alone cannot detect loose files added to an enabled mod. Directory stamps
         // cover catalog membership changes; NIF content revisions are checked by geometry cache keys.
         core::ContentHash catalogHash;
-        catalogHash.Add("navmesh-mo2-catalog-2:" + result.snapshotHash);
+        catalogHash.Add("navmesh-mo2-catalog-3:" + result.snapshotHash);
         std::vector<std::filesystem::path> roots{result.gameData};
         for (const auto &mod : result.enabledMods)
         {

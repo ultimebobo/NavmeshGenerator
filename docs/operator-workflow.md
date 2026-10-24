@@ -5,6 +5,12 @@ and detailed export descriptions are in the [command-line reference](command-lin
 
 This document defines the user-facing command contract. Select an existing Mod Organizer 2 (MO2) instance and profile, or the currently active Vortex deployment. MO2 inputs are resolved from its virtual file priorities. For Vortex, activate the intended profile and deploy in Vortex before running; the tool reads the deployed game Data and active game plugin list. Neither route requires hand-authored manifests or changes to manager configuration.
 
+MO2 saves `modlist.txt` in descending mod priority. The importer resolves file
+conflicts in increasing priority, with game Data below enabled mods and Overwrite
+above them. Only the winning physical copy of each active plugin supplies its
+master requirements; shadowed copies do not add dependencies. Plugin load order
+remains governed by the profile's plugin lists.
+
 Analysis commands read the input profile without changing it. The guarded plugin-generation option writes a new plugin only beneath the `--output` directory supplied by the user.
 
 For mod authors, select **Plugin** scope, enter the active filename in **Affected
