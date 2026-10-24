@@ -127,8 +127,12 @@ heartbeats. **Still running** means the process can report activity, not that th
 operation has advanced or that it cannot be stuck. Heartbeats retain progress and
 show operation duration, time since activity and, after a collected CELL result,
 time since completion. Worker counts describe the last published snapshot. Log
-failures warn without changing the processing result; include `batch-report.json`
-and the named input reports alongside the log when reporting failures.
+failures warn without changing the processing result. Failed runs save a bounded
+`bug-report.txt` suitable for pasting into a text-only bug report, with build
+identity, selection, settings and the failure reason. NAVM connection failures
+identify the winning plugin, CELL and NAVM, the failed table/index or identity
+mapping, and bounded byte evidence where applicable. Copy this text when reporting
+a failure; retain the full JSON reports and log for follow-up investigation.
 
 Candidate warnings do not fail a run. **Cell error policy** in Advanced settings
 controls recoverable generation and required-geometry failures and is saved for

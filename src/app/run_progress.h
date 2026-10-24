@@ -13,6 +13,7 @@
 
 namespace navmesh::app
 {
+    struct Options;
     /// Serialized status sink; calls can come from the processing or heartbeat thread. Do not throw or reenter Run.
     using ProgressCallback = std::function<void(int percent, std::string_view status)>;
 
@@ -48,6 +49,15 @@ namespace navmesh::app
 
     namespace detail
     {
+        /** Format a pasteable failure report for text-only support sites.
+         * @param options Shared CLI/desktop run inputs; selected filenames and selectors are bounded.
+         * @param failure Terminal failure with record and connection evidence when available.
+         * @param code Process failure status, excluding successful and cancelled runs.
+         * @return ASCII text bounded below the support site's character limit, with explicit truncation markers.
+         * Includes build identity, selection and generation settings. Does not read inputs or perform I/O.
+         */
+        [[nodiscard]] std::string FormatBugReport(const Options &options, std::string_view failure, int code);
+
         /** Own one run's serialized activity stream and append-only UTF-8 run.log.
          * Logging failures warn consumers without changing generation or export success.
          * Heartbeat callbacks run on a private thread and stop before Finish returns or destruction completes.

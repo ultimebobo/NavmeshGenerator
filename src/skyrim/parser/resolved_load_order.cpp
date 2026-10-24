@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cmath>
 #include <fstream>
+#include <format>
 #include <iomanip>
 #include <iterator>
 #include <sstream>
@@ -383,10 +384,30 @@ namespace
 
 namespace navmesh::skyrim
 {
-    bool DecodeNavmeshConnections(std::span<const std::uint8_t> trailing, core::NavMesh &mesh)
+    bool DecodeNavmeshConnections(std::span<const std::uint8_t> trailing, core::NavMesh &mesh, std::string *error)
     {
         mesh.externalLinks.clear();
         mesh.doorLinks.clear();
+        if (error)
+        {
+            error->clear();
+        }
+        // Bound byte evidence around the failing field; offsets are relative to NVNM's connection section.
+        const auto fail = [&](std::string reason, std::size_t offset)
+        {
+            if (error)
+            {
+                const auto begin = offset > 8 ? offset - 8 : 0;
+                const auto end = std::min(trailing.size(), offset + 24);
+                *error = std::format("{}; connection_bytes={} offset={} hex[{}:{}]=", reason, trailing.size(), offset,
+                                     begin, end);
+                for (auto index = begin; index < end; ++index)
+                {
+                    *error += std::format("{:02X}", trailing[index]);
+                }
+            }
+            return false;
+        };
         const auto read16 = [&](std::size_t offset)
         {
             std::uint16_t value{};
@@ -401,22 +422,26 @@ namespace navmesh::skyrim
         };
         if (trailing.size() < 4)
         {
-            return false;
+            return fail("external_count_truncated: need 4 bytes", 0);
         }
         const auto externalCount = read32(0);
         if (externalCount > (trailing.size() - 4) / 10)
         {
-            return false;
+            return fail(std::format("external_table_truncated: count={} entry_bytes=10 available={}", externalCount,
+                                    trailing.size() - 4),
+                        0);
         }
         const auto doorOffset = 4 + static_cast<std::size_t>(externalCount) * 10;
         if (trailing.size() - doorOffset < 4)
         {
-            return false;
+            return fail(std::format("door_count_truncated: external_count={} need 4 bytes", externalCount), doorOffset);
         }
         const auto doorCount = read32(doorOffset);
         if (doorCount > (trailing.size() - doorOffset - 4) / 10)
         {
-            return false;
+            return fail(std::format("door_table_truncated: external_count={} door_count={} entry_bytes=10 available={}",
+                                    externalCount, doorCount, trailing.size() - doorOffset - 4),
+                        doorOffset);
         }
         // Only flagged edges consume the external table. Ordinary neighbor values
         // are local triangle indices, even when they happen to fit that table.
@@ -432,7 +457,12 @@ namespace navmesh::skyrim
                 }
                 if (polygon.neighbors[edge] >= externalCount)
                 {
-                    return false;
+                    return fail(std::format("external_index_invalid: triangle={} edge={} flags={:04X} "
+                                            "neighbors=[{},{},{}] index={} external_count={} door_count={}",
+                                            polygonIndex, edge, polygon.flags, polygon.neighbors[0],
+                                            polygon.neighbors[1], polygon.neighbors[2], polygon.neighbors[edge],
+                                            externalCount, doorCount),
+                                0);
                 }
                 const auto offset = 4 + static_cast<std::size_t>(polygon.neighbors[edge]) * 10;
                 externalLinks.push_back({static_cast<std::uint32_t>(polygonIndex), edge, read32(offset + 4),
@@ -446,7 +476,11 @@ namespace navmesh::skyrim
             const auto polygon = read16(offset);
             if (polygon >= mesh.polygons.size())
             {
-                return false;
+                return fail(std::format("door_triangle_invalid: entry={} triangle={} triangle_count={} raw_door={:08X} "
+                                        "external_count={} door_count={}",
+                                        index, polygon, mesh.polygons.size(), read32(offset + 6), externalCount,
+                                        doorCount),
+                            offset);
             }
             doorLinks.push_back({polygon, read32(offset + 6)});
         }

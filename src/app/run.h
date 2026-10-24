@@ -20,6 +20,7 @@ namespace navmesh::app
     /// Failures publish their cause and recovery guidance through progress as well as stderr.
     /// Processing exceptions are reported with their stage; cancellation remains a separate status.
     /// Appends flushed activity to output/run.log; log failures warn without changing the processing result.
+    /// Failed runs also save bounded, pasteable diagnostics and settings to output/bug-report.txt when writable.
     /// Status and optional structured events include idle heartbeats, serialized across processing and timer threads.
     /// Callbacks must not throw or reenter Run; no callbacks remain active after return.
     /// @return Process-style status code; nonzero indicates failure or cancellation.

@@ -451,6 +451,69 @@ class BatchRebuild(unittest.TestCase):
             manifest.write(str(output / "generated-navmesh.esp") + "\n")
         self.run_cli("--list-cells", output="read-back")
 
+    def test_navmesh_connection_failures_have_pasteable_diagnostics(self):
+        body = bytearray(navm(0)[6:])
+        triangles_at = 20 + 4 * 12
+        connections_at = triangles_at + 4 + 2 * 16
+        external_truncated = body[:connections_at] + struct.pack("<I", 1000)
+        door_count_truncated = body[:connections_at] + struct.pack("<I", 0)
+        door_table_truncated = body[:connections_at] + struct.pack("<II", 0, 1)
+        bad_door = bytearray(navm_with_door(0, 0x300)[6:])
+        struct.pack_into("<H", bad_door, connections_at + 8, 2)
+        null_external = bytearray(body)
+        struct.pack_into("<H", null_external, triangles_at + 4 + 6, 0)
+        struct.pack_into("<H", null_external, triangles_at + 4 + 12, 1)
+        null_external[connections_at:connections_at + 4] = struct.pack("<IIIH", 1, 0, 0, 0)
+        cases = {
+            "external_count_truncated": sub("NVNM", body[:connections_at + 2]),
+            "external_table_truncated": sub("NVNM", external_truncated),
+            "door_count_truncated": sub("NVNM", door_count_truncated),
+            "door_table_truncated": sub("NVNM", door_table_truncated),
+            "external_index_invalid": navm(0, flags=(1, 0)),
+            "door_triangle_invalid": sub("NVNM", bad_door),
+            "external_connection_lost": sub("NVNM", null_external),
+            "door_connection_lost": navm_with_door(0, 0),
+        }
+        for reason, payload in cases.items():
+            with self.subTest(reason=reason):
+                self.write_baseline(navmeshes={0: payload, 1: navm(1), 2: navm(2)})
+                output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin",
+                                      "--cell-error-policy", "continue", output=reason, code=2)
+                report = json.loads((output / "batch-report.json").read_text())
+                pasteable = (output / "bug-report.txt").read_text(encoding="ascii")
+                self.assertLessEqual(len(pasteable), 4500)
+                for text in (report["error"], pasteable):
+                    for detail in (reason, "CELL 00000100", "NAVM 00000200", "Baseline.esm",
+                                   "NVNM version=12", "trailing_offset=", "triangles=2"):
+                        self.assertIn(detail, text)
+                self.assertEqual([cell["status"] for cell in report["cells"]], ["generated", "generated"])
+                self.assertEqual(report["generation_failed_cells"], 0)
+                self.assertFalse((output / "generated-navmesh.esp").exists())
+                if reason.endswith("_lost"):
+                    self.assertIn("raw=00000000 reason=null_identity", pasteable)
+                    self.assertIn("entry_hex=", pasteable)
+                else:
+                    self.assertIn("hex[", pasteable)
+                self.assertIn("radius=", pasteable)
+                self.assertIn("build=", pasteable)
+                self.assertIn("Copy its contents", (output / "run.log").read_text())
+
+        # A non-null file-local identity can resolve to null; retain its actual master/self mapping.
+        self.write_baseline(navmeshes={0: navm_with_door(0, 0x01000000), 1: navm(1), 2: navm(2)})
+        output = self.run_cli("--rebuild-plugin", "Patch.esp", "--copy-plugin", output="mapped-null", code=2)
+        pasteable = (output / "bug-report.txt").read_text(encoding="ascii")
+        self.assertIn("raw=01000000 slot=1 masters=0 owner='Baseline.esm'", pasteable)
+        self.assertIn("resolved=00000000", pasteable)
+        self.assertIn("copy=true", pasteable)
+
+        # Single-cell exports use the same writer evidence and shared support report.
+        self.write_baseline(navmeshes={0: navm_with_door(0, 0), 1: navm(1), 2: navm(2)})
+        output = self.run_cli("--cell-formid", "100", "--generate-plugin", output="single-failure", code=2)
+        pasteable = (output / "bug-report.txt").read_text(encoding="ascii")
+        self.assertIn("door_connection_lost", pasteable)
+        self.assertIn("NAVM 00000200", pasteable)
+        self.assertLessEqual(len(pasteable), 4500)
+
     def test_isolated_upper_floor_is_removed_for_fresh_and_cached_candidates(self):
         # A steep-sided terrain plateau supplies an upper floor disconnected from
         # the surrounding ground, without depending on a proprietary model asset.

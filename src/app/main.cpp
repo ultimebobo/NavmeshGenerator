@@ -1565,6 +1565,19 @@ int navmesh::app::Run(const Options &options, const ProgressCallback &progress, 
                                          stage, error.what(), PathUtf8(options.output)),
                              1);
     }
+    if (code != 0 && code != 3)
+    {
+        // All desktop and CLI entry points share this bounded, attachment-free support artifact.
+        const auto reportPath = options.output / "bug-report.txt";
+        std::ofstream report(core::NativeFilePath(reportPath), std::ios::binary | std::ios::trunc);
+        report << detail::FormatBugReport(options, stage, code);
+        report.close();
+        const auto hint = report ? std::format("Bug report: '{}'. Copy its contents into your bug report.",
+                                               PathUtf8(std::filesystem::absolute(reportPath)))
+                                 : "Could not save bug-report.txt; check output-folder permissions and free space.";
+        std::cerr << hint << '\n';
+        update(lastPercent, stage + "\n" + hint);
+    }
     activity.Finish(code);
     return code;
 }

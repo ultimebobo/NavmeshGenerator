@@ -106,6 +106,30 @@ namespace
             { return event.kind == RunEventKind::Warning && event.message.contains("Cannot write run.log"); }));
         assert(events.back().message.contains("Completed"));
     }
+
+    void CheckPasteableBugReport()
+    {
+        navmesh::app::Options options;
+        options.rebuildScope = navmesh::app::RebuildScope::Plugin;
+        options.affectedPlugin = "Unpublished.esp";
+        options.navigationProfile.agentRadius = 23.5F;
+        options.recastSettings.cellHeight = 1.25F;
+        const auto report = navmesh::app::detail::FormatBugReport(
+            options, "door_connection_lost: entry=7 raw=00000000\nCELL 00000100 NAVM 00000200", 2);
+        assert(report.size() < 5000);
+        assert(report.contains("version=") && report.contains("build="));
+        assert(report.contains("scope=plugin") && report.contains("Unpublished.esp"));
+        assert(report.contains("radius=23.5") && report.contains("cell_height=1.25"));
+        assert(report.contains("entry=7") && report.contains("NAVM 00000200"));
+        // Unbounded user selections, non-ASCII text and control bytes must still fit a single support post.
+        options.cellSelection = std::string(10000, 'x');
+        options.affectedPlugin = std::string(10000, '\xC3');
+        const auto bounded = navmesh::app::detail::FormatBugReport(options, std::string(10000, '\xFF'), 2);
+        assert(bounded.size() <= 4500 && bounded.contains("[truncated]"));
+        assert(bounded.contains("\\xFF") && bounded.contains("recast cell_size="));
+        assert(std::all_of(bounded.begin(), bounded.end(),
+                           [](unsigned char byte) { return byte == '\n' || (byte >= 32 && byte <= 126); }));
+    }
 } // namespace
 
 void TestActionableErrors()
@@ -138,6 +162,7 @@ void TestActionableErrors()
         ("navmesh-error-fixture-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(root);
     CheckRunActivity(root);
+    CheckPasteableBugReport();
     app::Options options;
     options.mo2 = root / "missing-instance";
     options.profile = "Fixture";
@@ -161,6 +186,11 @@ void TestActionableErrors()
     assert(terminal.contains("ModOrganizer.ini") && terminal.contains("missing-instance"));
     assert(terminal.contains("Select") && terminal.contains("input-report.json"));
     assert(std::filesystem::is_regular_file(options.output / "input-report.json"));
+    std::ifstream bugReport(options.output / "bug-report.txt", std::ios::binary);
+    const std::string pasteable{std::istreambuf_iterator<char>(bugReport), {}};
+    bugReport.close();
+    assert(pasteable.size() < 5000 && pasteable.contains("ModOrganizer.ini"));
+    assert(terminal.contains("Copy its contents") && terminal.contains("bug-report.txt"));
 
     // A report destination occupied by a directory must not be presented as a saved report.
     std::filesystem::remove(options.output / "input-report.json");
@@ -168,12 +198,18 @@ void TestActionableErrors()
     assert(app::Run(options, progress) == 2);
     assert(terminal.contains("could not be saved") && !terminal.contains("Input report:"));
 
+    std::filesystem::remove(options.output / "bug-report.txt");
+    std::filesystem::create_directory(options.output / "bug-report.txt");
+    assert(app::Run(options, progress) == 2);
+    assert(terminal.contains("Could not save bug-report.txt") && !terminal.contains("Copy its contents"));
+
     const auto blocked = root / "blocked-output";
     std::ofstream(blocked) << "fixture";
     options.output = blocked;
     assert(app::Run(options, progress) == 1);
     assert(terminal.contains("blocked-output") && terminal.contains("Preparing output folder"));
     assert(terminal.contains("accessible"));
+    assert(terminal.contains("Could not save bug-report.txt"));
 
     options.output = root / "batch";
     std::filesystem::create_directory(options.output);

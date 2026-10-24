@@ -1,5 +1,7 @@
 #include "app/run_progress.h"
+#include "app/options.h"
 #include "core/io/file_path.h"
+#include "core/reproducibility/export_metadata.h"
 
 #include <format>
 #include <stdexcept>
@@ -48,7 +50,78 @@ namespace navmesh::app::detail
             }
             return result;
         }
+
+        /// Escape control and UTF-8 bytes so the byte budget also bounds pasted characters on support sites.
+        std::string ReportText(std::string_view text, std::size_t limit, bool multiline = false)
+        {
+            constexpr std::string_view truncated = "...[truncated]";
+            std::string result;
+            for (const unsigned char character : text)
+            {
+                const auto encoded = (multiline && character == '\n') || (character >= 32 && character <= 126)
+                                         ? std::string(1, static_cast<char>(character))
+                                         : std::format("\\x{:02X}", character);
+                if (result.size() + encoded.size() + truncated.size() > limit)
+                {
+                    result += truncated;
+                    return result;
+                }
+                result += encoded;
+            }
+            return result;
+        }
     } // namespace
+
+    std::string FormatBugReport(const Options &options, std::string_view failure, int code)
+    {
+        // Leave room for the reporter's description without requiring attachments or a full load-order listing.
+        constexpr std::size_t maximumBytes = 4500;
+        const auto &profile = options.navigationProfile;
+        const auto &recast = options.recastSettings;
+        std::string report = std::format("NavmeshGenerator bug report v1\nversion={} build={} {} exit={}\n",
+                                         reproducibility::kToolVersion, __DATE__, __TIME__, code);
+        report += std::format("input={} scope={} plugin='{}' copy_source='{}'\n",
+                              !options.mo2.empty()      ? "MO2"
+                              : !options.vortex.empty() ? "Vortex"
+                              : !options.plugin.empty() ? "plugin"
+                                                        : "load-order",
+                              options.rebuildScope == RebuildScope::Cell     ? "cell"
+                              : options.rebuildScope == RebuildScope::Plugin ? "plugin"
+                                                                             : "load-order",
+                              ReportText(options.affectedPlugin.empty() ? core::PathToUtf8(options.plugin.filename())
+                                                                        : options.affectedPlugin,
+                                         160),
+                              ReportText(options.copySourcePlugin, 160));
+        report += std::format(
+            "selection='{}' cell='{}' editor='{}' form={} world='{}' xy={},{}\n",
+            ReportText(options.cellSelection, 200), ReportText(options.cell, 100), ReportText(options.editorId, 100),
+            options.cellFormId ? std::format("{:08X}", *options.cellFormId) : "unset",
+            ReportText(options.worldspace, 100), options.cellX ? std::to_string(*options.cellX) : "unset",
+            options.cellY ? std::to_string(*options.cellY) : "unset");
+        report += std::format("write={} copy={} auto_split={} skip_existing={} tag_triangles={} terrain_only={} "
+                              "cell_errors={} neighbors={} partition={} scene={} estimate={} output={}\n",
+                              options.generatePlugin, options.copyPlugin, options.autoSplitPlugins,
+                              options.skipExistingNavmesh, options.tagTriangles, options.terrainOnly,
+                              ReportText(options.cellErrorPolicy, 40), options.neighboringCellRadius,
+                              static_cast<int>(options.partitioningAlgorithm), options.makeScene, options.estimateOnly,
+                              ReportText(options.batchOutput, 40));
+        report +=
+            std::format("profile='{}' radius={} height={} slope_deg={} step={} clearance={} weld={} "
+                        "min_area={} contour_tolerance={} border='{}'\n",
+                        ReportText(profile.name, 60), profile.agentRadius, profile.agentHeight, profile.maxSlopeDegrees,
+                        profile.stepHeight, profile.clearance, profile.weldTolerance, profile.minimumRegionArea,
+                        profile.contourSimplificationTolerance, ReportText(profile.cellBorderPolicy, 60));
+        report += std::format("recast cell_size={} cell_height={} simplification={} edge_length={} merge_area={}\n"
+                              "workers={} memory_mib={} cache_mib={} search_radius={} support_distance={} "
+                              "analysis_slope={}\nFailure:\n",
+                              recast.cellSize, recast.cellHeight, recast.maxSimplificationError, recast.maxEdgeLength,
+                              recast.mergeRegionAreaMultiplier, options.workers, options.workingMemoryMiB,
+                              options.cacheBudgetMiB, options.surfaceSearchRadius, options.maxSupportDistance,
+                              options.maxSlope);
+        report += ReportText(failure, maximumBytes - report.size() - 1, true);
+        report += '\n';
+        return report;
+    }
 
     RunProgress::RunProgress(const std::filesystem::path &output, ProgressCallback progress, RunEventCallback events,
                              std::chrono::milliseconds heartbeatPeriod)

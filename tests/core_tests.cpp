@@ -2172,7 +2172,9 @@ namespace
         PutU16(trailing, 0);
         PutU32(trailing, 0xE48B73F3);
         PutU32(trailing, 0x5678);
-        Require(DecodeNavmeshConnections(trailing, mesh));
+        std::string connectionError = "stale error";
+        Require(DecodeNavmeshConnections(trailing, mesh, &connectionError));
+        Require(connectionError.empty());
         Require(mesh.externalLinks.size() == 1 && mesh.doorLinks.size() == 1);
         const auto &link = mesh.externalLinks.front();
         Require(link.polygon == 0 && link.edge == 1 && link.navmeshId == 0x1234 && link.targetPolygon == 7);
@@ -2184,11 +2186,14 @@ namespace
             Require(mesh.externalLinks.empty() && mesh.doorLinks.empty());
         }
         mesh.polygons.front().neighbors[1] = 1;
-        Require(!DecodeNavmeshConnections(trailing, mesh));
+        Require(!DecodeNavmeshConnections(trailing, mesh, &connectionError));
+        Require(connectionError.contains("external_index_invalid") && connectionError.contains("triangle=0 edge=1") &&
+                connectionError.contains("index=1 external_count=1") && connectionError.contains("hex["));
         mesh.polygons.front().flags = 0;
         Require(DecodeNavmeshConnections(trailing, mesh) && mesh.externalLinks.empty());
         trailing[18] = 1;
-        Require(!DecodeNavmeshConnections(trailing, mesh));
+        Require(!DecodeNavmeshConnections(trailing, mesh, &connectionError));
+        Require(connectionError.contains("door_triangle_invalid") && connectionError.contains("raw_door=00005678"));
     }
 
     void TestNavmeshSceneConnections()

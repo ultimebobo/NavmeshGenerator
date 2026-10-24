@@ -256,6 +256,92 @@ namespace
         return std::nullopt;
     }
 
+    /// Diagnose the first connection lost between raw decoding and resolved scene assembly.
+    /// Read only the winning TES4 header on failure; report the relevant slot rather than the entire load order.
+    std::string DescribeMissingConnection(const std::vector<std::filesystem::path> &inputPlugins,
+                                          const navmesh::skyrim::ResolvedLoadOrder &resolved,
+                                          const ResolvedRecord &record, const navmesh::core::NavMesh &decoded,
+                                          const navmesh::core::NavMesh &assembled)
+    {
+        SourceInfo source{.name = record.winning.plugin};
+        const auto path = std::find_if(inputPlugins.begin(), inputPlugins.end(), [&](const auto &input)
+                                       { return SameName(navmesh::core::PathToUtf8(input.filename()), source.name); });
+        std::vector<navmesh::skyrim::Diagnostic> diagnostics;
+        bool light{};
+        const bool metadataRead = path != inputPlugins.end() && navmesh::skyrim::DirectPluginReader{}.ReadMetadata(
+                                                                    *path, source.masters, light, diagnostics);
+        // Decoding has bounds-checked both tables; retain the exact consumed entry, including its type tag.
+        const auto &payload = record.raw->decodedPayload;
+        const auto connectionsAt = static_cast<std::size_t>(record.navm->trailingData.offset);
+        const auto entryHex = [&](std::size_t offset)
+        {
+            std::string result = " entry_hex=";
+            for (auto index = offset; index < offset + 10; ++index)
+            {
+                result += std::format("{:02X}", payload[index]);
+            }
+            return result;
+        };
+        const auto identity = [&](std::uint32_t raw)
+        {
+            if (!raw)
+            {
+                return std::string("raw=00000000 reason=null_identity");
+            }
+            if (!metadataRead)
+            {
+                return std::format("raw={:08X} reason=winning_master_table_unavailable", raw);
+            }
+            const auto slot = raw >> 24;
+            const auto &owner = slot < source.masters.size() ? source.masters[slot] : source.name;
+            const auto target = ResolveSourceIdentity(source, resolved, raw);
+            return std::format("raw={:08X} slot={} masters={} owner='{}' source_light={} resolved={} target_present={}",
+                               raw, slot, source.masters.size(), owner, light,
+                               target ? std::format("{:08X}", *target) : "unresolved",
+                               target && resolved.FindWinning(*target) != nullptr);
+        };
+        for (const auto &link : decoded.externalLinks)
+        {
+            const auto target = metadataRead ? ResolveSourceIdentity(source, resolved, link.navmeshId) : std::nullopt;
+            if (!metadataRead && link.navmeshId != 0)
+            {
+                continue;
+            }
+            if (std::none_of(assembled.externalLinks.begin(), assembled.externalLinks.end(),
+                             [&](const auto &other)
+                             {
+                                 return other.polygon == link.polygon && other.edge == link.edge && target &&
+                                        other.navmeshId == *target;
+                             }))
+            {
+                return std::format(
+                           "external_connection_lost: triangle={} edge={} entry={} type={} target_triangle={} {}",
+                           link.polygon, link.edge, decoded.polygons[link.polygon].neighbors[link.edge], link.type,
+                           link.targetPolygon, identity(link.navmeshId)) +
+                       entryHex(connectionsAt + 4 + decoded.polygons[link.polygon].neighbors[link.edge] * 10);
+            }
+        }
+        for (std::size_t index{}; index < decoded.doorLinks.size(); ++index)
+        {
+            const auto &link = decoded.doorLinks[index];
+            const auto target = metadataRead ? ResolveSourceIdentity(source, resolved, link.referenceId) : std::nullopt;
+            if (!metadataRead && link.referenceId != 0)
+            {
+                continue;
+            }
+            if (std::none_of(assembled.doorLinks.begin(), assembled.doorLinks.end(), [&](const auto &other)
+                             { return other.polygon == link.polygon && target && other.referenceId == *target; }))
+            {
+                return std::format("door_connection_lost: entry={} triangle={} {}", index, link.polygon,
+                                   identity(link.referenceId)) +
+                       entryHex(connectionsAt + 8 + static_cast<std::size_t>(Get32(payload, connectionsAt)) * 10 +
+                                index * 10);
+            }
+        }
+        return metadataRead ? "connection_count_mismatch: no individual missing destination identified"
+                            : "connection_count_mismatch: winning_master_table_unavailable";
+    }
+
     /// Resolve a load-order FormID through the record that introduced it, including light-plugin IDs.
     std::optional<std::uint32_t> RebaseResolvedFormId(const navmesh::skyrim::ResolvedLoadOrder &resolved,
                                                       const std::vector<std::string> &outputMasters,
@@ -1294,13 +1380,38 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             auto inspected = mesh;
             const auto &layout = *navm->navm;
             const auto &data = navm->raw->decodedPayload;
+            std::string connectionError;
             if (!DecodeNavmeshConnections(
                     {data.data() + layout.trailingData.offset, static_cast<std::size_t>(layout.trailingData.size)},
-                    inspected) ||
+                    inspected, &connectionError) ||
                 inspected.externalLinks.size() != mesh.externalLinks.size() ||
                 inspected.doorLinks.size() != mesh.doorLinks.size())
             {
-                return fail("A selected NAVM has malformed or unresolved navigation connections.");
+                if (connectionError.empty())
+                {
+                    connectionError = DescribeMissingConnection(inputPlugins, resolved, *navm, inspected, mesh);
+                }
+                error = std::format(
+                    "A selected NAVM has malformed or unresolved navigation connections.\n"
+                    "{}\nCELL {:08X} '{}' NAVM {:08X} winner='{}' world={} grid={}\n"
+                    "NVNM version={} vertices={} triangles={} record_offset={} payload_bytes={} "
+                    "trailing_offset={} trailing_bytes={} external_decoded/resolved={}/{} "
+                    "doors_decoded/resolved={}/{}\n"
+                    "NVNM header_words={:08X},{:08X},{:08X},{:08X},{:08X} record_flags={:08X}",
+                    connectionError, cell.id,
+                    cell.editorId.size() > 128 ? cell.editorId.substr(0, 128) + "...[truncated]" : cell.editorId,
+                    mesh.id, navm->winning.plugin,
+                    navm->worldspaceFormId ? std::format("{:08X}", *navm->worldspaceFormId) : "interior",
+                    cell.exteriorCoordinates
+                        ? std::format("{},{}", (*cell.exteriorCoordinates)[0], (*cell.exteriorCoordinates)[1])
+                        : "none",
+                    layout.version, layout.vertexCount, layout.triangleCount, navm->raw->headerRange.offset,
+                    data.size(), layout.trailingData.offset, layout.trailingData.size, inspected.externalLinks.size(),
+                    mesh.externalLinks.size(), inspected.doorLinks.size(), mesh.doorLinks.size(),
+                    Get32(data, layout.header.offset), Get32(data, layout.header.offset + 4),
+                    Get32(data, layout.header.offset + 8), Get32(data, layout.header.offset + 12),
+                    Get32(data, layout.header.offset + 16), navm->raw->flags);
+                return false;
             }
             for (const auto &portal : mesh.externalLinks)
             {
