@@ -15,6 +15,7 @@
 #include "core/navmesh/triangle_tagging.h"
 #include "skyrim/extraction/terrain_extractor.h"
 #include "skyrim/parser/affected_cells.h"
+#include "skyrim/parser/navigation_audit.h"
 #include "skyrim/parser/plugin_writer.h"
 
 #include <algorithm>
@@ -238,7 +239,8 @@ namespace navmesh::app::detail
         std::set<std::string> changedModels;
         bool archiveModelsChanged{};
         std::set<std::filesystem::path> changedArchives;
-        if (assets && options.rebuildScope != app::RebuildScope::Cell)
+        if (assets &&
+            (options.rebuildScope == app::RebuildScope::Plugin || options.rebuildScope == app::RebuildScope::LoadOrder))
         {
             const auto inside = [](const std::filesystem::path &path, const std::filesystem::path &root)
             {
@@ -410,17 +412,35 @@ namespace navmesh::app::detail
         };
         if (progress)
         {
-            progress(30, options.rebuildScope == app::RebuildScope::Cell
-                             ? "Resolving selected cells"
+            progress(30, options.rebuildScope == app::RebuildScope::Cell ? "Resolving selected cells"
+                         : options.rebuildScope == app::RebuildScope::Repair
+                             ? "Auditing winning navigation for structural errors"
                              : "Selecting cells with changed terrain or collision");
         }
         std::vector<const core::Cell *> targets;
+        skyrim::NavigationAudit navigationAudit;
         std::string selectionError;
         try
         {
             if (options.rebuildScope == app::RebuildScope::Cell)
             {
                 targets = ResolveCellSelection(resolved, options.cellSelection);
+            }
+            else if (options.rebuildScope == app::RebuildScope::Repair)
+            {
+                navigationAudit = skyrim::AuditNavigation(resolved, options.navigationProfile.stepHeight, cancelled);
+                std::set<std::uint32_t> damagedCells;
+                for (const auto &finding : navigationAudit.findings)
+                {
+                    damagedCells.insert(finding.cellId);
+                }
+                for (const auto &cell : resolved.cells)
+                {
+                    if (damagedCells.contains(cell.id))
+                    {
+                        targets.push_back(&cell);
+                    }
+                }
             }
             else
             {
@@ -640,6 +660,17 @@ namespace navmesh::app::detail
                                    JsonEscape(diagnostic.message), i + 1 == resolved.diagnostics.size() ? "" : ",");
             }
             out << "  ],\n";
+            out << std::format("  \"navigation_audit\":{{\"scanned_navmeshes\":{},\"unsupported_navmeshes\":{},"
+                               "\"findings\":[",
+                               navigationAudit.scannedNavmeshes, navigationAudit.unsupportedNavmeshes);
+            for (std::size_t i{}; i < navigationAudit.findings.size(); ++i)
+            {
+                const auto &finding = navigationAudit.findings[i];
+                out << std::format("{}{{\"cell\":\"{:08X}\",\"navmesh\":\"{:08X}\",\"polygon\":{},\"kind\":\"{}\"}}",
+                                   i ? "," : "", finding.cellId, finding.navmeshId,
+                                   finding.polygon ? std::to_string(*finding.polygon) : "null", finding.kind);
+            }
+            out << "]},\n";
             out << "  \"selection_changed_records\": {";
             bool firstCount = true;
             for (const auto &[type, count] : selectionStatistics.changedRecords)
@@ -742,6 +773,7 @@ namespace navmesh::app::detail
             out << std::format("  \"scope\":\"{}\",\"plugin\":\"{}\",\"status\":\"{}\",\"error\":\"{}\",\n",
                                options.rebuildScope == app::RebuildScope::Cell     ? "cell"
                                : options.rebuildScope == app::RebuildScope::Plugin ? "plugin"
+                               : options.rebuildScope == app::RebuildScope::Repair ? "repair"
                                                                                    : "load_order",
                                JsonEscape(options.copyPlugin ? copySource : options.affectedPlugin), state,
                                JsonEscape(error));
@@ -883,6 +915,10 @@ namespace navmesh::app::detail
             return fail("Cannot write batch-report.json");
         }
         const auto selectionStatus =
+            (options.rebuildScope == RebuildScope::Repair
+                 ? std::format("Audited {} NAVMs; {} unsupported layouts; ", navigationAudit.scannedNavmeshes,
+                               navigationAudit.unsupportedNavmeshes)
+                 : "") +
             std::format("Selected {} cells; {} eligible for NAVM generation", selectedCells, fullEligibleCells) +
             (missingModelWarning.empty() ? "" : "; " + missingModelWarning);
         std::cout << selectionStatus << '\n';

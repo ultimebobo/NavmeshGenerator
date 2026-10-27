@@ -31,6 +31,11 @@ namespace navmesh::ui
     app::Options PrepareDesktopOptions(const app::Options &draft, bool listOnly)
     {
         auto result = draft;
+        if (result.rebuildScope != app::RebuildScope::Cell && result.rebuildScope != app::RebuildScope::Plugin &&
+            result.rebuildScope != app::RebuildScope::LoadOrder && result.rebuildScope != app::RebuildScope::Repair)
+        {
+            throw std::invalid_argument("Choose Cell, Plugin, Load order or Repair load order as the rebuild scope.");
+        }
         if (result.modManager != app::ModManager::Mo2 && result.modManager != app::ModManager::Vortex)
         {
             throw std::invalid_argument("Choose MO2 or Vortex as the mod manager.");
@@ -103,7 +108,7 @@ namespace navmesh::ui
         {
             result.cellSelection.clear();
         }
-        if (listOnly || result.rebuildScope == app::RebuildScope::LoadOrder)
+        if (listOnly || (!cellScope && result.rebuildScope != app::RebuildScope::Plugin))
         {
             result.makeScene = false;
         }
@@ -111,9 +116,13 @@ namespace navmesh::ui
         {
             result.affectedPlugin.clear();
         }
-        if (listOnly || result.rebuildScope == app::RebuildScope::LoadOrder)
+        if (listOnly || (!cellScope && result.rebuildScope != app::RebuildScope::Plugin))
         {
             result.copyPlugin = false;
+        }
+        if (result.rebuildScope == app::RebuildScope::Repair)
+        {
+            result.skipExistingNavmesh = false;
         }
         if (listOnly || !cellScope || !result.copyPlugin)
         {

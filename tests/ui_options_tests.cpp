@@ -118,6 +118,13 @@ void TestDesktopOptionsAndRecastSettings()
     assert(!loadOrder.makeScene);
     assert(loadOrder.modsDirectory.empty());
 
+    draft.rebuildScope = app::RebuildScope::Repair;
+    draft.skipExistingNavmesh = true;
+    const auto repair = ui::PrepareDesktopOptions(draft, false);
+    assert(repair.rebuildScope == app::RebuildScope::Repair && app::UsesBatchGeneration(repair));
+    assert(repair.generateCandidate && !repair.skipExistingNavmesh);
+    assert(!repair.copyPlugin && !repair.makeScene && repair.cellSelection.empty() && repair.affectedPlugin.empty());
+
     draft.rebuildScope = app::RebuildScope::Cell;
     draft.cellSelection.clear();
     draft.copyPlugin = false;

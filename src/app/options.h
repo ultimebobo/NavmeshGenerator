@@ -27,7 +27,9 @@ namespace navmesh::app
     {
         Cell,
         Plugin,
-        LoadOrder
+        LoadOrder,
+        /// Audit winning NAVMs and regenerate only cells with definite structural faults.
+        Repair
     };
 
     /// Shared CLI/desktop inputs for cell analysis and affected-cell rebuild runs.
@@ -47,6 +49,7 @@ namespace navmesh::app
         std::optional<std::uint32_t> cellFormId;
         bool listCells{}, diagnostics{}, terrainOnly{}, generateCandidate{};
         /// Cells to rebuild; batch scopes require resolved mod-manager or manifest input.
+        /// Repair audits existing winning navigation independently of record/asset edit history.
         RebuildScope rebuildScope{RebuildScope::Cell};
         /// Active plugin filename whose edits select affected cells in Plugin scope.
         std::string affectedPlugin;
@@ -73,6 +76,7 @@ namespace navmesh::app
         bool copyPlugin{};
         /// Skip generation for cells with any winning NAVM record, including empty or unsupported records.
         /// Requires resolved mod-manager/load-order input; uncovered cells may receive new NAVM records.
+        /// Incompatible with Repair scope, which targets existing navigation.
         bool skipExistingNavmesh{};
         /// Recoverable CELL failures: continue preserves authored navigation and skips affected targets; stop aborts export.
         /// Applies to generation, never to invalid inputs, allocation, storage, global linking or writer failures.

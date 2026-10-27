@@ -3,7 +3,7 @@
 For terminology and the distinction between regenerated cell geometry and
 neighboring connection updates, see the [navmesh glossary](glossary.md).
 
-The shared application runner supports **Cell**, **Plugin**, and **Load order**
+The shared application runner supports **Cell**, **Plugin**, **Load order**, and **Repair load order**
 scopes. Cell accepts one or multiple explicit cells. The Windows UI persists the
 scope and affected-plugin filename with the other settings. Affected-cell scopes
 require a resolved MO2 profile, active Vortex deployment or the developer load-order manifest. They generate candidates;
@@ -11,6 +11,35 @@ require a resolved MO2 profile, active Vortex deployment or the developer load-o
 Automatic batch output retains full inspection without writing, and reports plus
 the plugin when writing. **Batch output** / `--batch-output` selects full,
 compressed, or plugin-only artifacts explicitly.
+
+**Repair load order** / `--repair-load-order` scans existing winning NAVMs without
+loading terrain, NIFs or archives for selection, then regenerates only cells with
+definite structural errors. This includes invalid vertices, degenerate or inverted
+triangles, duplicate triangles, non-manifold indexed edges, invalid claimed internal
+adjacency, malformed connection tables, and broken external or door links. Regeneration uses the normal geometry,
+cache, estimation and verified patch writer as explicit Cell rebuilding, including
+bounded authored-neighbor border adjustments and reciprocal connection updates.
+Healthy cells are not regenerated. Source plugins remain unchanged.
+The scope is persisted by the desktop and cannot combine with
+skip-existing, source-copy or combined-scene options.
+
+`batch-report.json` uses scope `repair` and records `navigation_audit` with scanned
+and unsupported NAVM counts and the first finding of each kind per NAVM, including
+resolved CELL/NAVM identities and a triangle index where applicable. Deleted records,
+disabled triangle geometry, valid empty NAVMs and cells without navigation do not select repairs.
+Unsupported layouts are counted, never inferred as faults; normal export guards
+can still reject unsafe inputs. Intentional open borders, disconnected islands and
+authored portal offsets are preserved. Selection does not test terrain/model support,
+obstructions, arbitrary overlaps or heuristic gaps, and does not promise that
+regeneration will resolve every finding; generation skips and export failures remain
+visible in the report.
+
+For findings outside the built-in scan, use explicit **Cell** selections from the
+same resolved load order.
+
+```powershell
+NavmeshGenerator.exe --mo2 "<MO2 instance>" --profile "<existing profile>" --repair-load-order --generate-plugin --output "<new output folder>"
+```
 
 Loose BOS configurations are imported automatically in every geometry scope.
 Load order includes configuration-only changes even with a baseline-only plugin

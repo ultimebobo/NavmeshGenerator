@@ -160,6 +160,71 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(completed.returncode, code, completed.stdout + completed.stderr)
         return self.root / output
 
+    def test_repair_healthy_load_order_does_not_extract_geometry(self):
+        output = self.run_cli("--repair-load-order", "--generate-plugin", terrain_only=False)
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["scope"], "repair")
+        self.assertEqual(report["navigation_audit"]["scanned_navmeshes"], 3)
+        self.assertEqual(report["navigation_audit"]["findings"], [])
+        self.assertEqual(report["selected_cells"], 0)
+        self.assertEqual(report["geometry_cells_extracted"], 0)
+        self.assertEqual(report["selection_collision_comparisons"], 0)
+        self.assertFalse((output / "generated-navmesh.esp").exists())
+
+    def test_repair_selects_faulty_cell_and_preserves_healthy_geometry(self):
+        for defect in ("adjacency", "vertex", "degenerate", "inverted"):
+            with self.subTest(defect=defect):
+                body = bytearray(navm(0)[6:])
+                triangle_at = 20 + 4 * 12 + 4
+                if defect == "adjacency":
+                    struct.pack_into("<H", body, triangle_at + 6, 99)
+                elif defect == "vertex":
+                    struct.pack_into("<H", body, triangle_at, 99)
+                elif defect == "degenerate":
+                    struct.pack_into("<3H", body, triangle_at, 0, 0, 0)
+                else:
+                    struct.pack_into("<3H", body, triangle_at, 2, 1, 0)
+                self.write_baseline(navmeshes={0: sub("NVNM", body), 1: navm(1), 2: navm(2)})
+                source = (self.root / "Baseline.esm").read_bytes()
+                output = self.run_cli("--repair-load-order", "--generate-plugin", output=f"repair-{defect}")
+                report = json.loads((output / "batch-report.json").read_text())
+                self.assertEqual(report["selected_cells"], 1)
+                self.assertEqual([cell["form_id"] for cell in report["cells"]], ["00000100"])
+                self.assertEqual(report["cells"][0]["status"], "generated")
+                self.assertEqual({item["cell"] for item in report["navigation_audit"]["findings"]}, {"00000100"})
+                self.assertEqual(report["selection_collision_comparisons"], 0)
+                self.assertFalse((output / "cells/00000101/candidate-navm.json").exists())
+                emitted = {form: payload for kind, form, _, payload in read_records(output / "generated-navmesh.esp")
+                           if kind == "NAVM"}
+                for x in (1, 2):
+                    if 0x200 + x in emitted:
+                        self.assertEqual(navm_geometry(emitted[0x200 + x]), navm_geometry(navm(x)))
+                self.assertEqual((self.root / "Baseline.esm").read_bytes(), source)
+
+                explicit = self.run_cli("--cells", "00000100", "--generate-plugin", output=f"cell-{defect}")
+                explicit_navmeshes = {form: payload for kind, form, _, payload in read_records(explicit / "generated-navmesh.esp")
+                                     if kind == "NAVM"}
+                self.assertEqual(emitted, explicit_navmeshes)
+
+    def test_repair_uses_winning_navmesh_and_preserves_uncovered_cells(self):
+        broken = bytearray(navm(0)[6:])
+        struct.pack_into("<H", broken, 20 + 4 * 12 + 4 + 6, 99)
+        self.write_baseline(navmeshes={0: sub("NVNM", broken)})
+        patch = self.root / "Patch.esp"
+        patch.write_bytes(patch.read_bytes() + group(0x100, 6, group(0x100, 9, record("NAVM", 0x200, navm(0)))))
+        output = self.run_cli("--repair-load-order")
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["navigation_audit"]["scanned_navmeshes"], 1)
+        self.assertEqual(report["selected_cells"], 0)
+        self.assertEqual(report["geometry_cells_extracted"], 0)
+
+    def test_repair_rejects_conflicting_options(self):
+        for arguments in [("--skip-existing-navmesh",), ("--copy-plugin",), ("--make-scene",),
+                          ("--rebuild-load-order",), ("--rebuild-plugin", "Patch.esp"), ("--cells", "00000100"),
+                          ("--list-cells",)]:
+            with self.subTest(arguments=arguments):
+                self.run_cli("--repair-load-order", *arguments, output="invalid-repair", code=1)
+
     def test_mo2_configured_mod_storage(self):
         instance = self.root / "Instance"
         storage = self.root / "Storage"

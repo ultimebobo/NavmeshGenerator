@@ -47,7 +47,12 @@ Use `--list-cells` to discover available form IDs, editor IDs, and exterior coor
 ./build/windows/x64/releasedbg/NavmeshGenerator.exe --mo2 "D:/Modding/MO2/Skyrim SE" --profile "My Actual Profile" --list-cells --output "D:/NavmeshWork/cells"
 ```
 
-## Rebuild a plugin or load order
+## Rebuild or repair a plugin or load order
+
+Use **Repair load order** / `--repair-load-order` to scan winning navigation and
+regenerate only cells with structural faults. This avoids collision-impact scanning
+and geometry extraction for healthy targets. See the [repair selection contract](batch-rebuilding.md)
+for coverage, report evidence and border adjustments.
 
 BOS configurations are discovered automatically from effective Data, including
 MO2 configuration-only mods and overwrite or Vortex deployed files. Both base

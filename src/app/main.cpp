@@ -145,7 +145,8 @@ namespace
             return fail("Usage: NavmeshGenerator --mo2 <instance-or-portable-root> --profile <existing-profile> "
                         "[--mods-dir <moved-mods-root>] [--list-cells] [--cell-formid <hex> | --cells <identifiers> | "
                         "--rebuild-plugin <active "
-                        "filename> | --rebuild-load-order] [--generate-plugin] [--no-auto-split] [--copy-plugin] "
+                        "filename> | --rebuild-load-order | --repair-load-order] [--generate-plugin] [--no-auto-split] "
+                        "[--copy-plugin] "
                         "[--skip-existing-navmesh] "
                         "[--no-triangle-tagging] [--cell-error-policy <continue|stop>] "
                         "[--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
@@ -176,9 +177,11 @@ namespace
             return fail("Plugin generation requires resolved mod-manager/load-order input and a rebuild selection.\n",
                         1);
         }
-        if (options.copyPlugin && (options.rebuildScope == RebuildScope::LoadOrder || !options.generatePlugin ||
-                                   (options.rebuildScope == RebuildScope::Cell ? options.copySourcePlugin.empty()
-                                                                               : options.affectedPlugin.empty())))
+        if (options.copyPlugin &&
+            ((options.rebuildScope != RebuildScope::Cell && options.rebuildScope != RebuildScope::Plugin) ||
+             !options.generatePlugin ||
+             (options.rebuildScope == RebuildScope::Cell ? options.copySourcePlugin.empty()
+                                                         : options.affectedPlugin.empty())))
         {
             return fail("--copy-plugin requires Cell or Plugin scope and an active copy source: "
                         "--copy-plugin-source for Cell scope or --rebuild-plugin for Plugin scope.\n",
@@ -203,7 +206,8 @@ namespace
         }
         const bool batchGeneration = UsesBatchGeneration(options);
         if (options.makeScene &&
-            (options.rebuildScope == RebuildScope::LoadOrder || options.listCells || options.estimateOnly))
+            ((options.rebuildScope != RebuildScope::Cell && options.rebuildScope != RebuildScope::Plugin) ||
+             options.listCells || options.estimateOnly))
         {
             return fail(
                 "--make-scene requires Cell or small Plugin scope and cannot combine listing or cost estimation.\n", 1);
@@ -227,6 +231,11 @@ namespace
                 return fail("Select an active plugin filename.\n", 1);
             }
             options.generateCandidate = true;
+        }
+        if (options.rebuildScope == RebuildScope::Repair && options.skipExistingNavmesh)
+        {
+            return fail(
+                "--repair-load-order cannot combine --skip-existing-navmesh: repair targets existing navigation.\n", 1);
         }
         if (options.skipExistingNavmesh &&
             (options.listCells || (!options.generateCandidate && !options.generatePlugin) ||

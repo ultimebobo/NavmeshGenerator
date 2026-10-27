@@ -868,6 +868,30 @@ void TestBatchGenerationFailurePolicy()
     const auto reused = app::detail::BuildBatchCandidate(input(floor, goodCell), options);
     assert(reused.status == "generated" && reused.reused);
 
+    // Cell and Repair reuse the same bounded authored-neighbor border adjustments under either error policy.
+    const auto floorKey = app::detail::CandidateFingerprint(floor, options.navigationProfile, {}, {}, {}, "watershed",
+                                                            options.recastSettings, {}, {}, options.tagTriangles);
+    const auto floorCache = directory / "cache" / "candidates" / (floorKey + ".gz");
+    auto movingNeighbor = successful.candidate;
+    movingNeighbor.authoredBorderVertexEdits.push_back({201, 0, {0, 0, 0}, {0, 0, 1}});
+    assert(app::detail::StoreCandidate(floorCache, movingNeighbor, floor));
+    for (const auto scope : {app::RebuildScope::Cell, app::RebuildScope::Repair})
+    {
+        for (const auto policy : {"continue", "stop"})
+        {
+            auto rebuildOptions = options;
+            rebuildOptions.rebuildScope = scope;
+            rebuildOptions.cellErrorPolicy = policy;
+            const auto rebuilt = app::detail::BuildBatchCandidate(input(floor, goodCell), rebuildOptions);
+            assert(rebuilt.status == "generated" && rebuilt.error.empty() && rebuilt.reused);
+            assert(rebuilt.candidate.mesh.polygons.size() == successful.candidate.mesh.polygons.size());
+            const auto &edits = rebuilt.candidate.authoredBorderVertexEdits;
+            assert(edits.size() == 1 && edits[0].navmeshId == 201 && edits[0].vertex == 0);
+            assert(edits[0].original.z == 0 && edits[0].position.z == 1);
+        }
+    }
+    assert(app::detail::StoreCandidate(floorCache, successful.candidate, floor));
+
     // Recast floors are filtered after reconciliation for every partition strategy
     // and for cache hits. An inaccessible upper platform must not reach final export.
     auto roofScene = floor;

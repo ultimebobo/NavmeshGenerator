@@ -16,7 +16,7 @@ namespace navmesh::app::detail
     [[nodiscard]] std::vector<const core::Cell *> ResolveCellSelection(const skyrim::ResolvedLoadOrder &resolved,
                                                                        const std::string &selection);
 
-    /** Rebuild affected or explicitly selected cells from an already resolved input snapshot.
+    /** Rebuild affected, explicitly selected, or structurally faulty cells from an already resolved input snapshot.
      * @param options Validated batch options; output names the export directory.
      * @param resolved Winning records and ownership, retained throughout the run.
      * @param assets Optional mod-manager model winners; null uses the configured Data directory.
@@ -27,6 +27,7 @@ namespace navmesh::app::detail
      * @param bosInputs Optional runtime snapshot; revalidated before publishing a generated plugin.
      * @param events Optional activity sink for completion counts and diagnostics, on the orchestration thread.
      * Explicit identifiers must all resolve uniquely; aliases deduplicate by CELL Form ID.
+     * Repair scope audits winning navigation without collision-impact selection and reports its selection evidence.
      * @return Process-style status: success (including logged cell-generation skips),
      * input/export/global-linking failure, or cancellation. Skips preserve authored geometry.
      * @warning Writes batch reports and candidate exports, and a verified ESP when requested.

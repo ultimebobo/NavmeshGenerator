@@ -3001,6 +3001,7 @@ void TestFormIdResolution();
 void TestOperablePassages();
 void TestNativeBsaGeometry();
 void TestNavigationPatchExport();
+void TestNavigationAudit();
 
 int main(int argc, char **argv)
 {
@@ -3013,6 +3014,7 @@ int main(int argc, char **argv)
 #endif
     TestOperablePassages();
     TestNavigationPatchExport();
+    TestNavigationAudit();
     if (argc == 2 && std::string_view(argv[1]) == "--patch-export-only")
     {
         return 0;

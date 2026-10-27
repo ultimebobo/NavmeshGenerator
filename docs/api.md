@@ -7,6 +7,10 @@ this reference. The showcase utilities and renderer are described in the
 
 ## Code map
 
+- `navmesh::skyrim::AuditNavigation`, `NavigationAudit`: asset-free structural
+  checks of live winning NAVMs, with resolved owner identities and bounded finding
+  evidence for Repair-scope target selection. Unsupported layouts are counted separately.
+
 - `navmesh::skyrim::GeometryFailure`, `DescribeGeometryFailure`: required model
   failures with provider and resolved source evidence, separate from exclusions.
   `GeometryExtraction::failures` must be checked before candidate acceptance.

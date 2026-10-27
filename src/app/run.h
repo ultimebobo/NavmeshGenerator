@@ -10,7 +10,7 @@ namespace navmesh::app
 {
     /// Optional synchronous cancellation query between processing stages.
     using CancellationCallback = std::function<bool()>;
-    /// Execute a cell analysis or an affected-cell plugin/load-order rebuild.
+    /// Execute a cell analysis, affected-cell rebuild, or structural navigation repair of the winning load order.
     /// Cell mode accepts one or multiple explicit cells; inputs resolve once per run.
     /// Coordinated generation exports a report and per-cell candidates;
     /// generatePlugin writes one verified plugin after all candidates are ready;

@@ -300,7 +300,7 @@ namespace
         catch (const std::exception &)
         {
         }
-        const char *scopes[] = {"cell", "plugin", "load_order"};
+        const char *scopes[] = {"cell", "plugin", "load_order", "repair"};
         const auto scope =
             ReadConfig(workspace.config, "rebuild_scope", scopes[static_cast<int>(options.rebuildScope)]);
         if (scope == "selected_cells")
@@ -310,6 +310,7 @@ namespace
         }
         options.rebuildScope = scope == "plugin"       ? RebuildScope::Plugin
                                : scope == "load_order" ? RebuildScope::LoadOrder
+                               : scope == "repair"     ? RebuildScope::Repair
                                                        : RebuildScope::Cell;
         const char *algorithms[] = {"watershed", "monotone", "layers"};
         const auto algorithm = ReadConfig(workspace.config, "partitioning_algorithm",
@@ -371,7 +372,7 @@ namespace
         {
             WriteConfig(workspace.config, field.key, std::format("{:.9g}", *field.value));
         }
-        const char *scopes[] = {"cell", "plugin", "load_order"};
+        const char *scopes[] = {"cell", "plugin", "load_order", "repair"};
         const char *algorithms[] = {"watershed", "monotone", "layers"};
         WriteConfig(workspace.config, "rebuild_scope", scopes[static_cast<int>(workspace.draft.rebuildScope)]);
         WriteConfig(workspace.config, "partitioning_algorithm",
@@ -713,7 +714,7 @@ namespace
         int scope = static_cast<int>(options.rebuildScope);
         ImGui::TextUnformatted("Rebuild scope");
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::Combo("##scope", &scope, "Cell\0Plugin\0Load order\0"))
+        if (ImGui::Combo("##scope", &scope, "Cell\0Plugin\0Load order\0Repair load order\0"))
         {
             options.rebuildScope = static_cast<RebuildScope>(scope);
         }
@@ -745,6 +746,17 @@ namespace
         else if (options.rebuildScope == RebuildScope::Plugin)
         {
             PluginField(workspace, window, "affected_plugin", "Affected plugin");
+        }
+        else if (options.rebuildScope == RebuildScope::Repair)
+        {
+            ImGui::TextWrapped(
+                "Scan winning navmeshes for structural errors and rebuild only their cells. "
+                "Uses Cell rebuilding, including bounded neighboring border adjustments and link updates. "
+                "No model loading during selection. Findings are recorded in batch-report.json.");
+            Help("Checks invalid vertices, degenerate/inverted/duplicate triangles, non-manifold edges, "
+                 "invalid adjacency and malformed or broken external/door links. "
+                 "Empty navigation and intentional islands are preserved. "
+                 "Unsupported layouts are reported; existing export safety checks still apply.");
         }
         else
         {
@@ -814,7 +826,8 @@ namespace
         Help("Reduce unused masters, then split patches that reuse existing NAVM records when needed. "
              "Enable every file listed in plugin-manifest.json after the input plugins. "
              "Splitting with newly created NAVM records is unsupported. Source copies remain one file.");
-        if (!cellScope || options.generateCandidate || options.generatePlugin || options.copyPlugin)
+        if (options.rebuildScope != RebuildScope::Repair &&
+            (!cellScope || options.generateCandidate || options.generatePlugin || options.copyPlugin))
         {
             ImGui::Checkbox("Skip cells with existing navmesh", &options.skipExistingNavmesh);
             Help("Generate only for uncovered cells. Any winning NAVM record protects its cell.");

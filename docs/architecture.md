@@ -46,6 +46,10 @@ cache identities while supporting long Windows local and UNC paths.
 
 The parser layer is responsible for reading a Bethesda plugin file directly from disk.
 
+`parser/navigation_audit` inspects the resolved winning NAVM graph without asset
+I/O. It supplies bounded structural findings for the app's Repair scope; target
+selection, generation and report serialization remain application responsibilities.
+
 - Input: `.esm`, `.esp`, or `.esl` file
 - Responsibility: identify records, skip unsupported record types, and surface the subset needed for cell/navmesh inspection
 - Output: a minimal record stream or normalized plugin index

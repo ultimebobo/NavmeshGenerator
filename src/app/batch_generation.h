@@ -54,6 +54,7 @@ namespace navmesh::app::detail
      * and topology failures return skipped_generation_failed with an error and no candidate in continue mode;
      * stop mode returns failed. Required-geometry failures return skipped_extraction_failed or failed respectively.
      * Allocation exceptions and evidence-storage failures return failed and must stop batch publishing.
+     * All rebuild scopes use the same bounded authored-neighbor border adjustments, including cache hits.
      */
     [[nodiscard]] BatchCellResult BuildBatchCandidate(BatchGenerationInput input, const Options &options);
 

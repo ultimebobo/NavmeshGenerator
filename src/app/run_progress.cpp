@@ -87,6 +87,7 @@ namespace navmesh::app::detail
                                                         : "load-order",
                               options.rebuildScope == RebuildScope::Cell     ? "cell"
                               : options.rebuildScope == RebuildScope::Plugin ? "plugin"
+                              : options.rebuildScope == RebuildScope::Repair ? "repair"
                                                                              : "load-order",
                               ReportText(options.affectedPlugin.empty() ? core::PathToUtf8(options.plugin.filename())
                                                                         : options.affectedPlugin,

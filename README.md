@@ -44,6 +44,7 @@ application and cached on demand. For source builds, follow the
 | **Cell** | One or more cells you choose by Form ID or editor ID. |
 | **Plugin** | Cells affected by a selected active plugin. |
 | **Load order** | Cells affected by changes across your active mods. |
+| **Repair load order** | Cells with structural errors in their winning navmeshes; see [repair coverage](docs/batch-rebuilding.md). |
 
 If you need a cell identifier, use **List cells to file** to export the available
 cells to `cells.json`. In **Cell** scope, paste identifiers into **Cells**, one

@@ -202,8 +202,8 @@ namespace navmesh::app
             {
                 if (options.rebuildScope != RebuildScope::Cell)
                 {
-                    throw std::invalid_argument(
-                        "Choose one rebuild scope: use --cells, --rebuild-plugin, or --rebuild-load-order separately.");
+                    throw std::invalid_argument("Choose one rebuild scope: use --cells, --rebuild-plugin, "
+                                                "--rebuild-load-order or --repair-load-order separately.");
                 }
                 options.cellSelection += std::string(argv[++index]) + "\n";
             }
@@ -408,21 +408,22 @@ namespace navmesh::app
             {
                 if (options.rebuildScope != RebuildScope::Cell || !options.cellSelection.empty())
                 {
-                    throw std::invalid_argument(
-                        "Choose one rebuild scope: use --cells, --rebuild-plugin, or --rebuild-load-order separately.");
+                    throw std::invalid_argument("Choose one rebuild scope: use --cells, --rebuild-plugin, "
+                                                "--rebuild-load-order or --repair-load-order separately.");
                 }
                 options.rebuildScope = RebuildScope::Plugin;
                 options.affectedPlugin = argv[++index];
                 options.generateCandidate = true;
             }
-            else if (argument == "--rebuild-load-order")
+            else if (argument == "--rebuild-load-order" || argument == "--repair-load-order")
             {
                 if (options.rebuildScope != RebuildScope::Cell || !options.cellSelection.empty())
                 {
-                    throw std::invalid_argument(
-                        "Choose one rebuild scope: use --cells, --rebuild-plugin, or --rebuild-load-order separately.");
+                    throw std::invalid_argument("Choose one rebuild scope: use --cells, --rebuild-plugin, "
+                                                "--rebuild-load-order or --repair-load-order separately.");
                 }
-                options.rebuildScope = RebuildScope::LoadOrder;
+                options.rebuildScope =
+                    argument == "--repair-load-order" ? RebuildScope::Repair : RebuildScope::LoadOrder;
                 options.generateCandidate = true;
             }
             else
