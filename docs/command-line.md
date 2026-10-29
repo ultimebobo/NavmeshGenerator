@@ -114,7 +114,8 @@ authored geometry intact while other targets continue. `complete_with_skips` and
 `--cell-error-policy continue|stop` selects recovery or immediate failure and is
 persisted as **Cell error policy** in the desktop. Required-geometry skips use
 `skipped_extraction_failed` and `extraction_failed_cells`; deduplicated evidence is
-in `asset_failures`. Global linking and writer failures still stop export.
+in `asset_failures`. Cell-attributed linking failures can be skipped after complete
+candidate rollback; graph ownership, storage and writer failures still stop export.
 The patch filename gains a numeric suffix if its default name is already active
 in the load order, so an earlier generated plugin can remain a valid dependency.
 Selected persistent worldspace containers are logged as `skipped_persistent_cell`;

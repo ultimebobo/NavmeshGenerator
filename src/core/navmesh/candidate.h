@@ -8,11 +8,26 @@
 #include <optional>
 #include <ostream>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace navmesh::core
 {
+    /// Recoverable geometry-processing failure attributable to one opaque CELL key.
+    /// Ownership errors and allocation failures must not use this exception.
+    class CandidateCellError : public std::runtime_error
+    {
+      public:
+        /// Retain the failed CELL key and diagnostic for rollback by the batch coordinator.
+        CandidateCellError(std::uint32_t failedCell, const std::string &reason)
+            : std::runtime_error(reason), cellId(failedCell)
+        {
+        }
+        /// CELL whose candidate must be discarded before retrying complete-set reconciliation.
+        std::uint32_t cellId;
+    };
+
     /// Maximum perpendicular deviation of an authored portal edge from its exterior CELL border,
     /// in Skyrim world units. Only matched portal endpoints may extend beyond candidate cell bounds.
     inline constexpr float AuthoredBorderTolerance{4.0F};
@@ -253,14 +268,13 @@ namespace navmesh::core
      * @param neighbors Existing NAVMs in adjacent cells of the same worldspace.
      * @param authored Winning selected-cell NAVMs. Their resolved exterior portals are required
      * crossings, retaining an exact reciprocal edge and the neighboring triangle destination.
-     * Required crossings that cannot be repaired invalidate the candidate, even when empty,
-     * except for crossings positively identified as excluded obstacle floors by sourceScene.
+     * Crossings that cannot be repaired are omitted with warnings, including for empty candidates.
      * @param deferUnlinkedBorders Preserve unpaired seams and all components for batch linking.
      * Authored partitions and required crossings are repaired before returning;
-     * matched portals and every required crossing are validated; final seam/reachability filtering is deferred.
+     * matched portals are validated and missing authored crossings reported; final seam/reachability filtering is deferred.
      * @param sourceScene Optional generation input with complete triangle provenance. A crossing
      * with no surviving boundary floor and positive obstacle-top support at its authored interior
-     * anchor is closed with a warning. Missing or unsupported source evidence does not waive a crossing.
+     * anchor is classified as excluded obstacle floor with a warning. Other lost crossings remain explicit warnings.
      * Nearby authoritative floors can also support bounded authored-neighbor fan edits when a
      * required crossing cannot retain its complete original edge. Those edits are recorded for export.
      * @param deferReachability Preserve all components for subsequent RemoveCandidateIslands filtering.
@@ -268,8 +282,8 @@ namespace navmesh::core
      * @param waterHeight Resolved finite exterior water-surface Z in Skyrim world units. Required
      * authored swimming crossings below this plane can use supported submerged floor within their slope envelope.
      * @return Number of reciprocal border portals added. candidate.topology reports
-     * dangling targets, endpoint mismatches, reused portals, unmatched border vertices
-     * or remaining open CELL seams.
+     * dangling targets, endpoint mismatches and reused portals. Unmatched border vertices
+     * and remaining open CELL seams produce warnings.
      * @warning Complete authored edges at compatible heights are joined; containing generated
      * edges may be subdivided and compatible collinear generated subdivisions coalesced.
      * Inward offsets trim boundary fans; outward extensions obey distance, step, slope, and welding limits. Authored
@@ -280,7 +294,7 @@ namespace navmesh::core
      * Fan subdivisions require a strictly interior point in stored float coordinates.
      * Thin triangles without such a point retain their floor and retract through exact
      * coincident endpoint uses, preserving distinct vertices within the weld tolerance.
-     * Unmovable seam vertices remain validation failures rather than creating invalid triangles.
+     * Unmovable seam vertices retain valid floor and leave an open boundary with a warning.
      * The agent footprint and weld tolerance bound the inward movement.
      * Immediate linking without deferred reachability retains only shared-edge components
      * with a real border portal or matched door; a border alone is not an anchor.
@@ -317,6 +331,13 @@ namespace navmesh::core
                                                      std::optional<float> waterHeight = std::nullopt);
     /// Check candidate polygon topology without modifying its geometry.
     [[nodiscard]] CandidateTopology ValidateCandidateTopology(const CandidateNavMesh &candidate);
+    /** Normalize derived bookkeeping before validating a generated candidate.
+     * @param candidate World-space mesh with complete polygon source evidence. Removes unused vertices,
+     * remapping polygon indices, and rebuilds invalid region membership, adjacency and contours.
+     * Polygon identities, doors and portals are retained; door region joins are refreshed.
+     * Invalid geometry or incomplete source evidence remains a topology failure and is not repaired.
+     */
+    void RepairCandidateBookkeeping(CandidateNavMesh &candidate);
     /** Rebuild adjacency, boundary contours, region areas, output counts and topology after mesh edits.
      * @param candidate World-space mesh with complete polygon evidence and region membership.
      * Polygon and vertex identities are preserved; portal and door indices are not remapped.

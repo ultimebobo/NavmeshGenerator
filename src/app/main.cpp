@@ -1393,7 +1393,7 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                     "For unsupported record or linking failures, include this reason when reporting the issue.",
                     error, PathUtf8(std::filesystem::absolute(options.output))));
             }
-            // Persist lossy traversal diagnostics even when inspection artifacts were written before export.
+            // Persist generation and export diagnostics even when inspection artifacts preceded finalization.
             std::ofstream generationReport(options.output / "generation-report.json", std::ios::trunc);
             generationReport << "{\n  \"metadata\": " << navmesh::reproducibility::ToJson(metadata, "    ") << ",\n";
             generationReport << std::format("  \"form_id\":\"{:08X}\",\"status\":\"complete\",\"export_warnings\":[",
@@ -1404,6 +1404,12 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                                  << navmesh::reproducibility::EscapeJson(exportWarnings[index]) << '"';
                 std::cout << "Warning: " << exportWarnings[index] << '\n';
                 update(89, "Warning: " + exportWarnings[index]);
+            }
+            generationReport << "],\"generation_warnings\":[";
+            for (std::size_t index{}; index < candidate->warnings.size(); ++index)
+            {
+                generationReport << (index ? "," : "") << '"'
+                                 << navmesh::reproducibility::EscapeJson(candidate->warnings[index]) << '"';
             }
             generationReport << "]\n}\n";
             generationReport.close();

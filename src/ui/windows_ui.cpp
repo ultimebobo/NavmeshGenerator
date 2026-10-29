@@ -687,7 +687,9 @@ namespace
             }
             Help("Continue skips targets whose required geometry is unavailable and preserves their authored navmesh. "
                  "Unknown selection footprints exclude their worldspace or interior. Stop aborts generation on a "
-                 "recoverable failure. Input, memory, storage and global navigation-validation failures always stop "
+                 "recoverable failure. Continue also retries cell-local border and reachability failures after "
+                 "restoring the remaining candidates. Input, memory, storage, graph ownership and export-validation "
+                 "failures stop "
                  "export.");
             ImGui::SeparatorText("Recast generation");
             ImGui::Checkbox("Tag water and preferred path triangles (experimental)", &options.tagTriangles);

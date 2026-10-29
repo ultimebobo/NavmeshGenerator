@@ -769,7 +769,8 @@ namespace navmesh::core
         return height;
     }
 
-    std::size_t BuildCandidateLedgeLinks(CandidateNavMesh &candidate)
+    /// Plan on a private candidate so optional partition failures never expose partially edited floors.
+    static std::size_t BuildCandidateLedgeLinksImpl(CandidateNavMesh &candidate)
     {
         const auto existingLinks = candidate.ledgeLinks;
         candidate.ledgeLinks.clear();
@@ -994,18 +995,71 @@ namespace navmesh::core
         {
             return 0;
         }
-        const auto linkedEdges = PartitionDropEdges(candidate, intervals);
-        for (std::size_t index{}; index < selected.size(); ++index)
+        const auto partition = [&](const std::vector<EdgeInterval> &spans)
         {
-            const auto [upperPolygon, upperEdge] = linkedEdges[index * 2];
-            const auto [lowerPolygon, lowerEdge] = linkedEdges[index * 2 + 1];
-            candidate.ledgeLinks.push_back({upperPolygon, lowerPolygon, upperEdge, lowerEdge});
+            auto trial = candidate;
+            const auto linkedEdges = PartitionDropEdges(trial, spans);
+            for (std::size_t index{}; index < spans.size() / 2; ++index)
+            {
+                const auto [upperPolygon, upperEdge] = linkedEdges[index * 2];
+                const auto [lowerPolygon, lowerEdge] = linkedEdges[index * 2 + 1];
+                trial.ledgeLinks.push_back({upperPolygon, lowerPolygon, upperEdge, lowerEdge});
+            }
+            RepairCandidateBookkeeping(trial);
+            if (!trial.topology.valid)
+            {
+                throw std::runtime_error(trial.topology.findings.front());
+            }
+            return trial;
+        };
+        try
+        {
+            candidate = partition(intervals);
         }
-        RefreshCandidateTopology(candidate);
-        if (!candidate.topology.valid)
+        catch (const std::runtime_error &)
         {
-            throw std::runtime_error(candidate.topology.findings.front());
+            // Retry cumulative accepted proposals in original polygon space. Each trial starts from the same
+            // floor, so failed cuts cannot corrupt later proposals or shift their source indices.
+            std::vector<EdgeInterval> accepted;
+            auto retained = candidate;
+            std::vector<std::string> warnings;
+            for (std::size_t index{}; index < selected.size(); ++index)
+            {
+                auto proposed = accepted;
+                proposed.push_back(intervals[index * 2]);
+                proposed.push_back(intervals[index * 2 + 1]);
+                try
+                {
+                    retained = partition(proposed);
+                    accepted = std::move(proposed);
+                }
+                catch (const std::runtime_error &error)
+                {
+                    warnings.push_back("Dropped generated ledge from polygon " +
+                                       std::to_string(selected[index].upper.polygon) + " to polygon " +
+                                       std::to_string(selected[index].lower.polygon) + ": " + error.what());
+                }
+            }
+            retained.warnings.insert(retained.warnings.end(), warnings.begin(), warnings.end());
+            candidate = std::move(retained);
         }
         return candidate.ledgeLinks.size();
+    }
+
+    std::size_t BuildCandidateLedgeLinks(CandidateNavMesh &candidate)
+    {
+        auto revised = candidate;
+        auto existing = std::move(revised.ledgeLinks);
+        revised.ledgeLinks.clear();
+        RepairCandidateBookkeeping(revised);
+        if (!revised.topology.valid)
+        {
+            throw std::invalid_argument("Drop construction requires valid floor topology: " +
+                                        revised.topology.findings.front());
+        }
+        revised.ledgeLinks = std::move(existing);
+        const auto count = BuildCandidateLedgeLinksImpl(revised);
+        candidate = std::move(revised);
+        return count;
     }
 } // namespace navmesh::core

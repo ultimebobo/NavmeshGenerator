@@ -3780,8 +3780,8 @@ namespace
         }
     }
 
-    /// Required crossings remain mandatory even while generated neighbors await batch reconciliation.
-    void ValidateRequiredBorderPortals(
+    /// Report authored access lost during regeneration without inventing an unsupported crossing.
+    void ReportMissingBorderPortals(
         CandidateNavMesh &candidate,
         const std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint8_t>, BorderCavityLimits> &required)
     {
@@ -3795,9 +3795,14 @@ namespace
                                         link.neighborEdge == edge;
                              }))
             {
-                candidate.topology.valid = false;
-                candidate.topology.findings.push_back(
-                    std::format("Authored border portal {:08X}:{}:{} was not retained", id, polygon, edge));
+                const auto warning =
+                    std::format("Dropped authored border portal {:08X}:{}:{}: no compatible generated crossing.", id,
+                                polygon, edge);
+                if (std::find(candidate.warnings.begin(), candidate.warnings.end(), warning) ==
+                    candidate.warnings.end())
+                {
+                    candidate.warnings.push_back(warning);
+                }
             }
         }
     }
@@ -4381,7 +4386,7 @@ namespace
         }
     }
 
-    /// Reject dangling, reused, or geometrically incompatible portals and any remaining open CELL seam.
+    /// Reject invalid saved portals; unmatched CELL boundaries describe lost coverage rather than corrupt links.
     template <class Border>
     void ValidateStitchedBorders(CandidateNavMesh &candidate, const std::vector<NavMesh> &neighbors,
                                  const Border &border, bool requireClosedSeams = true)
@@ -4435,8 +4440,7 @@ namespace
                            candidate.mesh.vertices[face.vertices[(edge + 1) % 3]],
                            candidate.profile.weldTolerance) >= 0)
                 {
-                    candidate.topology.findings.push_back(
-                        std::format("polygon {} has an unlinked CELL border edge", polygon));
+                    candidate.warnings.push_back(std::format("polygon {} has an unlinked CELL border edge", polygon));
                 }
             }
         }
@@ -4445,7 +4449,13 @@ namespace
             if (border(vertex, vertex, candidate.profile.weldTolerance) >= 0 &&
                 !portalVertices.contains(coordinate(vertex)))
             {
-                candidate.topology.findings.push_back("CELL border vertex has no matched neighboring endpoint");
+                const std::string warning =
+                    "CELL border vertex has no matched neighboring endpoint; boundary left open.";
+                if (std::find(candidate.warnings.begin(), candidate.warnings.end(), warning) ==
+                    candidate.warnings.end())
+                {
+                    candidate.warnings.push_back(warning);
+                }
             }
         }
         candidate.topology.valid = candidate.topology.findings.empty();
@@ -5059,7 +5069,7 @@ namespace navmesh::core
             markRequiredCrossings();
             RefreshCandidateTopology(candidate);
             ValidateStitchedBorders(candidate, neighbors, border, false);
-            ValidateRequiredBorderPortals(candidate, required);
+            ReportMissingBorderPortals(candidate, required);
             return candidate.borderLinks.size() - initialLinks;
         }
         RetractUnlinkedBorderVertices(candidate, border, false);
@@ -5097,7 +5107,7 @@ namespace navmesh::core
         candidate.statistics.outputPolygons = candidate.mesh.polygons.size();
         candidate.topology = ValidateCandidateTopology(candidate);
         ValidateStitchedBorders(candidate, neighbors, border);
-        ValidateRequiredBorderPortals(candidate, required);
+        ReportMissingBorderPortals(candidate, required);
         return candidate.borderLinks.size() - initialLinks;
     }
 
@@ -5756,8 +5766,140 @@ namespace navmesh::core
             result.warnings.push_back(
                 "No candidate polygons survived source, slope, clearance, radius, and region filters.");
         }
-        result.topology = ValidateCandidateTopology(result);
+        RepairCandidateBookkeeping(result);
         return result;
+    }
+
+    void RepairCandidateBookkeeping(CandidateNavMesh &candidate)
+    {
+        const auto count = candidate.mesh.polygons.size();
+        if (candidate.polygonSourceTriangles.size() != count ||
+            candidate.polygonContributingTriangles.size() != count ||
+            std::any_of(candidate.polygonContributingTriangles.begin(), candidate.polygonContributingTriangles.end(),
+                        [](const auto &sources) { return sources.empty(); }) ||
+            std::any_of(candidate.mesh.vertices.begin(), candidate.mesh.vertices.end(), [](Vec3 point)
+                        { return !std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z); }) ||
+            std::any_of(candidate.mesh.polygons.begin(), candidate.mesh.polygons.end(),
+                        [&](const auto &face)
+                        {
+                            return std::any_of(face.vertices.begin(), face.vertices.end(),
+                                               [&](auto vertex) { return vertex >= candidate.mesh.vertices.size(); });
+                        }))
+        {
+            candidate.topology = ValidateCandidateTopology(candidate);
+            return;
+        }
+
+        // Contours are derived from final adjacency; discard stale vertex joins before compaction.
+        candidate.contours.clear();
+        std::vector<bool> used(candidate.mesh.vertices.size());
+        for (const auto &face : candidate.mesh.polygons)
+        {
+            for (const auto vertex : face.vertices)
+            {
+                used[vertex] = true;
+            }
+        }
+        if (std::find(used.begin(), used.end(), false) != used.end())
+        {
+            CompactBorderVertices(candidate);
+        }
+        BuildAdjacency(candidate.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
+        std::vector<std::uint32_t> membership(count);
+        bool rebuild{};
+        for (std::size_t index{}; index < candidate.regions.size(); ++index)
+        {
+            const auto &region = candidate.regions[index];
+            rebuild |= region.id != index;
+            for (const auto polygon : region.polygons)
+            {
+                if (polygon >= count)
+                {
+                    rebuild = true;
+                }
+                else
+                {
+                    ++membership[polygon];
+                }
+            }
+        }
+        rebuild |= std::any_of(membership.begin(), membership.end(), [](auto uses) { return uses != 1; });
+        if (rebuild)
+        {
+            // Regions summarize connected floor; source evidence stays attached to its original polygon.
+            const auto original = std::move(candidate.regions);
+            candidate.regions.clear();
+            std::vector<bool> seen(count);
+            for (std::uint32_t start{}; start < count; ++start)
+            {
+                if (seen[start])
+                {
+                    continue;
+                }
+                CandidateRegion region{.id = static_cast<std::uint32_t>(candidate.regions.size())};
+                std::vector<std::uint32_t> pending{start};
+                seen[start] = true;
+                while (!pending.empty())
+                {
+                    const auto polygon = pending.back();
+                    pending.pop_back();
+                    region.polygons.push_back(polygon);
+                    const auto &sources = candidate.polygonContributingTriangles[polygon];
+                    region.sourceTriangles.insert(region.sourceTriangles.end(), sources.begin(), sources.end());
+                    for (const auto neighbor : candidate.mesh.polygons[polygon].neighbors)
+                    {
+                        if (neighbor != NoNeighbor && !seen[neighbor])
+                        {
+                            seen[neighbor] = true;
+                            pending.push_back(neighbor);
+                        }
+                    }
+                }
+                const std::set<std::uint32_t> members(region.polygons.begin(), region.polygons.end());
+                for (const auto &source : original)
+                {
+                    if (std::any_of(source.polygons.begin(), source.polygons.end(),
+                                    [&](auto polygon) { return members.contains(polygon); }))
+                    {
+                        region.geometrySources.insert(region.geometrySources.end(), source.geometrySources.begin(),
+                                                      source.geometrySources.end());
+                    }
+                }
+                for (auto *values : {&region.sourceTriangles, &region.geometrySources})
+                {
+                    std::sort(values->begin(), values->end());
+                    values->erase(std::unique(values->begin(), values->end()), values->end());
+                }
+                candidate.regions.push_back(std::move(region));
+            }
+            candidate.warnings.push_back("Rebuilt generated region membership from floor adjacency.");
+        }
+        std::vector<std::uint32_t> regionOf(count);
+        for (auto &region : candidate.regions)
+        {
+            region.exitFormIds.clear();
+            for (const auto polygon : region.polygons)
+            {
+                regionOf[polygon] = region.id;
+            }
+        }
+        for (auto &exit : candidate.exits)
+        {
+            exit.region.reset();
+            if (exit.polygon && *exit.polygon < count)
+            {
+                exit.region = regionOf[*exit.polygon];
+                candidate.regions[*exit.region].exitFormIds.push_back(exit.referenceId);
+            }
+        }
+        for (const auto &link : candidate.borderLinks)
+        {
+            if (link.polygon < count)
+            {
+                candidate.regions[regionOf[link.polygon]].reachesBorder = true;
+            }
+        }
+        RefreshCandidateTopology(candidate);
     }
 
     void RefreshCandidateTopology(CandidateNavMesh &candidate)
@@ -5806,6 +5948,13 @@ namespace navmesh::core
     {
         CandidateTopology result;
         const auto &mesh = candidate.mesh;
+        if (std::any_of(mesh.vertices.begin(), mesh.vertices.end(), [](Vec3 point)
+                        { return !std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z); }))
+        {
+            result.findings.push_back("candidate has nonfinite coordinates");
+            result.valid = false;
+            return result;
+        }
         if (candidate.polygonSourceTriangles.size() != mesh.polygons.size())
         {
             result.findings.push_back("polygon provenance count mismatch");

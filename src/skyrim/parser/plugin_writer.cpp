@@ -1705,11 +1705,14 @@ bool navmesh::skyrim::WriteNavmeshOverrides(
                     });
                 if (!matched && !closed)
                 {
-                    error = std::format("An authored navigation crossing is missing without verified obstacle-floor "
-                                        "closure: CELL {:08X}, NAVM {:08X}:{}:{} -> CELL {:08X}, NAVM {:08X}:{}.",
+                    if (warnings)
+                    {
+                        warnings->push_back(
+                            std::format("Dropped authored navigation crossing: CELL {:08X}, NAVM {:08X}:{}:{} -> "
+                                        "CELL {:08X}, NAVM {:08X}:{}; no compatible generated crossing.",
                                         cell.id, mesh.id, portal.polygon, portal.edge, *destination->cellFormId,
-                                        portal.navmeshId, portal.targetPolygon);
-                    return false;
+                                        portal.navmeshId, portal.targetPolygon));
+                    }
                 }
             }
             if (navm->groupHeaders.empty() || navm->cellFormId != cell.id)
@@ -2374,7 +2377,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(
                 metadataSources, linkedMesh,
                 std::max(candidate.profile.weldTolerance,
                          candidate.profile.agentRadius + 2 * candidate.recastSettings.cellSize),
-                auxiliary, error))
+                auxiliary, error, warnings))
         {
             return false;
         }

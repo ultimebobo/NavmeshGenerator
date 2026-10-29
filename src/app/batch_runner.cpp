@@ -805,6 +805,11 @@ namespace navmesh::app::detail
                 {
                     out << (finding ? "," : "") << "\"" << JsonEscape(results[i].diagnostics[finding]) << "\"";
                 }
+                out << "],\"generation_warnings\":[";
+                for (std::size_t warning{}; warning < results[i].candidate.warnings.size(); ++warning)
+                {
+                    out << (warning ? "," : "") << '"' << JsonEscape(results[i].candidate.warnings[warning]) << '"';
+                }
                 out << "],\"asset_failure_ids\":[";
                 for (std::size_t failure{}; failure < results[i].assetFailures.size(); ++failure)
                 {
@@ -1325,7 +1330,16 @@ namespace navmesh::app::detail
         }
         // Refine shared seams only after the complete generated target set is available.
         progress(90, "Reconciling CELL borders and filtering reachable navigation");
-        if (const auto error = ReconcileBatchBorders(results, resolved); !error.empty())
+        std::set<std::uint32_t> reconciliationTargets;
+        for (const auto &result : results)
+        {
+            if (result.status == "generated")
+            {
+                reconciliationTargets.insert(result.cell->id);
+            }
+        }
+        if (const auto error = ReconcileBatchBorders(results, resolved, options.cellErrorPolicy == "continue");
+            !error.empty())
         {
             return fail(error);
         }
@@ -1333,6 +1347,14 @@ namespace navmesh::app::detail
         generatedPolygons = 0;
         for (auto &result : results)
         {
+            if (result.status == "skipped_generation_failed" && reconciliationTargets.contains(result.cell->id))
+            {
+                std::cerr << result.error << "; skipped reconciliation; authored NAVM retained\n";
+                if (events)
+                {
+                    events({.kind = app::RunEventKind::Warning, .percent = 90, .message = result.error});
+                }
+            }
             if (result.status == "generated")
             {
                 core::TagCandidateTriangles(result.candidate, result.cell->navMeshes, result.cell->waterHeight,
@@ -1425,15 +1447,14 @@ namespace navmesh::app::detail
         {
             return fail("Cannot finalize batch-report.json");
         }
-        const auto status =
-            std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; "
-                        "generated polygons: {}; generation failures: {}; extraction failures: {}",
-                        targets.size(), generatedByCell.size(), targets.size() - generatedByCell.size(),
-                        originalPolygons, generatedPolygons, generationFailures, extractionFailures) +
-            (missingModelWarning.empty() ? "" : "; " + missingModelWarning) +
-            (exportWarnings.empty()
-                 ? ""
-                 : std::format("; dropped authored ledge entries: {} (see batch-report.json)", exportWarnings.size()));
+        const auto status = std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; "
+                                        "generated polygons: {}; generation failures: {}; extraction failures: {}",
+                                        targets.size(), generatedByCell.size(), targets.size() - generatedByCell.size(),
+                                        originalPolygons, generatedPolygons, generationFailures, extractionFailures) +
+                            (missingModelWarning.empty() ? "" : "; " + missingModelWarning) +
+                            (exportWarnings.empty()
+                                 ? ""
+                                 : std::format("; export warnings: {} (see batch-report.json)", exportWarnings.size()));
         std::cout << status << '\n';
         if (progress)
         {

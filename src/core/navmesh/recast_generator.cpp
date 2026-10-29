@@ -1409,7 +1409,7 @@ namespace navmesh::core
         {
             result.warnings.push_back("No walkable polygons remain after Recast generation.");
         }
-        result.topology = ValidateCandidateTopology(result);
+        RepairCandidateBookkeeping(result);
         return result;
     }
 } // namespace navmesh::core

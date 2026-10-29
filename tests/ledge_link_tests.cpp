@@ -465,6 +465,52 @@ namespace
 void TestLedgeLinkFixture()
 {
     using namespace navmesh::core;
+    {
+        // At this world-coordinate precision a thin departure face has no representable float centroid.
+        // Optional drop subdivision must leave the valid original floor intact.
+        constexpr float x = 33554432;
+        CandidateNavMesh thin;
+        thin.mesh.vertices = {{x, 0, 160},     {x + 4, 160, 160}, {x, 320, 160},   {x - 16, 0, 0},
+                              {x + 160, 0, 0}, {x + 160, 320, 0}, {x - 16, 320, 0}};
+        thin.mesh.polygons = {{.vertices = {0, 1, 2}}, {.vertices = {3, 4, 5}}, {.vertices = {3, 5, 6}}};
+        thin.mesh.vertices.insert(thin.mesh.vertices.end(), {{x + 512, 0, 160},
+                                                             {x + 768, 0, 160},
+                                                             {x + 768, 320, 160},
+                                                             {x + 512, 320, 160},
+                                                             {x + 768, 0, 0},
+                                                             {x + 1024, 0, 0},
+                                                             {x + 1024, 320, 0},
+                                                             {x + 768, 320, 0}});
+        thin.mesh.polygons.insert(thin.mesh.polygons.end(), {{.vertices = {7, 8, 9}},
+                                                             {.vertices = {7, 9, 10}},
+                                                             {.vertices = {11, 12, 13}},
+                                                             {.vertices = {11, 13, 14}}});
+        thin.polygonSourceTriangles = {0, 1, 2};
+        thin.polygonContributingTriangles = {{0}, {1}, {2}};
+        for (std::size_t polygon = 3; polygon < thin.mesh.polygons.size(); ++polygon)
+        {
+            thin.polygonSourceTriangles.push_back(polygon);
+            thin.polygonContributingTriangles.push_back({polygon});
+        }
+        thin.regions = {{.id = 0, .polygons = {0}},
+                        {.id = 1, .polygons = {1, 2}},
+                        {.id = 2, .polygons = {3, 4}},
+                        {.id = 3, .polygons = {5, 6}}};
+        thin.profile.agentRadius = 0.1F;
+        thin.ledgeGeometry.vertices = thin.mesh.vertices;
+        for (const auto &face : thin.mesh.polygons)
+        {
+            thin.ledgeGeometry.triangles.push_back({face.vertices});
+        }
+        RefreshCandidateTopology(thin);
+        assert(thin.topology.valid);
+        const auto departure = thin.mesh.polygons.front().vertices;
+        (void)BuildCandidateLedgeLinks(thin);
+        assert(thin.topology.valid);
+        assert(std::any_of(thin.warnings.begin(), thin.warnings.end(), [](const auto &warning)
+                           { return warning.find("Dropped generated ledge") != std::string::npos; }));
+        assert(!thin.ledgeLinks.empty() && thin.mesh.polygons.front().vertices == departure);
+    }
     const auto scene = BuildLedgeScene();
     auto candidate = Generate(scene);
     CheckScene(candidate);

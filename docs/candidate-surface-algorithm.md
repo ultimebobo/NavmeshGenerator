@@ -6,7 +6,10 @@ After seam reconciliation, automatic ledge detection uses generated floors and
 physical collision independently of authored navigation. It clips overlapping
 boundary spans and can insert receiving edges inside lower floor triangles,
 preserving the floor planes and connectivity around interior port endpoints.
-Matched external portals remain pinned. Ordinary floor paths already satisfy
+Matched external portals remain pinned. Proposed ledge partitions commit only after
+topology validation; unrepresentable proposals are omitted with warnings while
+independent valid drops and the supporting floor survive. Allocation failures stop
+generation. Ordinary floor paths already satisfy
 traversal; separate floors receive clear downward connections before island
 compaction. Validated descents extend an anchored network downward from reachable
 departure floors, including chains of descents. A landing in that network cannot
@@ -317,20 +320,25 @@ construction. Removed seam height detail can become a bounded interior sample
 when rim-only triangulation cannot preserve the floor's slope envelope. Cavity
 growth includes incident triangles reaching the repair band through a vertex;
 their centroids need not be inside it. Source contributors, region membership, door anchors, and other portals
-are remapped transactionally. Missing required crossings fail final validation
-and prevent that candidate's plugin export, including when no candidate floor survives.
+are remapped transactionally. Missing authored crossings produce warnings and
+leave open boundaries, including when no candidate floor survives.
 The shared Cell runner supplies generation input to identify authored crossings
 onto excluded obstacle collision. When no compatible generated boundary floor
 survives, positive upward collision support at both interior anchor samples closes
 that crossing with a warning. Render fallback, untagged collision and missing source
-evidence cannot waive a required crossing. Plugin export removes its incoming links.
+evidence cannot establish obstacle-floor closure. Plugin export removes incoming
+links for every omitted crossing.
 At shared CELL corners, separate authored endpoint heights join through internal
 step edges. Strip samples move into supported floor within the strip inset and
 share a slope-bounded plane; the interior floor retains its sampled heights.
+Bookkeeping repair compacts unused vertices and rebuilds invalid region membership,
+door region joins, adjacency and contours before revalidation. Incomplete source
+evidence and invalid geometry remain failures.
 Single-cell generation fails export on invalid topology. Plugin and load-order
 batches skip cell-local generation/topology failures and preserve those cells as
 authored neighbors. Complete successful candidates are reconciled together;
-invalid global seam topology stops export.
+cell-attributed reconciliation failures can be skipped after complete graph rollback
+under the continue error policy. Unattributable graph errors stop export.
 Compatible collinear generated subdivisions are coalesced
 by retriangulating their incident fans while preserving the interior rim and
 horizontal footprint. Mixed regions or flags, existing portal triangles, invalid
@@ -361,15 +369,15 @@ tolerance bounding the displacement. Matched endpoints remain pinned. Inward
 movement follows exact coincident vertex uses, keeping distinct thin-edge
 endpoints separate even when they fall within one weld-tolerance bucket. Moves
 must preserve positive area, the affected floor slope envelope and existing portals;
-an unmovable seam remains a coverage failure. Each nonplanar fan can try individual
+an unmovable seam retains valid floor with an open-boundary warning. Each nonplanar fan can try individual
 floor-centroid directions when its average would increase the slope envelope.
 Fan slope comparisons allow floating-point roundoff.
-Every remaining border vertex must equal a neighboring portal endpoint.
+Unmatched border vertices and edges describe incomplete connectivity and produce warnings.
 The shared reachability filter retains the largest connected floor plus components
 with a real neighboring portal or matched door. Region, source, door, vertex and portal indices are compacted;
 contours are rebuilt from the final boundaries. Stitch validation requires exact
-reversed endpoint equality, unique consuming edges and complete coverage of every
-remaining CELL seam. No portal is invented across unsupported gaps.
+reversed endpoint equality and unique consuming edges for every saved portal.
+No portal is invented across unsupported gaps.
 Entrance positions appear as orange markers, including unmatched entrances.
 See the [glossary](glossary.md) for the Creation Kit border-bar interpretation
 and the distinction between neighboring geometry and saved return links.
@@ -379,7 +387,7 @@ WRLD inheritance when the child has no LAND. Authored references and NAVMs remai
 in their owning worldspace. Engine default water elevations resolve through the
 world hierarchy rather than becoming literal water planes.
 
-Required crossings are mandatory for single cells and for the outside boundary of
+Authored crossings are repair targets for single cells and for the outside boundary of
 any generated selection. Both authored floor triangles bound the repair cavity;
 height variation follows the selected authored floor, with resolved submerged
 swimming crossings using the supported water column. Continuous components are
@@ -401,7 +409,7 @@ extend an existing generated fan within that same halo. No authored floor is cop
 into the generated interior. Candidates carry original-position checked edit plans
 in `authored_border_vertex_edits`; export verifies and merges those plans and
 rebuilds edited neighbor spatial grids without renumbering their geometry or
-connection tables. Failure to retain a required crossing remains an error.
+connection tables. A crossing that remains missing is omitted with a warning.
 
 Plugin and load-order scopes retain all surviving Recast floor components, including
 isolated interiors and exterior borders awaiting generated neighbors. Only untouched

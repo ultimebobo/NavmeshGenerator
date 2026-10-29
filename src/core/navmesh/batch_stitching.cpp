@@ -740,13 +740,15 @@ namespace navmesh::core
                 {
                     lookups.push_back(ApplyPartitions(*cells[index].candidate, cuts[index]));
                 }
-                catch (const std::exception &error)
+                catch (const std::runtime_error &error)
                 {
-                    throw std::runtime_error(std::format("CELL {:08X}: {}", cells[index].cellId, error.what()));
+                    throw CandidateCellError(cells[index].cellId,
+                                             std::format("CELL {:08X}: {}", cells[index].cellId, error.what()));
                 }
                 if (!cells[index].candidate->topology.valid)
                 {
-                    throw std::runtime_error(std::format("CELL {:08X}: {}", cells[index].cellId,
+                    throw CandidateCellError(cells[index].cellId,
+                                             std::format("CELL {:08X}: {}", cells[index].cellId,
                                                          cells[index].candidate->topology.findings.front()));
                 }
             }

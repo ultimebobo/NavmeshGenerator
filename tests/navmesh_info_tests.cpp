@@ -320,6 +320,16 @@ namespace
         assert(error.find("same generated vertex") != std::string::npos);
         source.subrecords.back().data = Bytes{4, 0};
         assert(!detail::RebuildNavmeshMetadata(sources, generated, 0, output, error));
+
+        source.subrecords.back().data = excluded;
+        generated.vertices = {authored.vertices[1]};
+        std::vector<std::string> warnings;
+        assert(detail::RebuildNavmeshMetadata(sources, generated, 0, output, error, &warnings));
+        assert(warnings.size() == 1 && warnings.front().find("PNAM preferred connector") != std::string::npos);
+        assert(output.size() == 18 && std::string(output.begin() + 10, output.begin() + 14) == "NNAM");
+        generated.vertices.clear();
+        assert(!detail::RebuildNavmeshMetadata(sources, generated, 0, output, error));
+        assert(error.find("NNAM") != std::string::npos);
     }
 
     void TestReferenceSafety(const std::filesystem::path &root)

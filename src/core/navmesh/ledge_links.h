@@ -27,8 +27,9 @@ namespace navmesh::core
      * reusing valid existing ports. Authored navigation is neither read nor used as a generation constraint.
      * @return Number of paired edges. Occupied portals, unsupported or obstructed landings and unsafe falls
      * supply no link; ordinary floor components need no additional drop connection.
-     * @throws std::runtime_error When a planned partition cannot retain valid topology.
-     * @warning A failed partition can leave the candidate partially edited; discard it instead of exporting.
+     * Unrepresentable partitions are omitted with warnings; independent valid proposals are retained.
+     * @throws std::invalid_argument For invalid input floor topology after bookkeeping repair.
+     * Allocation failures propagate. Exceptions leave the supplied candidate unchanged.
      */
     std::size_t BuildCandidateLedgeLinks(CandidateNavMesh &candidate);
 } // namespace navmesh::core

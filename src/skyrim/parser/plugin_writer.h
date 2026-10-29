@@ -25,7 +25,7 @@ namespace navmesh::skyrim
      * when no walkable floor survives. Generated border links identify destination CELLs
      * and generated triangles; all primary NAVM identities are allocated before writing.
      * Each generated portal must have exact reversed endpoints and a unique return link.
-     * Authored crossings require a generated replacement or explicit excluded-obstacle evidence.
+     * Missing authored crossings are omitted with warnings; obsolete incoming links are cleared.
      * Matched authored portal endpoints may extend beyond nominal CELL bounds by
      * core::AuthoredBorderTolerance, or the profile's border halo for explicit authored crossings;
      * other candidate vertices must stay inside.
@@ -59,14 +59,14 @@ namespace navmesh::skyrim
      * @param autoSplit Automatically partition navigation patches that exceed the reduced master limit.
      * Exports requiring both splitting and newly allocated NAVM identities fail explicitly; copies stay single-file.
      * @param writtenPaths Optional complete list of published plugins, in installation order; cleared on failure.
-     * @param warnings Optional diagnostics for authored ledge entries with no equivalent generated route,
+     * @param warnings Optional diagnostics for dropped authored ledges, ordinary crossings and preferred connectors,
      * including incoming entries from untouched NAVMs. Cleared on entry; may contain findings on failure.
      * @return True after read-back and validation against the effective input navigation graph.
      * @note Reciprocal intra-cell ledges may use the nearest surviving authored landing ring
      * when the lip is carved away. Floor and downward routes, including paths through neighboring cells,
      * supersede authored ledges. Authored ledges without replacement routes are omitted with warnings;
      * their incoming references are cleared, leaving open boundaries. Generated ledges remain validated.
-     * @warning Unrepresentable connector constraints, localized reference resources, unknown
+     * @warning Unrepresentable connector exclusions, contradictory constraints, localized reference resources, unknown
      * reference fields, enable/disable portals and unknown traversal types reject export instead of being discarded.
      */
     [[nodiscard]] bool WriteNavmeshOverrides(const std::filesystem::path &outputDirectory,
@@ -92,7 +92,7 @@ namespace navmesh::skyrim
      * @param error Human-readable reason when the source cannot be safely serialized.
      * @param autoSplit Permit automatic splitting after dependency reduction, using the combined writer's rules.
      * @param writtenPaths Optional complete list of published plugins in installation order.
-     * @param warnings Optional dropped authored ledge diagnostics, with the combined writer's clearing rules.
+     * @param warnings Optional lossy regeneration diagnostics, with the combined writer's clearing rules.
      * @return True only after a successful write and independent reader round trip;
      * false with an error when a required border portal cannot be serialized.
      * @note The ESP is ESL-flagged when its master table and new identities fit a light plugin.

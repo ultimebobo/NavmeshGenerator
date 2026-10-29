@@ -100,7 +100,7 @@ namespace
                 candidate.exits = {{.referenceId = 0x300, .position = {150, 100, 0}, .region = 0, .polygon = 0}};
                 assert(StitchCandidateBorders(candidate, bounds, {neighbor}, {authored}, false, &scene) == 0);
                 const bool excluded = kind == GeometrySourceType::Collision && obstacle;
-                assert(candidate.topology.valid == excluded);
+                assert(candidate.topology.valid);
                 assert(!candidate.mesh.polygons.empty());
                 const auto warning =
                     std::any_of(candidate.warnings.begin(), candidate.warnings.end(), [](const auto &message)
@@ -119,8 +119,9 @@ namespace
         authored.externalLinks = {{0, 0, neighbor.id, 0}};
         neighbor.externalLinks = {{0, 0, authored.id, 0}};
         assert(StitchCandidateBorders(candidate, {{0, 0, -1000}, {300, 300, 1000}}, {neighbor}, {authored}, true) == 0);
-        assert(!candidate.topology.valid && candidate.borderLinks.empty());
-        assert(!candidate.topology.findings.empty());
+        assert(candidate.topology.valid && candidate.borderLinks.empty());
+        assert(std::any_of(candidate.warnings.begin(), candidate.warnings.end(), [](const auto &warning)
+                           { return warning.find("Dropped authored border portal") != std::string::npos; }));
     }
 
     void CheckAuthoredFanEdits()
@@ -177,7 +178,9 @@ namespace
         auto renderOnly = scene;
         renderOnly.geometrySources.front().sourceType = GeometrySourceType::RenderFallback;
         (void)StitchCandidateBorders(unsupported, bounds, {neighbor}, {authored}, true, &renderOnly);
-        assert(!unsupported.topology.valid && unsupported.authoredBorderVertexEdits.empty());
+        assert(unsupported.topology.valid && unsupported.authoredBorderVertexEdits.empty());
+        assert(std::any_of(unsupported.warnings.begin(), unsupported.warnings.end(), [](const auto &warning)
+                           { return warning.find("Dropped authored border portal") != std::string::npos; }));
         const auto originalCandidate = candidate;
         auto wrongDirection = scene;
         for (auto &point : wrongDirection.mesh.vertices)
@@ -186,7 +189,7 @@ namespace
         }
         auto rejected = candidate;
         (void)StitchCandidateBorders(rejected, bounds, {neighbor}, {authored}, true, &wrongDirection);
-        assert(!rejected.topology.valid && rejected.authoredBorderVertexEdits.empty());
+        assert(rejected.topology.valid && rejected.authoredBorderVertexEdits.empty());
         auto offsetScene = scene;
         for (auto &point : offsetScene.mesh.vertices)
         {
@@ -426,7 +429,7 @@ namespace
                             point.z -= 1000;
                         }
                         assert(StitchCandidateBorders(unsupportedCuts, bounds, neighbors, {authored}) == 0);
-                        assert(!unsupportedCuts.topology.valid);
+                        assert(unsupportedCuts.topology.valid);
                         assert(unsupportedCuts.borderLinks.empty());
                     }
                     const auto added = StitchCandidateBorders(candidate, bounds, neighbors, {authored});

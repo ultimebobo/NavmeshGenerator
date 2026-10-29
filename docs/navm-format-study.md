@@ -114,10 +114,12 @@ reserved local range, and TES4 HEDR records the next available identity. The ESP
 uses the light flag only when those identities and its master table fit the
 light format. Existing unsupported NAVM records cannot be treated as uncovered.
 ONAM base-object dependencies are rebased, and PNAM/NNAM connector constraints
-are remapped to nearby generated vertices. Unknown auxiliary fields, contradictory
-constraints and constraints without a representable vertex reject export.
-Authored crossings require matched generated portals or explicit obstacle-floor
-closure evidence. Reciprocal intra-cell ledges are superseded when generated floor
+are remapped to nearby generated vertices. Unmatched preferred connectors are
+omitted with warnings; unknown auxiliary fields, contradictory constraints and
+unrepresentable excluded connectors reject export. Ordinary authored crossings
+without a compatible generated portal are omitted with warnings, and incoming
+links into replaced triangle spaces are removed. Obstacle-floor closure evidence
+classifies intentional exclusions separately. Reciprocal intra-cell ledges are superseded when generated floor
 connects their landings. A carved lip attaches through reciprocal authored local
 adjacency to the nearest surviving landing ring; deleted triangles and external
 links cannot supply this attachment. Landing validation matches overlapping floor

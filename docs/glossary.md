@@ -41,7 +41,8 @@ layouts can prevent a match. Unmatched generated seam wedges retract into the
 working cell. Reachability retains the largest connected floor plus components
 reaching a real portal or matched door, so a cell without authored navigation
 can still receive a generated floor. Other disconnected components are removed.
-Every remaining generated CELL seam must consume an exact neighboring edge.
+Every saved portal must consume an exact neighboring edge; unmatched valid floor
+may remain at the CELL boundary with a warning and no crossing.
 Inspect `border_links` and topology findings in candidate JSON for these checks.
 
 ## Why a single-cell export can include neighboring NAVMs

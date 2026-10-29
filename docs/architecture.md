@@ -242,8 +242,7 @@ incident floor triangles whose vertices reach the authored repair band. When the
 unchanged rim needs seam height detail, a bounded interior sample supports the
 triangulation while preserving the complete portal. Unpaired nonplanar fans try
 individual floor-centroid directions, with a roundoff allowance in slope comparisons.
-Missing required crossings invalidate the final candidate;
-seam retraction cannot silently remove them.
+Missing authored crossings produce lost-access warnings and remain open boundaries.
 Required cavities also accommodate the selected authored floor's slope envelope.
 Endpoint projection handles terminal chains and boundaries turning into the cell.
 Shared corner height offsets use separate vertices and slope-bounded strips joined
@@ -251,7 +250,8 @@ to the unchanged floor through climb-compatible internal edges.
 The Cell runner passes the generation scene to neutral border stitching. Positive
 excluded-collision support at the authored interior anchor can close a crossing
 with a warning when no compatible boundary floor survives. Missing or unsupported
-evidence cannot waive a crossing. The writer clears incoming links to closed edges.
+evidence cannot establish obstacle-floor closure. The writer clears incoming links
+to every omitted crossing.
 Single-cell generation provisionally retains every surviving walkable component.
 Shared reachability filtering follows CELL clipping, door matching and authored
 border stitching, retaining the largest connected floor plus components reaching
@@ -279,10 +279,10 @@ existing portal endpoints. Unmatched seam wedges retract through interior fans
 without changing shared interior edges. Final adjacency determines the surviving
 components. Unpaired border vertices move into their incident fans, with inward
 movement bounded by the agent footprint and weld tolerance; matched endpoints
-stay pinned. Every remaining border vertex equals a neighboring portal endpoint.
+stay pinned. Unmatched valid floor can retain open boundaries with warnings.
 Region, door, source and contour evidence is rebuilt or remapped.
 Stitch validation requires exact reversed neighboring endpoints, unique consuming
-edges, and a portal on every remaining CELL seam. Candidate cache fingerprints
+edges, and valid destinations for every saved portal. Candidate cache fingerprints
 include the stitching implementation revision.
 The [glossary](glossary.md) explains these terms and why single-cell geometry
 replacement can require neighboring NAVM connection overrides.
@@ -491,8 +491,10 @@ to store complete pre-link floors. Single-cell orchestration also generates all 
 components and applies this reachability stage after authored border matching.
 Immediate border matching retracts unmatched seams while deferring component
 filtering, allowing uncovered cells and interiors without doors to keep their
-largest floor. Invalid topology or
-refinement prevents export. Authored border subdivision commits only when all
+largest floor. Cell-local refinement and topology failures can be skipped under
+the continue error policy after restoring the complete candidate graph from the
+pre-link snapshots. The remaining set is reconciled again with skipped cells
+serving as authored neighbors; graph ownership and storage errors stop export. Authored border subdivision commits only when all
 consumed portals survive. `app/candidate_cache` stores candidates before generated
 seam refinement with bounded reads and a versioned dependency fingerprint. The
 cache/pipeline revision defines compatibility across executable rebuilds; it must

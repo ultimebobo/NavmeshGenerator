@@ -250,11 +250,15 @@ excluded geometry does not cause a skip.
 **Cell error policy** / `--cell-error-policy` is shared by CLI and desktop and
 persisted with desktop settings. `continue` permits recoverable skips; `stop`
 aborts publication on the first recoverable selection, extraction or generation
-failure. Input, allocation, cache/evidence-storage, global seam/reachability and
-writer validation failures always stop publication. A verified partial plugin can
+failure. Attributable cell-local seam and reachability failures roll back the
+complete candidate graph, skip the failed target and retry with its authored
+navigation as untouched neighbor input. Rollback reloads worker-spooled candidates;
+failure to restore them stops publication. Input, allocation, cache/evidence-storage,
+unattributable graph errors and writer validation failures always stop publication. A verified partial plugin can
 complete only after the successful target set passes the usual global checks.
 `complete_with_skips`, `generation_failed_cells` and `extraction_failed_cells`
 identify incomplete coverage, including runs with no successful replacements.
+Per-cell generation warnings retain candidate diagnostics even in plugin-only output.
 `asset_failures` deduplicates model/provider/category evidence, stages, references
 and affected CELLs; per-cell `asset_failure_ids` refer to those entries. Physical
 providers and attempted NIF paths are retained. Single-cell generation uses
@@ -263,8 +267,9 @@ providers and attempted NIF paths are retained. Single-cell generation uses
 Generation and border linking are separate stages. Workers retain all surviving
 walkable components without requiring authored portals or door anchors. Authored
 NAVMs from other rebuilding targets never constrain their geometry. Borders into
-untouched cells must retain their required authored crossings around the complete
-selection, including after a neighboring generation failure. Immediate and deferred
+untouched cells attempt to retain authored crossings around the complete selection,
+including after a neighboring generation failure. Crossings that cannot be
+reproduced are reported as lost access and omitted, leaving open boundaries. Immediate and deferred
 stitching enforce the same crossing contract.
 Matching repairs every compatible complete authored partition before generated
 seams are reconciled, even without a selected-cell authored crossing. Connected

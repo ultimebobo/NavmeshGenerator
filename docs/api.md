@@ -63,7 +63,7 @@ this reference. The showcase utilities and renderer are described in the
   corner height offsets. Optional generation-scene evidence identifies crossings
   onto excluded obstacle collision; only positive interior support together with
   an absent compatible boundary floor can close such a crossing with a warning.
-  Unresolved required crossings remain validation failures.
+  Unresolved authored crossings are omitted with lost-access warnings.
 
 - `navmesh::core::ApplyAuthoredBorderVertexEdits` and
   `CompleteAuthoredBorderFanEdits`: neutral validation and bounded local height
@@ -138,7 +138,9 @@ this reference. The showcase utilities and renderer are described in the
 - `navmesh::app::detail::BuildBatchCandidate`: one isolated worker's all-walkable
   generation, untouched-neighbor stitching, validation, compact evidence and audit cache.
 - `navmesh::app::detail::ReconcileBatchBorders`: dispatches complete generated candidates
-  to neutral batch seam refinement using winning CELL ownership.
+  to neutral batch seam refinement using winning CELL ownership. The continue error
+  policy restores the complete candidate graph and skips an attributable failed cell
+  before retrying; ownership and storage errors remain fatal.
 - `navmesh::core::StitchGeneratedCandidates`, `GeneratedCellCandidate`: common seam
   partitions, shared corner heights, stable provenance/door joins and exact reciprocal
   portals between generated CELLs, including targets without authored NAVM.
@@ -147,6 +149,8 @@ this reference. The showcase utilities and renderer are described in the
   preserves hull segments and every sample position without authored geometry.
 - `navmesh::core::RefreshCandidateTopology`: rebuilds internal adjacency, region areas
   and boundary loops after geometry refinement without changing polygon identities.
+  `RepairCandidateBookkeeping` also compacts unused vertices and rebuilds invalid
+  region membership while preserving polygon evidence and validating the result.
 - `navmesh::app::detail` candidate-cache/artifact helpers: input fingerprints
   with explicit pipeline compatibility across executable rebuilds,
   bounded private gzip reads/writes and streaming public gzip JSON.
@@ -171,7 +175,7 @@ this reference. The showcase utilities and renderer are described in the
   border strips preserve floor slope limits and authored endpoint heights.
   Selected-cell authored NAVMs supply required crossing constraints. Missing
   crossings are repaired by constrained cavity retriangulation with stable source,
-  region, door, and portal joins; unresolved crossings invalidate the candidate.
+  region, door, and portal joins; unresolved crossings produce warnings.
   Near-coincident endpoints align through complete fans, and bounded interior
   height samples preserve the unchanged rim's slope envelope when needed.
   Immediate linking defaults to retaining only components connected to real
@@ -182,7 +186,7 @@ this reference. The showcase utilities and renderer are described in the
   containing edges with consistent region, source, contour, door,
   and portal joins. Inward offsets trim the candidate; outward offsets extend it.
   Terminal endpoint alignment updates complete incident fans. Final validation
-  checks exact reversed endpoint equality, unique portals and complete seam coverage.
+  checks exact reversed endpoint equality and unique saved portals; open seams produce warnings.
   Deferred batch mode preserves unlinked borders and unanchored components while
   matching only untouched authored neighbors.
 - `navmesh::core::AuthoredBorderTolerance`: shared world-unit bound for incidental authored

@@ -684,10 +684,22 @@ namespace
         {
             auto missingCrossing = adjacentCandidate;
             missingCrossing.borderLinks.clear();
-            Require(!navmesh::skyrim::WriteNavmeshOverride(root / "missing-crossing", {source}, resolved, *adjacent,
-                                                           missingCrossing, output, error));
-            Require(error.find("crossing is missing") != std::string::npos);
-            Require(!std::filesystem::exists(root / "missing-crossing" / "generated-navmesh.esp"));
+            std::vector<std::string> warnings;
+            Require(navmesh::skyrim::WriteNavmeshOverride(root / "missing-crossing", {source}, resolved, *adjacent,
+                                                          missingCrossing, output, error, true, nullptr, &warnings));
+            Require(std::any_of(warnings.begin(), warnings.end(), [](const auto &warning)
+                                { return warning.find("Dropped authored navigation crossing") != std::string::npos; }));
+            const auto disconnected =
+                navmesh::skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source, output}});
+            Require(disconnected.diagnostics.empty());
+            for (const auto &cell : disconnected.cells)
+            {
+                for (const auto &mesh : cell.navMeshes)
+                {
+                    Require(std::none_of(mesh.externalLinks.begin(), mesh.externalLinks.end(),
+                                         [](const auto &link) { return link.navmeshId == 0x201; }));
+                }
+            }
         }
         const bool batchWritten = navmesh::skyrim::WriteNavmeshOverrides(
             root / "batch", {source}, resolved, {{&*selected, &candidate}, {&*adjacent, &adjacentCandidate}}, output,
@@ -866,10 +878,9 @@ namespace
             RequireCompleteBorderStitch(generated, bounds, {neighbor});
             CandidateNavMesh missingFloor;
             Require(StitchCandidateBorders(missingFloor, bounds, {neighbor}, {authored}) == 0);
-            Require(!missingFloor.topology.valid &&
-                    std::any_of(missingFloor.topology.findings.begin(), missingFloor.topology.findings.end(),
-                                [](const auto &finding)
-                                { return finding.find("Authored border portal") != std::string::npos; }));
+            Require(missingFloor.topology.valid &&
+                    std::any_of(missingFloor.warnings.begin(), missingFloor.warnings.end(), [](const auto &finding)
+                                { return finding.find("Dropped authored border portal") != std::string::npos; }));
         }
     }
 
@@ -3091,6 +3102,16 @@ int main(int argc, char **argv)
         TestNewExteriorNavmeshRecord();
         TestReciprocalCellTransitions();
         TestReciprocalCellTransitions(2.5F, true);
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--ledges-only")
+    {
+        TestLedgeLinkFixture();
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--recovery-only")
+    {
+        TestBatchRecoveryBorderNeighbors();
         return 0;
     }
     TestSurfaceSimplification();

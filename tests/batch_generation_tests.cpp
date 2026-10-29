@@ -569,6 +569,30 @@ void TestGeneratedLandingSeams()
 void TestGeneratedBatchTopology()
 {
     using namespace navmesh::core;
+    {
+        auto candidate = Floor(0, 0, 0);
+        const auto vertices = candidate.mesh.vertices;
+        const auto polygons = candidate.mesh.polygons;
+        candidate.mesh.vertices.push_back({100, 100, 100});
+        candidate.regions.front().polygons = {0, 0, 99};
+        candidate.contours = {{.closed = false, .vertices = {99}}};
+        candidate.exits = {{.referenceId = 300, .region = 42, .polygon = 1}};
+        assert(!ValidateCandidateTopology(candidate).valid);
+        RepairCandidateBookkeeping(candidate);
+        assert(candidate.topology.valid && candidate.mesh.vertices.size() == vertices.size());
+        assert(candidate.mesh.polygons.size() == polygons.size() && candidate.regions.size() == 1);
+        assert(candidate.exits.front().region == 0 && candidate.exits.front().polygon == 1);
+        assert(candidate.regions.front().exitFormIds == std::vector<std::uint32_t>{300});
+        assert(std::all_of(candidate.contours.begin(), candidate.contours.end(),
+                           [](const auto &contour) { return contour.closed; }));
+        for (std::size_t index{}; index < polygons.size(); ++index)
+        {
+            assert(candidate.mesh.polygons[index].vertices == polygons[index].vertices);
+        }
+        candidate.polygonContributingTriangles.front().clear();
+        RepairCandidateBookkeeping(candidate);
+        assert(!candidate.topology.valid);
+    }
     TestCandidateIslandRemoval();
     TestTeleportEnclosure();
     TestGeneratedLandingSeams();
@@ -958,6 +982,75 @@ void TestBatchGenerationFailurePolicy()
 void TestBatchRecoveryBorderNeighbors()
 {
     using namespace navmesh;
+    for (const bool continueOnError : {true, false})
+    {
+        core::Cell left{.id = 11, .exteriorCoordinates = std::array<std::int32_t, 2>{0, 0}};
+        core::Cell right{.id = 10, .exteriorCoordinates = std::array<std::int32_t, 2>{1, 0}};
+        right.navMeshes = {Floor(4096, 0, 0).mesh};
+        right.navMeshes.front().id = 201;
+        skyrim::ResolvedLoadOrder resolved;
+        resolved.cells = {left, right};
+        resolved.records = {{.type = "CELL", .formId = left.id, .worldspaceFormId = 1},
+                            {.type = "CELL", .formId = right.id, .worldspaceFormId = 1}};
+        auto invalid = Floor(4096, 0, 0);
+        invalid.mesh.vertices.front().z = std::numeric_limits<float>::infinity();
+        auto good = Floor(0, 0, 0);
+        good.mesh.vertices.push_back({0, 0, 100});
+        std::vector<app::detail::BatchCellResult> results{
+            {.cell = &left, .candidate = good, .status = "generated"},
+            {.cell = &right, .candidate = invalid, .status = "generated"}};
+        const auto error = app::detail::ReconcileBatchBorders(results, resolved, continueOnError);
+        if (continueOnError)
+        {
+            assert(error.empty() && results.back().status == "skipped_generation_failed");
+            assert(results.back().candidate.mesh.polygons.empty() && results.back().auditPath.empty());
+            assert(results.front().status == "generated" && results.front().candidate.topology.valid);
+            assert(!results.front().candidate.borderLinks.empty());
+            for (const auto &link : results.front().candidate.borderLinks)
+            {
+                assert(!link.generatedNeighborCell && link.neighborNavmeshId == 201);
+            }
+        }
+        else
+        {
+            assert(!error.empty() && results.back().status == "generated");
+            assert(results.front().candidate.mesh.vertices.size() == good.mesh.vertices.size());
+            assert(results.front().candidate.borderLinks.empty());
+        }
+
+        // Worker-spooled snapshots restore the complete graph without duplicating the batch in memory.
+        const auto directory =
+            std::filesystem::temp_directory_path() /
+            ("navmesh-reconciliation-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        core::Scene evidence;
+        evidence.geometrySources.resize(1);
+        evidence.triangleProvenance.resize(9);
+        results = {{.cell = &left, .candidate = good, .status = "generated", .auditPath = directory / "left.gz"},
+                   {.cell = &right, .candidate = invalid, .status = "generated", .auditPath = directory / "right.gz"}};
+        assert(app::detail::StoreCandidate(results.front().auditPath, Floor(0, 0, 0), evidence));
+        assert(app::detail::StoreCandidate(results.back().auditPath, Floor(4096, 0, 0), evidence));
+        const auto spooledError = app::detail::ReconcileBatchBorders(results, resolved, continueOnError);
+        assert(spooledError.empty() == continueOnError);
+        assert(results.front().candidate.topology.valid && results.front().candidate.mesh.vertices.size() == 4);
+        if (continueOnError)
+        {
+            assert(results.back().status == "skipped_generation_failed" && results.back().auditPath.empty());
+            assert(!results.front().candidate.borderLinks.empty());
+        }
+        else
+        {
+            assert(results.back().status == "generated" && results.back().candidate.topology.valid);
+            assert(std::isfinite(results.back().candidate.mesh.vertices.front().z));
+            assert(results.front().candidate.borderLinks.empty());
+        }
+        // Evidence loss must prevent recovery and publication rather than accepting partially restored state.
+        results.back().candidate = invalid;
+        results.back().status = "generated";
+        results.back().auditPath = directory / "right.gz";
+        std::ofstream(results.front().auditPath, std::ios::trunc) << "corrupt";
+        assert(!app::detail::ReconcileBatchBorders(results, resolved, true).empty());
+        std::filesystem::remove_all(directory);
+    }
     for (const bool westAuthored : {true, false})
     {
         for (const bool eastAuthored : {true, false})

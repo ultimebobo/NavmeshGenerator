@@ -1303,6 +1303,51 @@ class BatchRebuild(unittest.TestCase):
                 self.assertEqual(candidate["vertices"][face[(link["edge"] + 1) % 3]], [4096, 4096, 0])
                 self.assertTrue((output / "generated-navmesh.esp").is_file())
 
+    def test_unreproduced_ordinary_crossing_is_dropped_in_single_and_batch_exports(self):
+        self.write_baseline(navmeshes={
+            0: navm_with_traversal(0, [(0, 1, 0, 0x201, 1)], height=1000),
+            1: navm_with_traversal(1, [(1, 2, 0, 0x200, 0)], height=1000),
+            2: navm(2)})
+        for batch in (False, True):
+            with self.subTest(batch=batch):
+                selector = ("--cells", "100,102") if batch else ("--cell-formid", "100")
+                output = self.run_cli(*selector, "--generate-plugin", output=f"lost-crossing-{batch}")
+                report_name = "batch-report.json" if batch else "generation-report.json"
+                report = json.loads((output / report_name).read_text())
+                self.assertEqual(report["status"], "complete")
+                self.assertTrue(any("Dropped authored navigation crossing" in warning
+                                    for warning in report["export_warnings"]))
+                emitted = {}
+                for kind, form, _, payload in read_records(output / "generated-navmesh.esp"):
+                    if kind != "NAVM":
+                        continue
+                    body = dict(read_subrecords(payload))[b"NVNM"]
+                    vertices = struct.unpack_from("<I", body, 16)[0]
+                    at = 20 + vertices * 12
+                    triangles = struct.unpack_from("<I", body, at)[0]
+                    external_count = struct.unpack_from("<I", body, at + 4 + triangles * 16)[0]
+                    emitted[form & 0xffffff] = triangles, external_count
+                self.assertGreater(emitted[0x200][0], 0)
+                self.assertEqual(emitted[0x200][1], 0)
+                self.assertEqual(emitted[0x201], (2, 0))
+
+    def test_unmatched_preferred_connector_warns_but_excluded_connector_rejects(self):
+        for constraint in ("PNAM", "NNAM"):
+            with self.subTest(constraint=constraint):
+                authored = navm_with_traversal(0, [], height=1000)
+                self.write_baseline(navmeshes={0: authored + sub(constraint, struct.pack("<H", 0)),
+                                              1: navm(1), 2: navm(2)})
+                output = self.run_cli("--cell-formid", "100", "--generate-plugin",
+                                      output=f"unmatched-{constraint}", code=0 if constraint == "PNAM" else 2)
+                plugin = output / "generated-navmesh.esp"
+                if constraint == "PNAM":
+                    report = json.loads((output / "generation-report.json").read_text())
+                    self.assertTrue(any("PNAM preferred connector" in warning
+                                        for warning in report["export_warnings"]))
+                    self.assertTrue(plugin.is_file())
+                else:
+                    self.assertFalse(plugin.exists())
+
     def test_generated_polygons_reach_door_or_border(self):
         """Check actual adjacency after border stitching in both shared run paths."""
         single = self.run_cli("--cell-formid", "100", "--generate-candidate", output="reachable-cell")

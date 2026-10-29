@@ -190,7 +190,7 @@ namespace navmesh::app::detail
                         input.geometry.scene, options.navigationProfile, input.bounds, std::move(input.exits),
                         options.partitioningAlgorithm, options.recastSettings, core::CandidateRetention::AllWalkable);
                     (void)core::AttachCandidateAuthoredDoors(result.candidate, result.cell->navMeshes);
-                    core::RefreshCandidateTopology(result.candidate);
+                    core::RepairCandidateBookkeeping(result.candidate);
                     if (input.bounds && !input.adjacent.empty())
                     {
                         (void)core::StitchCandidateBorders(result.candidate, *input.bounds, input.adjacent,
@@ -271,7 +271,9 @@ namespace navmesh::app::detail
         return result;
     }
 
-    std::string ReconcileBatchBorders(std::vector<BatchCellResult> &results, const skyrim::ResolvedLoadOrder &resolved)
+    /// One reconciliation attempt; the caller owns rollback of every candidate in this graph.
+    static std::string ReconcileBatchBordersOnce(std::vector<BatchCellResult> &results,
+                                                 const skyrim::ResolvedLoadOrder &resolved)
     {
         std::vector<core::GeneratedCellCandidate> exterior;
         std::vector<core::CandidateReachabilityTarget> reachability;
@@ -287,6 +289,13 @@ namespace navmesh::app::detail
             if (result.status != "generated")
             {
                 continue;
+            }
+            core::RepairCandidateBookkeeping(result.candidate);
+            if (!result.candidate.topology.valid)
+            {
+                throw core::CandidateCellError(
+                    result.cell->id,
+                    std::format("CELL {:08X}: {}", result.cell->id, result.candidate.topology.findings.front()));
             }
             if (!result.cell->exteriorCoordinates)
             {
@@ -364,7 +373,8 @@ namespace navmesh::app::detail
                                                        result->cell->waterHeight);
                     if (!target.candidate->topology.valid)
                     {
-                        throw std::runtime_error(
+                        throw core::CandidateCellError(
+                            target.cellId,
                             std::format("CELL {:08X}: {}", target.cellId, target.candidate->topology.findings.front()));
                     }
                 }
@@ -376,10 +386,80 @@ namespace navmesh::app::detail
             }
             (void)core::RemoveCandidateIslands(reachability);
         }
+        catch (const core::CandidateCellError &)
+        {
+            throw;
+        }
         catch (const std::exception &error)
         {
             return error.what();
         }
         return {};
+    }
+
+    std::string ReconcileBatchBorders(std::vector<BatchCellResult> &results, const skyrim::ResolvedLoadOrder &resolved,
+                                      bool continueOnError)
+    {
+        // Roll back the complete graph after a local failure: earlier cells can already have new portal
+        // destinations or compacted indices. Workers have spooled the original candidates, avoiding another
+        // full in-memory copy of the batch. In-memory callers retain their own rollback snapshots here.
+        std::map<std::uint32_t, core::CandidateNavMesh> originals;
+        std::set<std::uint32_t> cellIds;
+        for (const auto &result : results)
+        {
+            if (!result.cell || !cellIds.insert(result.cell->id).second)
+            {
+                return "Batch reconciliation requires unique valid CELL ownership";
+            }
+            if (result.status == "generated" && result.auditPath.empty())
+            {
+                if (!originals.emplace(result.cell->id, result.candidate).second)
+                {
+                    return "Batch reconciliation found duplicate generated CELL ownership";
+                }
+            }
+        }
+        while (true)
+        {
+            try
+            {
+                return ReconcileBatchBordersOnce(results, resolved);
+            }
+            catch (const core::CandidateCellError &error)
+            {
+                const auto failed =
+                    std::find_if(results.begin(), results.end(), [&](const auto &result)
+                                 { return result.cell->id == error.cellId && result.status == "generated"; });
+                for (auto &result : results)
+                {
+                    if (result.status == "generated")
+                    {
+                        if (result.auditPath.empty())
+                        {
+                            result.candidate = originals.at(result.cell->id);
+                        }
+                        else
+                        {
+                            core::Scene evidence;
+                            if (!LoadCandidate(result.auditPath, result.candidate, evidence))
+                            {
+                                return "Cannot restore spooled candidate after reconciliation failure";
+                            }
+                        }
+                    }
+                }
+                if (!continueOnError || failed == results.end())
+                {
+                    return error.what();
+                }
+                failed->status = "skipped_generation_failed";
+                failed->error = error.what();
+                failed->diagnostics = {error.what()};
+                failed->candidate = {};
+                failed->auditPath.clear();
+                failed->reused = false;
+                originals.erase(error.cellId);
+            }
+        }
     }
 } // namespace navmesh::app::detail

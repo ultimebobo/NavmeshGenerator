@@ -67,13 +67,16 @@ namespace navmesh::app::detail
      * each contiguous exterior selection or interior. Generated portals alone do not anchor islands.
      * Polygon, vertex, evidence, region, door and reciprocal portal indices are compacted together.
      * @param resolved Winning CELL worldspace/coordinate ownership and decoded authored portal destinations.
+     * @param continueOnError Roll back all candidates and skip an attributable failed CELL before retrying.
+     * False stops publication on the first failure. Allocation and graph ownership failures are always fatal.
      * @return Empty on success, or a fatal refinement/ownership error. Generated links
      * identify destination CELLs until the writer allocates every primary NAVM identity.
      * Refinement preserves existing portals into untouched cells and adds exact reciprocal
-     * generated seams; failures prevent publishing the combined plugin.
+     * generated seams. Skipped cells become untouched authored neighbors during the next attempt.
      */
     [[nodiscard]] std::string ReconcileBatchBorders(std::vector<BatchCellResult> &results,
-                                                    const skyrim::ResolvedLoadOrder &resolved);
+                                                    const skyrim::ResolvedLoadOrder &resolved,
+                                                    bool continueOnError = true);
 
     /// Estimate scene and raster working storage for admission, in bytes; one oversized task must run alone.
     /// This is an admission estimate, not a limit on Recast vertical spans or resolved-plugin memory.

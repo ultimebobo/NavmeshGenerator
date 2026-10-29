@@ -222,11 +222,11 @@ namespace navmesh::core
             {
                 throw std::runtime_error("Island filtering requires finite positive exterior CELL extents");
             }
-            RefreshCandidateTopology(*target.candidate);
+            RepairCandidateBookkeeping(*target.candidate);
             if (!target.candidate->topology.valid)
             {
-                throw std::runtime_error(
-                    std::format("CELL {:08X}: {}", target.cellId, target.candidate->topology.findings.front()));
+                throw CandidateCellError(target.cellId, std::format("CELL {:08X}: {}", target.cellId,
+                                                                    target.candidate->topology.findings.front()));
             }
             for (const auto &exit : target.candidate->exits)
             {
@@ -437,8 +437,8 @@ namespace navmesh::core
             RefreshCandidateTopology(*target.candidate);
             if (!target.candidate->topology.valid)
             {
-                throw std::runtime_error(
-                    std::format("CELL {:08X}: {}", target.cellId, target.candidate->topology.findings.front()));
+                throw CandidateCellError(target.cellId, std::format("CELL {:08X}: {}", target.cellId,
+                                                                    target.candidate->topology.findings.front()));
             }
         }
         return removed;

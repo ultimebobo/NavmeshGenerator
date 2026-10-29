@@ -39,7 +39,8 @@ namespace
 
 bool navmesh::skyrim::detail::RebuildNavmeshMetadata(std::span<const NavmeshMetadataSource> sources,
                                                      const core::NavMesh &generated, float tolerance,
-                                                     std::vector<std::uint8_t> &payload, std::string &error)
+                                                     std::vector<std::uint8_t> &payload, std::string &error,
+                                                     std::vector<std::string> *warnings)
 {
     if (!std::isfinite(tolerance) || tolerance < 0 || generated.vertices.size() > 65535)
     {
@@ -101,6 +102,16 @@ bool navmesh::skyrim::detail::RebuildNavmeshMetadata(std::span<const NavmeshMeta
                 }
                 if (!matched)
                 {
+                    if (sub.type == "PNAM")
+                    {
+                        if (warnings)
+                        {
+                            warnings->push_back("Dropped authored PNAM preferred connector on NAVM " +
+                                                std::to_string(source.mesh->id) + " at vertex " +
+                                                std::to_string(value) + ": no generated vertex within reach.");
+                        }
+                        continue;
+                    }
                     error = "Generated navigation cannot retain an authored " + sub.type + " connector constraint.";
                     return false;
                 }
