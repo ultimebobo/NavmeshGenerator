@@ -4,6 +4,14 @@ Cell analysis writes a binary glTF scene, `scene.glb`, for each inspected cell.
 It uses named objects and stable materials so it can be inspected without
 manually joining the OBJ exports.
 
+The **Ledge links** group uses pink for both linked triangles and both edge bars.
+It accompanies authored or generated navigation, including candidate-only scenes
+and combined selections. Regenerated cells show their finalized generated drops;
+inspection of untouched cells shows reciprocal authored ledges. Pink faces are
+slightly lifted inspection overlays; navigation coordinates remain unchanged.
+Candidate JSON also retains placed water-surface vertices and triangles used for
+water coverage and submerged-landing validation.
+
 For multiple cells, enable **Make scene** in Cell or small Plugin selections, or pass `--make-scene` with
 `--cells` or `--rebuild-plugin`. This adds one combined `scene.glb` at the output root, retaining the
 normal per-cell inspection reports. It also works during candidate generation
@@ -26,7 +34,7 @@ Scene or sidecar write failures prevent subsequent plugin publishing.
 
 The scene tree and flattened mesh list put navigation first: `Original NAVM
 (current cell)`, `Neighboring NAVM`, `Candidate NAVM` when generated, `NAVM
-links`, and `Doors`, followed by `Terrain`, `Collision`, and `Render fallback`.
+links`, `Ledge links`, and `Doors`, followed by `Terrain`, `Collision`, and `Render fallback`.
 The `navmesh` layer selection includes both original and neighboring authored
 meshes and their connection bars. Each authored NAVM is split by face color
 inside its owning group.

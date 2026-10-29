@@ -20,6 +20,7 @@
 #include <map>
 #include <set>
 #include <optional>
+#include <string_view>
 #include <tuple>
 
 namespace
@@ -45,19 +46,209 @@ namespace
                    : navmesh::core::AuthoredBorderTolerance;
     }
 
-    /// A reciprocal intra-cell ledge is redundant only when generated floor replaces its traversal route.
-    bool ReplacedLedgeRoute(const navmesh::core::CandidateNavMesh &candidate, const navmesh::core::Cell &cell,
-                            const navmesh::core::NavMesh &source, const navmesh::core::NavmeshExternalLink &portal)
+    using TraversalNode = std::tuple<bool, std::uint32_t, std::uint32_t>;
+
+    /// Borrow the effective planned graph for route validation, without contributing generation constraints.
+    struct TraversalValidationGraph
     {
-        if ((portal.type != 1 && portal.type != 2) || portal.polygon >= source.polygons.size() || portal.edge >= 3)
+        std::map<std::uint32_t, const navmesh::core::CandidateNavMesh *> candidates;
+        std::map<std::uint32_t, const navmesh::core::NavMesh *> authored;
+        std::map<std::uint32_t, std::uint32_t> replacedMeshes;
+        std::map<std::pair<std::uint32_t, std::uint32_t>, std::vector<TraversalNode>> incomingPortals;
+    };
+
+    TraversalValidationGraph IndexTraversalGraph(const navmesh::skyrim::ResolvedLoadOrder &resolved,
+                                                 const std::vector<navmesh::skyrim::NavmeshReplacement> &replacements)
+    {
+        TraversalValidationGraph graph;
+        for (const auto &cell : resolved.cells)
         {
-            return false;
+            for (const auto &mesh : cell.navMeshes)
+            {
+                graph.authored.emplace(mesh.id, &mesh);
+            }
+        }
+        for (const auto &replacement : replacements)
+        {
+            graph.candidates.emplace(replacement.cell->id, replacement.candidate);
+            for (const auto &mesh : replacement.cell->navMeshes)
+            {
+                graph.replacedMeshes.emplace(mesh.id, replacement.cell->id);
+            }
+            for (const auto &link : replacement.candidate->borderLinks)
+            {
+                if (!link.generatedNeighborCell)
+                {
+                    graph.incomingPortals[{link.neighborNavmeshId, link.neighborPolygon}].emplace_back(
+                        true, replacement.cell->id, link.polygon);
+                }
+            }
+        }
+        return graph;
+    }
+
+    /// Validate an authored threshold against generated floors, descents and reciprocal portals in the complete set.
+    bool HasEffectiveDownwardRoute(const TraversalValidationGraph &graph, const navmesh::core::NavMesh &upper,
+                                   std::uint32_t upperPolygon, const navmesh::core::NavMesh &lower,
+                                   std::uint32_t lowerPolygon)
+    {
+        const auto attachments = [&](const navmesh::core::NavMesh &mesh, std::uint32_t polygon)
+        {
+            std::vector<TraversalNode> nodes;
+            if (const auto generated = graph.replacedMeshes.find(mesh.id); generated != graph.replacedMeshes.end())
+            {
+                for (const auto id :
+                     navmesh::core::CandidateLandingPolygons(*graph.candidates.at(generated->second), mesh, polygon))
+                {
+                    nodes.emplace_back(true, generated->second, id);
+                }
+            }
+            else if (polygon < mesh.polygons.size() && !(mesh.polygons[polygon].flags & 8U))
+            {
+                nodes.emplace_back(false, mesh.id, polygon);
+            }
+            return nodes;
+        };
+        auto pending = attachments(upper, upperPolygon);
+        const auto destinations = attachments(lower, lowerPolygon);
+        const std::set<TraversalNode> targets(destinations.begin(), destinations.end());
+        std::set<TraversalNode> visited;
+        while (!pending.empty())
+        {
+            const auto node = pending.back();
+            pending.pop_back();
+            if (targets.contains(node))
+            {
+                return true;
+            }
+            if (!visited.insert(node).second)
+            {
+                continue;
+            }
+            const auto [generated, id, polygon] = node;
+            if (generated)
+            {
+                const auto &candidate = *graph.candidates.at(id);
+                if (polygon >= candidate.mesh.polygons.size())
+                {
+                    continue;
+                }
+                for (const auto neighbor : candidate.mesh.polygons[polygon].neighbors)
+                {
+                    if (neighbor < candidate.mesh.polygons.size())
+                    {
+                        pending.emplace_back(true, id, neighbor);
+                    }
+                }
+                for (const auto &link : candidate.ledgeLinks)
+                {
+                    if (link.upperPolygon == polygon)
+                    {
+                        pending.emplace_back(true, id, link.lowerPolygon);
+                    }
+                }
+                for (const auto &link : candidate.borderLinks)
+                {
+                    if (link.polygon == polygon)
+                    {
+                        if (link.generatedNeighborCell && graph.candidates.contains(*link.generatedNeighborCell))
+                        {
+                            pending.emplace_back(true, *link.generatedNeighborCell, link.neighborPolygon);
+                        }
+                        else if (!link.generatedNeighborCell && !graph.replacedMeshes.contains(link.neighborNavmeshId))
+                        {
+                            pending.emplace_back(false, link.neighborNavmeshId, link.neighborPolygon);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                const auto found = graph.authored.find(id);
+                if (found == graph.authored.end() || graph.replacedMeshes.contains(id))
+                {
+                    continue;
+                }
+                const auto &mesh = *found->second;
+                if (polygon >= mesh.polygons.size() || (mesh.polygons[polygon].flags & 8U))
+                {
+                    continue;
+                }
+                const auto &face = mesh.polygons[polygon];
+                for (std::size_t edge{}; edge < 3; ++edge)
+                {
+                    if (!(face.flags & (1U << edge)) && face.neighbors[edge] < mesh.polygons.size())
+                    {
+                        pending.emplace_back(false, id, face.neighbors[edge]);
+                    }
+                }
+                // Incoming authored ledges to replaced geometry cannot prove their own replacement.
+                for (const auto &link : mesh.externalLinks)
+                {
+                    if (link.polygon == polygon && (link.type == 0 || link.type == 2) &&
+                        !graph.replacedMeshes.contains(link.navmeshId))
+                    {
+                        pending.emplace_back(false, link.navmeshId, link.targetPolygon);
+                    }
+                }
+                if (const auto incoming = graph.incomingPortals.find({id, polygon});
+                    incoming != graph.incomingPortals.end())
+                {
+                    pending.insert(pending.end(), incoming->second.begin(), incoming->second.end());
+                }
+            }
+        }
+        return false;
+    }
+
+    /// Return a diagnostic reason, or empty when the planned graph retains downward traversal.
+    std::string_view TraversalReplacementFailure(const navmesh::core::CandidateNavMesh &candidate,
+                                                 const navmesh::core::Cell &cell, const navmesh::core::NavMesh &source,
+                                                 const navmesh::core::NavmeshExternalLink &portal,
+                                                 const TraversalValidationGraph &graph)
+    {
+        if (portal.type == 3)
+        {
+            return "enable_disable_portal_requires_authored_semantics";
+        }
+        if (portal.type != 1 && portal.type != 2)
+        {
+            return "unsupported_portal_type";
+        }
+        if (portal.polygon >= source.polygons.size() || portal.edge >= 3)
+        {
+            return "invalid_source_edge";
         }
         const auto target = std::find_if(cell.navMeshes.begin(), cell.navMeshes.end(),
                                          [&](const auto &mesh) { return mesh.id == portal.navmeshId; });
-        if (target == cell.navMeshes.end() || portal.targetPolygon >= target->polygons.size())
+        if (target == cell.navMeshes.end())
         {
-            return false;
+            const auto other = graph.authored.find(portal.navmeshId);
+            if (other == graph.authored.end() || portal.targetPolygon >= other->second->polygons.size())
+            {
+                return "invalid_target_triangle";
+            }
+            const auto &destination = *other->second;
+            const auto reciprocal =
+                std::count_if(destination.externalLinks.begin(), destination.externalLinks.end(),
+                              [&](const auto &link)
+                              {
+                                  return link.polygon == portal.targetPolygon && link.navmeshId == source.id &&
+                                         link.targetPolygon == portal.polygon && link.type == 3 - portal.type;
+                              });
+            if (reciprocal != 1)
+            {
+                return "ledge_has_no_unique_reciprocal";
+            }
+            const auto connected =
+                portal.type == 2
+                    ? HasEffectiveDownwardRoute(graph, source, portal.polygon, destination, portal.targetPolygon)
+                    : HasEffectiveDownwardRoute(graph, destination, portal.targetPolygon, source, portal.polygon);
+            return connected ? std::string_view{} : "ledge_has_no_generated_floor_route";
+        }
+        if (portal.targetPolygon >= target->polygons.size())
+        {
+            return "invalid_target_triangle";
         }
         const auto matchesReverse = [&](const auto &link)
         {
@@ -66,12 +257,12 @@ namespace
         };
         if (std::count_if(target->externalLinks.begin(), target->externalLinks.end(), matchesReverse) != 1)
         {
-            return false;
+            return "ledge_has_no_unique_reciprocal";
         }
         const auto reverse = std::find_if(target->externalLinks.begin(), target->externalLinks.end(), matchesReverse);
         if (reverse->edge >= 3)
         {
-            return false;
+            return "invalid_reciprocal_edge";
         }
         const auto &departure = source.polygons[portal.polygon];
         const auto &arrival = target->polygons[portal.targetPolygon];
@@ -80,15 +271,32 @@ namespace
             std::any_of(arrival.vertices.begin(), arrival.vertices.end(),
                         [&](auto vertex) { return vertex >= target->vertices.size(); }))
         {
-            return false;
+            return "invalid_authored_vertices";
         }
-        return navmesh::core::HasCandidateFloorRoute(candidate,
-                                                     (source.vertices.at(departure.vertices[portal.edge]) +
-                                                      source.vertices.at(departure.vertices[(portal.edge + 1) % 3])) *
-                                                         0.5F,
-                                                     (target->vertices.at(arrival.vertices[reverse->edge]) +
-                                                      target->vertices.at(arrival.vertices[(reverse->edge + 1) % 3])) *
-                                                         0.5F);
+        if (navmesh::core::HasCandidateFloorRoute(candidate,
+                                                  (source.vertices.at(departure.vertices[portal.edge]) +
+                                                   source.vertices.at(departure.vertices[(portal.edge + 1) % 3])) *
+                                                      0.5F,
+                                                  (target->vertices.at(arrival.vertices[reverse->edge]) +
+                                                   target->vertices.at(arrival.vertices[(reverse->edge + 1) % 3])) *
+                                                      0.5F))
+        {
+            return {};
+        }
+        if (navmesh::core::HasCandidateLandingRoute(candidate, source, portal.polygon, *target, portal.targetPolygon))
+        {
+            return {};
+        }
+        const bool hasDropRoute = portal.type == 2
+                                      ? navmesh::core::HasCandidateLedgeRoute(candidate, source, portal.polygon,
+                                                                              *target, portal.targetPolygon)
+                                      : navmesh::core::HasCandidateLedgeRoute(candidate, *target, portal.targetPolygon,
+                                                                              source, portal.polygon);
+        if (hasDropRoute)
+        {
+            return {};
+        }
+        return "ledge_has_no_generated_floor_route";
     }
 
     void U16(Bytes &b, std::uint16_t n)
@@ -895,7 +1103,8 @@ namespace
         const std::vector<std::pair<std::uint32_t, navmesh::core::NavMesh>> &expected,
         const std::map<std::uint32_t, std::vector<std::pair<std::uint16_t, std::uint32_t>>> &doorsByMesh,
         const std::vector<std::pair<std::uint32_t, std::uint32_t>> &expectedCells,
-        const std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t>> &expectedLinks,
+        const std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t, std::uint32_t>>
+            &expectedLinks,
         const std::set<std::uint32_t> &newNavmeshIds, std::uint32_t navigationId, const Bytes &navigationPayload,
         const std::map<std::uint32_t, Bytes> &expectedReferences, const navmesh::skyrim::ResolvedLoadOrder &input,
         const std::map<std::uint32_t, float> &generatedStepHeights, std::string &error, bool copiedPlugin = false)
@@ -965,7 +1174,8 @@ namespace
         std::map<std::uint32_t, const ResolvedRecord *> recordsByMesh;
         std::map<std::uint32_t, const navmesh::core::NavMesh *> expectedByMesh;
         std::map<std::uint32_t, std::uint32_t> owners(expectedCells.begin(), expectedCells.end());
-        std::multimap<std::uint32_t, std::tuple<std::uint16_t, std::uint32_t, std::uint16_t>> linksByMesh;
+        std::multimap<std::uint32_t, std::tuple<std::uint16_t, std::uint32_t, std::uint16_t, std::uint32_t>>
+            linksByMesh;
         for (const auto &record : records)
         {
             if (record.type == "NAVM")
@@ -977,9 +1187,9 @@ namespace
         {
             expectedByMesh.emplace(id, &mesh);
         }
-        for (const auto &[id, index, target, polygon] : expectedLinks)
+        for (const auto &[id, index, target, polygon, type] : expectedLinks)
         {
-            linksByMesh.emplace(id, std::tuple{index, target, polygon});
+            linksByMesh.emplace(id, std::tuple{index, target, polygon, type});
         }
         for (const auto &[originalId, mesh] : expected)
         {
@@ -1118,13 +1328,13 @@ namespace
             const auto [firstLink, lastLink] = linksByMesh.equal_range(originalId);
             for (auto link = firstLink; link != lastLink; ++link)
             {
-                const auto &[externalIndex, targetId, targetTriangle] = link->second;
+                const auto &[externalIndex, targetId, targetTriangle, type] = link->second;
                 if (externalIndex >= externalCount)
                 {
                     return false;
                 }
                 const auto offset = trailing + 4 + externalIndex * 10;
-                if (Get32(data, offset) != 0 || Get32(data, offset + 4) != targetId ||
+                if (Get32(data, offset) != type || Get32(data, offset + 4) != targetId ||
                     static_cast<std::uint16_t>(data[offset + 8] | data[offset + 9] << 8) != targetTriangle)
                 {
                     return false;
@@ -1215,6 +1425,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                              [](const auto &a, const auto &b) { return a.polygons.size() < b.polygons.size(); });
         generatedMeshes.emplace(primary->id, item.candidate->mesh);
     }
+    const auto traversalGraph = IndexTraversalGraph(resolved, replacements);
     // The neutral scene contains only decoded meshes. Check the winning record
     // inventory too, so a partial scene cannot leave overlapping authored navigation.
     for (const auto &record : resolved.records)
@@ -1366,12 +1577,6 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         }
         for (const auto &mesh : cell.navMeshes)
         {
-            if (std::any_of(mesh.externalLinks.begin(), mesh.externalLinks.end(), [&](const auto &link)
-                            { return link.type != 0 && !ReplacedLedgeRoute(candidate, cell, mesh, link); }))
-            {
-                return fail(
-                    "An authored ledge or enable/disable portal cannot be safely remapped to generated geometry.");
-            }
             const auto *navm = resolved.FindWinning(mesh.id);
             if (!navm || navm->type != "NAVM" || !navm->raw || !navm->navm || !navm->navm->supported)
             {
@@ -1411,6 +1616,31 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                     Get32(data, layout.header.offset), Get32(data, layout.header.offset + 4),
                     Get32(data, layout.header.offset + 8), Get32(data, layout.header.offset + 12),
                     Get32(data, layout.header.offset + 16), navm->raw->flags);
+                return false;
+            }
+            // Diagnose source decoding/resolution first; traversal replacement assumes complete connection evidence.
+            for (const auto &portal : mesh.externalLinks)
+            {
+                if (portal.type == 0)
+                {
+                    continue;
+                }
+                const auto reason = TraversalReplacementFailure(candidate, cell, mesh, portal, traversalGraph);
+                if (reason.empty())
+                {
+                    continue;
+                }
+                const auto *destination = resolved.FindWinning(portal.navmeshId);
+                error = std::format(
+                    "An authored ledge or enable/disable portal cannot be safely remapped to generated geometry.\n"
+                    "reason={} type={} CELL {:08X} '{}' NAVM {:08X} winner='{}' triangle={} edge={}\n"
+                    "target_CELL={} target_NAVM={:08X} target_triangle={} target_winner='{}'",
+                    reason, portal.type, cell.id,
+                    cell.editorId.size() > 128 ? cell.editorId.substr(0, 128) + "...[truncated]" : cell.editorId,
+                    mesh.id, navm->winning.plugin, portal.polygon, portal.edge,
+                    destination && destination->cellFormId ? std::format("{:08X}", *destination->cellFormId)
+                                                           : "unresolved",
+                    portal.navmeshId, portal.targetPolygon, destination ? destination->winning.plugin : "unresolved");
                 return false;
             }
             for (const auto &portal : mesh.externalLinks)
@@ -1982,7 +2212,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     Group root;
     std::vector<std::pair<std::uint32_t, core::NavMesh>> expected;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> expectedCells;
-    std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t>> expectedLinks;
+    std::vector<std::tuple<std::uint32_t, std::uint16_t, std::uint32_t, std::uint16_t, std::uint32_t>> expectedLinks;
     std::map<std::uint32_t, std::vector<std::pair<std::uint16_t, std::uint32_t>>> doorsByMesh;
     std::map<std::uint32_t, std::uint32_t> outputPrimaryByCell;
     std::map<std::uint32_t, Bytes> navigationGeometry;
@@ -2048,6 +2278,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                                                                    { return a.polygons.size() < b.polygons.size(); })));
         core::NavMesh linkedMesh = candidate.mesh;
         std::vector<std::pair<std::uint32_t, std::uint16_t>> outgoing;
+        std::vector<std::uint32_t> outgoingTypes;
         for (const auto &link : candidate.borderLinks)
         {
             const auto target = link.generatedNeighborCell
@@ -2065,6 +2296,27 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             face.neighbors[link.edge] = static_cast<std::uint32_t>(outgoing.size());
             face.flags |= static_cast<std::uint16_t>(1U << link.edge);
             outgoing.emplace_back(*target, static_cast<std::uint16_t>(link.neighborPolygon));
+            outgoingTypes.push_back(0);
+        }
+        // Both ledge entries name the allocated primary NAVM, including fresh identities and plugin-copy outputs.
+        for (const auto &link : candidate.ledgeLinks)
+        {
+            for (const auto [polygon, edge, target, type] :
+                 {std::tuple{link.upperPolygon, link.upperEdge, link.lowerPolygon, 2U},
+                  std::tuple{link.lowerPolygon, link.lowerEdge, link.upperPolygon, 1U}})
+            {
+                if (polygon >= linkedMesh.polygons.size() || target >= linkedMesh.polygons.size() || edge >= 3 ||
+                    outgoing.size() >= 65535 ||
+                    linkedMesh.polygons[polygon].neighbors[edge] != std::numeric_limits<std::uint32_t>::max())
+                {
+                    return fail("A candidate ledge has an invalid or occupied edge.");
+                }
+                auto &face = linkedMesh.polygons[polygon];
+                face.neighbors[edge] = static_cast<std::uint32_t>(outgoing.size());
+                face.flags |= static_cast<std::uint16_t>(1U << edge);
+                outgoing.emplace_back(outputPrimaryByCell.at(cell.id), static_cast<std::uint16_t>(target));
+                outgoingTypes.push_back(type);
+            }
         }
         for (const auto &[triangle, reference] : doorEntries)
         {
@@ -2200,9 +2452,10 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             U32(nvnm, index == primary ? static_cast<std::uint32_t>(outgoing.size()) : 0U);
             if (index == primary)
             {
-                for (const auto &[target, triangle] : outgoing)
+                for (std::size_t linkIndex{}; linkIndex < outgoing.size(); ++linkIndex)
                 {
-                    U32(nvnm, 0);
+                    const auto [target, triangle] = outgoing[linkIndex];
+                    U32(nvnm, outgoingTypes[linkIndex]);
                     U32(nvnm, target);
                     U16(nvnm, triangle);
                 }
@@ -2311,7 +2564,7 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
                 for (std::size_t i{}; i < outgoing.size(); ++i)
                 {
                     expectedLinks.emplace_back(Get32(bytes, 12), static_cast<std::uint16_t>(i), outgoing[i].first,
-                                               outgoing[i].second);
+                                               outgoing[i].second, outgoingTypes[i]);
                 }
             }
             ResolvedRecord placement;
@@ -2654,9 +2907,9 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
         for (std::size_t i{}; i < appended.size() / 10; ++i)
         {
             const auto offset = i * 10;
-            expectedLinks.emplace_back(*rebasedId, static_cast<std::uint16_t>(oldExternalCount + i),
-                                       Get32(appended, offset + 4),
-                                       static_cast<std::uint16_t>(appended[offset + 8] | appended[offset + 9] << 8));
+            expectedLinks.emplace_back(
+                *rebasedId, static_cast<std::uint16_t>(oldExternalCount + i), Get32(appended, offset + 4),
+                static_cast<std::uint16_t>(appended[offset + 8] | appended[offset + 9] << 8), Get32(appended, offset));
         }
         ResolvedRecord placement;
         placement.groupHeaders = navm->groupHeaders;

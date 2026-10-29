@@ -7,6 +7,10 @@ this reference. The showcase utilities and renderer are described in the
 
 ## Code map
 
+- `CaptureLedgeGeometry`, `BuildCandidateLedgeLinks`: retained world-space collision
+  and safe downward edge pairing, consumed by reachability and scene/plugin export.
+  `ResolveNpcSafeDropHeight` supplies the winning NPC fall-height setting.
+
 - `navmesh::skyrim::AuditNavigation`, `NavigationAudit`: asset-free structural
   checks of live winning NAVMs, with resolved owner identities and bounded finding
   evidence for Repair-scope target selection. Unsupported layouts are counted separately.

@@ -91,6 +91,17 @@ class NavigationOcclusionTests(unittest.TestCase):
 
 
 class ComparisonCountsTests(unittest.TestCase):
+    def test_ledge_overlays_are_pink_and_follow_selected_navigation(self):
+        for navigation, prefix in (("Candidate NAVM", "Candidate"), ("Original NAVM (current cell)", "Authored")):
+            with self.subTest(navigation=navigation):
+                scene = [(navigation, "floor", square(0, 1)),
+                         ("Ledge links", f"{prefix} ledge", square(1, 0.8))]
+                visible = np.array(renderer.render(scene, navigation, None, 160, 160, 0, 90))
+                self.assertGreater(np.count_nonzero(np.all(visible == (255, 51, 166), axis=2)), 100)
+                scene[-1] = ("Ledge links", "Candidate ledge" if prefix == "Authored" else "Authored ledge", square(1, 0.8))
+                hidden = np.array(renderer.render(scene, navigation, None, 160, 160, 0, 90))
+                self.assertFalse(np.any(np.all(hidden == (255, 51, 166), axis=2)))
+
     def test_water_classifications_remain_blue_with_depth_testing(self):
         for classification in ("water", "water_preferred_path"):
             with self.subTest(classification=classification):

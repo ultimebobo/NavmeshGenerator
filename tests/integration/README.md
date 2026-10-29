@@ -71,3 +71,23 @@ xmake run navmesh-tests
 ```
 
 The test reads only the configured `Skyrim.esm`, checks that the lightweight parser can enumerate at least one cell, and makes no writes to the game directory. When the variable is absent, or `Skyrim.esm` is unavailable, it reports a skip and still exits successfully.
+
+## Vanilla ledge export regression
+
+With `SKYRIM_DATA_DIR` configured, run the optional CLI regression against the
+desktop executable, choosing a new output directory:
+
+```powershell
+python tests/integration/test_vanilla_ledge_links.py --exe ./build/windows/x64/release/NavmeshGenerator.exe --output ./output/vanilla-ledge-regression
+```
+
+The sample selects vanilla interiors and exteriors with live reciprocal authored
+ledges, including a cross-cell descent rebuilt with adjacent cells. It requires
+successful plugin export, nonempty candidates, valid topology, no batch failures
+or skips, and independently decoded serialized ledge entries matching both
+directions of every generated pair. Ordinary generated floor routes can replace
+authored ledges, so authored and generated link counts need not match. Logs,
+plugins and `results.json` remain in the output directory. The check reads installed
+assets without modifying the game directory or launching the UI; it skips when no
+Data directory is configured. This sample checks generation and serialization,
+not in-game actor pathfinding.

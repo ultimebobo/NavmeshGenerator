@@ -18,6 +18,8 @@ namespace navmesh::skyrim::detail
      * in Skyrim world units including weld tolerance. Other meshes retain authored endpoint tolerance.
      * Generated and edited live faces require positive horizontal winding; connection-only overrides can retain
      * zero-area authored faces only at identical triangle/vertex indices and exactly unchanged coordinates.
+     * Authored one-sided indexed shared edges can also remain unchanged in connection-only overrides;
+     * new or moved local connections require reciprocal adjacency.
      * @param resolvedIdentities Records already use resolved input identities, with reserved FF identities for
      * new meshes. Used to validate a complete patch set before per-file master encoding.
      * @return True when geometry, grid, cover, portal destinations and both directions of door associations agree.

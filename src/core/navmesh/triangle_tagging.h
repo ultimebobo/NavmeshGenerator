@@ -7,14 +7,14 @@
 namespace navmesh::core
 {
     /** Classify final generated triangles without changing geometry or connection indices.
-     * Water uses the effective CELL/WRLD surface independently of authored markings. Preferred
+     * Water uses effective CELL/WRLD and captured placed water surfaces independently of authored markings. Preferred
      * routes use each triangle's XY centroid and interpolated authored height to select the closest
      * overlapping floor within the profile climb or vertical voxel tolerance. Deleted, malformed
      * and degenerate authored faces are ignored.
      * @param candidate Final Skyrim-world candidate, after border reshaping; updated in place.
      * @param authored Winning selected-cell NAVMs, including unmarked floors that constrain matches.
      * @param waterHeight Effective finite water-surface Z in Skyrim world units. Submerged
-     * centroids are water; absent height supplies no water classification.
+     * centroids are water; absent height still permits captured placed water coverage.
      * @param enabled False clears only the two classification bits, preserving every other flag.
      * @throws std::invalid_argument If a supplied water height is nonfinite.
      */

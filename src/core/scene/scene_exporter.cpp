@@ -16,10 +16,10 @@ namespace
 {
     using namespace navmesh::core;
     // This order controls both the scene tree and the flattened mesh list in viewers.
-    constexpr std::array LayerOrder{SceneLayer::OriginalNavmesh,   SceneLayer::ExistingNavmesh,
-                                    SceneLayer::CandidateNavmesh,  SceneLayer::NavmeshLinks,
-                                    SceneLayer::DiagnosticMarkers, SceneLayer::Terrain,
-                                    SceneLayer::Collision,         SceneLayer::RenderFallback};
+    constexpr std::array LayerOrder{
+        SceneLayer::OriginalNavmesh, SceneLayer::ExistingNavmesh, SceneLayer::CandidateNavmesh,
+        SceneLayer::NavmeshLinks,    SceneLayer::LedgeLinks,      SceneLayer::DiagnosticMarkers,
+        SceneLayer::Terrain,         SceneLayer::Collision,       SceneLayer::RenderFallback};
     struct Object
     {
         SceneLayer layer{};
@@ -43,6 +43,8 @@ namespace
             return "Original NAVM (current cell)";
         case SceneLayer::NavmeshLinks:
             return "NAVM links";
+        case SceneLayer::LedgeLinks:
+            return "Ledge links";
         case SceneLayer::Terrain:
             return "Terrain";
         case SceneLayer::Collision:
@@ -58,6 +60,10 @@ namespace
     }
     [[nodiscard]] std::size_t MaterialIndex(SceneLayer layer, const std::string &classification = {})
     {
+        if (layer == SceneLayer::LedgeLinks)
+        {
+            return 18;
+        }
         if (classification == "water")
         {
             return 15;
@@ -666,7 +672,8 @@ namespace navmesh::core
             {
                 for (const auto &link : mesh.externalLinks)
                 {
-                    if (link.edge < 3 && !isReplaced(mesh.id) && !isReplaced(link.navmeshId))
+                    if (link.type != 1 && link.type != 2 && link.edge < 3 && !isReplaced(mesh.id) &&
+                        !isReplaced(link.navmeshId))
                     {
                         appendLink(mesh, link.polygon, link.edge, link.navmeshId, link.targetPolygon, false);
                     }
@@ -727,6 +734,86 @@ namespace navmesh::core
                     appendLink(view.candidate->mesh, link.polygon, link.edge, targetId, link.neighborPolygon, true,
                                target, view.cellFormId);
                 }
+            }
+        }
+        // Ledge inspection keeps the two landing faces together, distinct from ordinary green seam bars.
+        const auto appendLedge = [&](const NavMesh &upper, std::uint32_t upperPolygon, std::uint8_t upperEdge,
+                                     const NavMesh &lower, std::uint32_t lowerPolygon, std::uint8_t lowerEdge,
+                                     std::string name, std::string provenance)
+        {
+            auto upperPoints = SelectedPolygon(upper, upperPolygon, options.bounds);
+            auto lowerPoints = SelectedPolygon(lower, lowerPolygon, options.bounds);
+            if (!upperPoints || !lowerPoints || upperEdge >= 3 || lowerEdge >= 3)
+            {
+                return;
+            }
+            Object object{SceneLayer::LedgeLinks, std::move(name), std::move(provenance)};
+            AppendLinkBar(object, (*upperPoints)[upperEdge], (*upperPoints)[(upperEdge + 1) % 3]);
+            AppendLinkBar(object, (*lowerPoints)[lowerEdge], (*lowerPoints)[(lowerEdge + 1) % 3]);
+            // Lift only the inspection overlay to avoid coplanar flicker with the underlying floor.
+            for (auto *points : {&*upperPoints, &*lowerPoints})
+            {
+                for (auto &point : *points)
+                {
+                    point.z += 1.0F;
+                }
+                AppendPolygon(object, *points);
+            }
+            objects.push_back(std::move(object));
+        };
+        if (Contains(options.layers, SceneLayer::ExistingNavmesh))
+        {
+            for (const auto &mesh : navmeshes)
+            {
+                for (const auto &link : mesh.externalLinks)
+                {
+                    const auto target = meshById.find(link.navmeshId);
+                    if (link.type != 2 || target == meshById.end() || isReplaced(mesh.id) || isReplaced(link.navmeshId))
+                    {
+                        continue;
+                    }
+                    const auto &lower = *target->second;
+                    const auto reverse =
+                        std::find_if(lower.externalLinks.begin(), lower.externalLinks.end(),
+                                     [&](const auto &other)
+                                     {
+                                         return other.type == 1 && other.polygon == link.targetPolygon &&
+                                                other.navmeshId == mesh.id && other.targetPolygon == link.polygon;
+                                     });
+                    if (reverse != lower.externalLinks.end())
+                    {
+                        appendLedge(mesh, link.polygon, link.edge, lower, link.targetPolygon, reverse->edge,
+                                    std::format("Authored ledge {:08X}:{} -> {:08X}:{}", mesh.id, link.polygon,
+                                                lower.id, link.targetPolygon),
+                                    std::format("{{\"kind\":\"authored_ledge_link\",\"upperNavmesh\":\"{:08X}\","
+                                                "\"upperPolygon\":{},\"lowerNavmesh\":\"{:08X}\",\"lowerPolygon\":{}}}",
+                                                mesh.id, link.polygon, lower.id, link.targetPolygon));
+                    }
+                }
+            }
+        }
+        if (Contains(options.layers, SceneLayer::CandidateNavmesh))
+        {
+            const auto appendGeneratedLedges = [&](const NavMesh &mesh, const auto &links, std::uint32_t cellId)
+            {
+                for (const auto &link : links)
+                {
+                    appendLedge(mesh, link.upperPolygon, link.upperEdge, mesh, link.lowerPolygon, link.lowerEdge,
+                                std::format("Candidate ledge CELL {:08X}:{} -> {}", cellId, link.upperPolygon,
+                                            link.lowerPolygon),
+                                std::format("{{\"kind\":\"candidate_ledge_link\",\"cellFormId\":\"{:08X}\","
+                                            "\"upperPolygon\":{},\"lowerPolygon\":{}}}",
+                                            cellId, link.upperPolygon, link.lowerPolygon));
+                }
+            };
+            if (options.candidates.empty() && options.candidateNavmesh && options.candidateLedgeLinks)
+            {
+                appendGeneratedLedges(*options.candidateNavmesh, *options.candidateLedgeLinks,
+                                      metadata.selectedCell ? metadata.selectedCell->id : 0);
+            }
+            for (const auto &view : options.candidates)
+            {
+                appendGeneratedLedges(view.candidate->mesh, view.candidate->ledgeLinks, view.cellFormId);
             }
         }
         std::stable_sort(objects.begin(), objects.end(),
@@ -801,7 +888,7 @@ namespace navmesh::core
             result.triangles += object.triangles.size();
             ++result.objects;
         }
-        const std::array<const char *, 18> materialNames{"Unclassified NAVM (cyan)",
+        const std::array<const char *, 19> materialNames{"Unclassified NAVM (cyan)",
                                                          "Terrain (brown-green)",
                                                          "Collision (gray)",
                                                          "Render fallback (purple)",
@@ -818,8 +905,9 @@ namespace navmesh::core
                                                          "NAVM link (green)",
                                                          "Water NAVM (blue)",
                                                          "Preferred path NAVM (yellow)",
-                                                         "Water preferred path NAVM (blue)"};
-        const std::array<std::array<float, 4>, 18> colors{{{{0.0F, 0.85F, 0.95F, 0.70F}},
+                                                         "Water preferred path NAVM (blue)",
+                                                         "Ledge links (pink)"};
+        const std::array<std::array<float, 4>, 19> colors{{{{0.0F, 0.85F, 0.95F, 0.70F}},
                                                            {{0.35F, 0.48F, 0.16F, 1.0F}},
                                                            {{0.46F, 0.46F, 0.50F, 1.0F}},
                                                            {{0.58F, 0.25F, 0.75F, 0.80F}},
@@ -836,7 +924,8 @@ namespace navmesh::core
                                                            {{0.05F, 1.0F, 0.10F, 1.0F}},
                                                            {{0.05F, 0.30F, 1.0F, 0.8F}},
                                                            {{1.0F, 0.85F, 0.10F, 0.8F}},
-                                                           {{0.05F, 0.30F, 1.0F, 0.8F}}}};
+                                                           {{0.05F, 0.30F, 1.0F, 0.8F}},
+                                                           {{1.0F, 0.2F, 0.65F, 1.0F}}}};
         std::vector<std::string> materials;
         for (std::size_t i{}; i < materialNames.size(); ++i)
         {
@@ -860,6 +949,11 @@ namespace navmesh::core
         // terrain/collision/NAVM from an exporter silently losing that layer.
         std::vector<std::size_t> rootNodes;
         auto exportedLayers = options.layers;
+        if (Contains(options.layers, SceneLayer::ExistingNavmesh) ||
+            Contains(options.layers, SceneLayer::CandidateNavmesh))
+        {
+            exportedLayers.push_back(SceneLayer::LedgeLinks);
+        }
         if (Contains(options.layers, SceneLayer::ExistingNavmesh))
         {
             exportedLayers.push_back(SceneLayer::OriginalNavmesh);

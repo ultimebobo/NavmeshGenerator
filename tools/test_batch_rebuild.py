@@ -160,6 +160,25 @@ class BatchRebuild(unittest.TestCase):
         self.assertEqual(completed.returncode, code, completed.stdout + completed.stderr)
         return self.root / output
 
+    def test_npc_drop_ceiling_uses_winning_gmst_in_single_and_batch_runs(self):
+        def setting(value):
+            return record("GMST", 0x500, sub("EDID", b"fJumpFallHeightMinNPC\0") + sub("DATA", struct.pack("<f", value)))
+
+        baseline = self.root / "Baseline.esm"
+        baseline.write_bytes(baseline.read_bytes() + group(int.from_bytes(b"GMST", "little"), 0, setting(240)))
+        patch = self.root / "Patch.esp"
+        original = patch.read_bytes()
+        for value, expected in ((96, 96), (64, 64), (float("nan"), 0)):
+            patch.write_bytes(original + group(int.from_bytes(b"GMST", "little"), 0, setting(value)))
+            for mode, args, candidate_path in (
+                    ("single", ("--cell-formid", "100", "--generate-candidate"), "candidate-navm.json"),
+                    ("batch", ("--rebuild-plugin", "Patch.esp"), "cells/00000100/candidate-navm.json")):
+                with self.subTest(value=value, mode=mode):
+                    output = self.run_cli(*args, output=f"drop-{mode}-{expected}")
+                    candidate = json.loads((output / candidate_path).read_text())
+                    self.assertEqual(candidate["maximum_drop_height"], expected)
+                    self.assertEqual(candidate["ledge_links"], [])
+
     def test_repair_healthy_load_order_does_not_extract_geometry(self):
         output = self.run_cli("--repair-load-order", "--generate-plugin", terrain_only=False)
         report = json.loads((output / "batch-report.json").read_text())
@@ -515,6 +534,81 @@ class BatchRebuild(unittest.TestCase):
         with (self.root / "plugins.txt").open("a") as manifest:
             manifest.write(str(output / "generated-navmesh.esp") + "\n")
         self.run_cli("--list-cells", output="read-back")
+
+    def test_traversal_portal_failures_identify_the_source_and_reason(self):
+        triangles_at = 20 + 4 * 12
+        connections_at = triangles_at + 4 + 2 * 16
+        cases = [
+            (3, 0x200, 1, False, "enable_disable_portal_requires_authored_semantics"),
+            (99, 0x200, 1, False, "unsupported_portal_type"),
+            (1, 0x201, 0, False, "ledge_has_no_unique_reciprocal"),
+            (1, 0x200, 2, False, "invalid_target_triangle"),
+            (1, 0x200, 1, False, "ledge_has_no_unique_reciprocal"),
+            (3, 0x200, 1, True, "door_connection_lost"),
+        ]
+        for portal_type, target, target_triangle, unresolved_door, reason in cases:
+            with self.subTest(reason=reason):
+                body = bytearray(navm(0)[6:])
+                struct.pack_into("<H", body, triangles_at + 4 + 6, 0)
+                struct.pack_into("<H", body, triangles_at + 4 + 12, 1)
+                body[connections_at:connections_at + 4] = struct.pack(
+                    "<IIIH", 1, portal_type, target, target_triangle)
+                if unresolved_door:
+                    # Source-resolution failures take precedence over unsupported traversal semantics.
+                    door_at = connections_at + 14
+                    body[door_at:door_at + 4] = struct.pack("<IHII", 1, 0, 0xE48B73F3, 0)
+                self.write_baseline(navmeshes={0: sub("NVNM", body), 1: navm(1), 2: navm(2)})
+                output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin",
+                                      output=reason, code=2)
+                report = json.loads((output / "batch-report.json").read_text())
+                pasteable = (output / "bug-report.txt").read_text(encoding="ascii")
+                for text in (report["error"], pasteable):
+                    for detail in (reason, "CELL 00000100", "NAVM 00000200", "Baseline.esm"):
+                        self.assertIn(detail, text)
+                    if not unresolved_door:
+                        for detail in (f"type={portal_type}", "triangle=0 edge=0",
+                                       f"target_NAVM={target:08X}", f"target_triangle={target_triangle}",
+                                       "target_winner='Baseline.esm'"):
+                            self.assertIn(detail, text)
+                self.assertLessEqual(len(pasteable), 4500)
+                self.assertEqual(report["generation_failed_cells"], 0)
+                self.assertFalse((output / "generated-navmesh.esp").exists())
+
+    def test_cross_cell_ledge_validation_requires_an_effective_generated_route(self):
+        def ledge(x, polygon, edge, portal_type, target, target_polygon, height):
+            body = bytearray(navm(x)[6:])
+            for vertex in range(4):
+                struct.pack_into("<f", body, 20 + vertex * 12 + 8, height)
+            triangles_at = 20 + 4 * 12
+            face_at = triangles_at + 4 + polygon * 16
+            struct.pack_into("<H", body, face_at + 6 + edge * 2, 0)
+            struct.pack_into("<H", body, face_at + 12, 1 << edge)
+            connections_at = triangles_at + 4 + 2 * 16
+            body[connections_at:connections_at + 4] = struct.pack("<IIIH", 1, portal_type, target, target_polygon)
+            return sub("NVNM", body)
+
+        for separated in (False, True):
+            with self.subTest(separated=separated):
+                height = -256 if separated else 0
+                self.write_baseline(navmeshes={
+                    0: ledge(0, 0, 1, 2, 0x201, 1, 0),
+                    1: ledge(1, 1, 2, 1, 0x200, 0, height),
+                    2: navm(2)})
+                if separated:
+                    baseline = self.root / "Baseline.esm"
+                    payload = baseline.read_bytes()
+                    marker = record("LAND", 0x301, land())
+                    self.assertEqual(payload.count(marker), 1)
+                    baseline.write_bytes(payload.replace(marker, record("LAND", 0x301, land(height))))
+                output = self.run_cli("--cells", "100,101", "--generate-plugin",
+                                      output=f"cross-cell-ledge-{separated}", code=2 if separated else 0)
+                report = json.loads((output / "batch-report.json").read_text())
+                if separated:
+                    self.assertIn("ledge_has_no_generated_floor_route", report["error"])
+                    self.assertFalse((output / "generated-navmesh.esp").exists())
+                else:
+                    self.assertEqual(report["status"], "complete")
+                    self.assertTrue((output / "generated-navmesh.esp").exists())
 
     def test_navmesh_connection_failures_have_pasteable_diagnostics(self):
         body = bytearray(navm(0)[6:])
@@ -2487,6 +2581,37 @@ class BatchRebuild(unittest.TestCase):
                 self.assert_door_navigation(output / filename)
                 self.assertEqual(baseline.read_bytes(), original)
 
+    def test_authored_door_landing_survives_marker_displacement(self):
+        reference = (sub("NAME", struct.pack("<I", 0x600)) +
+                     sub("XNDP", struct.pack("<IHH", 0x200, 0, 0)) +
+                     sub("DATA", struct.pack("<6f", -100, 128, 0, 0, 0, 0)))
+        self.write_baseline({0: navm_with_door(0, 0x500), 1: navm(1)},
+                            {0: record("REFR", 0x500, reference)}, cell_count=2)
+        baseline = self.root / "Baseline.esm"
+        baseline.write_bytes(baseline.read_bytes() + record("DOOR", 0x600, b""))
+        (self.root / "plugins.txt").write_text("Baseline.esm\n")
+        original = baseline.read_bytes()
+        for scope, args, artifact, plugin in [
+            ("single", ["--cell-formid", "100", "--generate-plugin"],
+             "candidate-navm.json", "generated-navmesh.esp"),
+            ("batch", ["--cells", "100,101", "--generate-plugin"],
+             "cells/00000100/candidate-navm.json", "generated-navmesh.esp"),
+            ("cached", ["--cells", "100,101", "--generate-plugin"],
+             "cells/00000100/candidate-navm.json", "generated-navmesh.esp"),
+            ("copy", ["--rebuild-plugin", "Baseline.esm", "--copy-plugin"],
+             "cells/00000100/candidate-navm.json", "Baseline.esm"),
+        ]:
+            with self.subTest(scope=scope):
+                output = self.run_cli(*args, output=f"authored-landing-{scope}")
+                candidate = json.loads((output / artifact).read_text())
+                self.assertEqual(candidate["exits"][0]["reference_id"], "00000500")
+                self.assertIsNotNone(candidate["exits"][0]["polygon"])
+                self.assert_door_navigation(output / plugin)
+                self.assertEqual(baseline.read_bytes(), original)
+                if scope == "cached":
+                    report = json.loads((output / "batch-report.json").read_text())
+                    self.assertEqual(report["candidate_cache_hits"], 2)
+
     def test_door_navigation_preserves_winner_and_cached_candidates(self):
         references = {x: record("REFR", 0x500 + x,
                                 sub("NAME", struct.pack("<I", 0x600)) +
@@ -2651,7 +2776,7 @@ class BatchRebuild(unittest.TestCase):
             expected = ["Original NAVM (current cell)", "Neighboring NAVM"]
             if generating:
                 expected.append("Candidate NAVM")
-            expected += ["NAVM links", "Doors", "Terrain", "Collision", "Render fallback"]
+            expected += ["NAVM links", "Ledge links", "Doors", "Terrain", "Collision", "Render fallback"]
             self.assertEqual([node["name"] for node in roots], expected)
             self.assertEqual([scene["nodes"][i]["name"] for i in roots[0]["children"]],
                              ["Existing NAVM 01000200: door_linked", "Existing NAVM 01000200: supported"])
@@ -2728,7 +2853,7 @@ class BatchRebuild(unittest.TestCase):
                               "--geometry-layers", "terrain,diagnostics,navmesh", output="scene-reordered")
         filtered, _ = read_scene(output)
         self.assertEqual([filtered["nodes"][i]["name"] for i in filtered["scenes"][0]["nodes"]],
-                         ["Original NAVM (current cell)", "Neighboring NAVM", "NAVM links", "Doors", "Terrain"])
+                         ["Original NAVM (current cell)", "Neighboring NAVM", "NAVM links", "Ledge links", "Doors", "Terrain"])
 
     def test_scene_neighborhood_excludes_distant_geometry_supplier_cells(self):
         # Distant references can supply intersecting models without adding their

@@ -19,6 +19,60 @@ namespace
     constexpr auto NoNeighbor = std::numeric_limits<std::uint32_t>::max();
     double Orientation(Vec3 a, Vec3 b, Vec3 c);
 
+    /// Shared-edge components define walking connectivity independently of region labels or ledge metadata.
+    std::vector<std::uint32_t> WalkingComponents(const NavMesh &mesh)
+    {
+        std::vector<std::uint32_t> components(mesh.polygons.size(), NoNeighbor);
+        for (std::uint32_t polygon{}; polygon < mesh.polygons.size(); ++polygon)
+        {
+            if (components[polygon] != NoNeighbor)
+            {
+                continue;
+            }
+            std::vector<std::uint32_t> pending{polygon};
+            components[polygon] = polygon;
+            while (!pending.empty())
+            {
+                const auto current = pending.back();
+                pending.pop_back();
+                const auto &face = mesh.polygons[current];
+                for (std::size_t edge{}; edge < 3; ++edge)
+                {
+                    const auto neighbor = face.neighbors[edge];
+                    if (!(face.flags & (1U << edge)) && neighbor < mesh.polygons.size() &&
+                        components[neighbor] == NoNeighbor)
+                    {
+                        components[neighbor] = polygon;
+                        pending.push_back(neighbor);
+                    }
+                }
+            }
+        }
+        return components;
+    }
+
+    /// Retessellation may neither split a floor network nor merge unrelated floors, including around landing ports.
+    bool PreservesWalkingComponents(const NavMesh &original, const NavMesh &simplified,
+                                    const std::vector<std::vector<std::uint32_t>> &contributors)
+    {
+        const auto before = WalkingComponents(original);
+        const auto after = WalkingComponents(simplified);
+        std::map<std::uint32_t, std::uint32_t> forward, reverse;
+        for (std::size_t polygon{}; polygon < contributors.size(); ++polygon)
+        {
+            for (const auto source : contributors[polygon])
+            {
+                const auto [mapped, created] = forward.emplace(before[source], after[polygon]);
+                const auto [origin, inserted] = reverse.emplace(after[polygon], before[source]);
+                if ((!created && mapped->second != after[polygon]) || (!inserted && origin->second != before[source]))
+                {
+                    return false;
+                }
+            }
+        }
+        return std::all_of(before.begin(), before.end(), [&](auto component) { return forward.contains(component); });
+    }
+
     struct BoundarySegment
     {
         Vec3 first;
@@ -869,8 +923,9 @@ namespace navmesh::core
                 }
                 const auto &faces = incident[center];
                 const auto fan = FindFan(mesh, center, faces);
-                if (!fan || std::any_of(fan->rim.begin(), fan->rim.end(),
-                                        [&](auto vertex) { return blocked[vertex] || pinned[vertex]; }))
+                // Retriangulation keeps every rim vertex and edge exact. Pins on that rim
+                // protect adjacent ports and floor boundaries without blocking interior cleanup.
+                if (!fan || std::any_of(fan->rim.begin(), fan->rim.end(), [&](auto vertex) { return blocked[vertex]; }))
                 {
                     continue;
                 }
@@ -1019,6 +1074,13 @@ namespace navmesh::core
         {
             pinFace(link.polygon);
         }
+        // Exact port triangles preserve departure and landing geometry. The component check
+        // below retains their walking networks while permitting bounded trimming elsewhere.
+        for (const auto &link : candidate.ledgeLinks)
+        {
+            pinFace(link.upperPolygon);
+            pinFace(link.lowerPolygon);
+        }
         for (const auto &exit : candidate.exits)
         {
             if (exit.polygon)
@@ -1097,6 +1159,11 @@ namespace navmesh::core
         {
             link.polygon = remap.at(link.polygon);
         }
+        for (auto &link : simplified.ledgeLinks)
+        {
+            link.upperPolygon = remap.at(link.upperPolygon);
+            link.lowerPolygon = remap.at(link.lowerPolygon);
+        }
         for (auto &exit : simplified.exits)
         {
             if (exit.polygon)
@@ -1105,7 +1172,8 @@ namespace navmesh::core
             }
         }
         RefreshCandidateTopology(simplified);
-        if (!simplified.topology.valid)
+        if (!simplified.topology.valid ||
+            !PreservesWalkingComponents(candidate.mesh, simplified.mesh, originalPolygons))
         {
             return 0;
         }

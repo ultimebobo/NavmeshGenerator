@@ -36,8 +36,7 @@ namespace
         return std::hypot(std::hypot(a.x - b.x, a.y - b.y), a.z - b.z) <= navmesh::core::AuthoredBorderTolerance;
     }
 
-    /// Connection-only overrides can preserve vertical authored faces with zero horizontal area.
-    /// Require identical vertex indices and coordinates; generated, moved or newly activated faces stay strict.
+    /// Establish exact triangle identity and geometry for preservation in a connection-only override.
     bool UnchangedAuthoredTriangle(const navmesh::core::NavMesh &mesh, std::size_t index,
                                    const navmesh::core::NavMesh *authored)
     {
@@ -65,6 +64,42 @@ namespace
             }
         }
         return true;
+    }
+
+    /// Preserve a source's one-sided indexed shared edge without inventing a reverse path.
+    /// Both faces, the claimed local edge and the opposite open edge must retain their original identity.
+    bool UnchangedAuthoredLocalAdjacency(const navmesh::core::NavMesh &mesh, std::size_t index, std::size_t edge,
+                                         const navmesh::core::NavMesh *authored)
+    {
+        if (!UnchangedAuthoredTriangle(mesh, index, authored))
+        {
+            return false;
+        }
+        const auto &face = mesh.polygons[index];
+        const auto &before = authored->polygons[index];
+        const auto neighborIndex = face.neighbors[edge];
+        if ((before.flags & (1U << edge)) || before.neighbors[edge] != neighborIndex ||
+            (before.flags & ~7U) != (face.flags & ~7U) || !UnchangedAuthoredTriangle(mesh, neighborIndex, authored))
+        {
+            return false;
+        }
+        const auto &neighbor = mesh.polygons[neighborIndex];
+        const auto &originalNeighbor = authored->polygons[neighborIndex];
+        if ((originalNeighbor.flags & ~7U) != (neighbor.flags & ~7U))
+        {
+            return false;
+        }
+        for (std::size_t side{}; side < 3; ++side)
+        {
+            if (face.vertices[edge] == neighbor.vertices[(side + 1) % 3] &&
+                face.vertices[(edge + 1) % 3] == neighbor.vertices[side] && !(neighbor.flags & (1U << side)) &&
+                !(originalNeighbor.flags & (1U << side)) && neighbor.neighbors[side] == 0xffffU &&
+                originalNeighbor.neighbors[side] == 0xffffU)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     bool Decode(const ResolvedRecord &record, navmesh::core::NavMesh &mesh, float stepHeight,
@@ -153,7 +188,7 @@ namespace
                         reciprocal = true;
                     }
                 }
-                if (!reciprocal)
+                if (!reciprocal && !UnchangedAuthoredLocalAdjacency(mesh, index, edge, authored))
                 {
                     return false;
                 }

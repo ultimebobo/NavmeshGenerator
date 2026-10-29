@@ -118,6 +118,8 @@ namespace navmesh::core
         Mesh renderFallbackMesh;
         std::vector<TriangleProvenance> renderFallbackTriangleProvenance;
         Mesh mesh;
+        /// Placed horizontal water-shader surfaces in Skyrim world units; supply water coverage, never solid floors.
+        Mesh waterSurfaces;
         std::vector<TriangleProvenance> triangleProvenance;
         std::vector<CoverageEntry> coverage;
         [[nodiscard]] std::optional<Transform> WorldTransform(std::size_t nodeIndex) const noexcept;

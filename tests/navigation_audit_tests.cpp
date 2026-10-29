@@ -33,6 +33,15 @@ void TestNavigationAudit()
     assert(audit().findings.empty());
     assert(audit().scannedNavmeshes == 2);
 
+    // One-sided indexed shared edges retain their direction without selecting an automatic rebuild.
+    auto &oneSided = input.cells.front().navMeshes.front();
+    oneSided.polygons[1].neighbors[0] = 0xffff;
+    assert(audit().findings.empty());
+    oneSided.vertices.push_back(oneSided.vertices[0]);
+    oneSided.polygons[1].vertices[0] = 4;
+    assert(Has(audit(), "invalid_adjacency"));
+    oneSided = Square(0x200);
+
     // A defect in one winning mesh selects only its owning CELL, with bounded evidence per kind.
     auto &mesh = input.cells.front().navMeshes.front();
     mesh.polygons.front().neighbors[0] = 99;

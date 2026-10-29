@@ -7,6 +7,7 @@
 #include <NifFile.hpp>
 #include <Animation.hpp>
 #include <bhk.hpp>
+#include <Shaders.hpp>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -203,6 +204,7 @@ namespace
         TriangleGeometry render;
         TriangleGeometry collision;
         TriangleGeometry fireExclusion;
+        TriangleGeometry water;
         navmesh::core::AABB hearthBedBounds;
         std::vector<std::string> collisionShapeTypes;
         bool nonSolidCollision{};
@@ -1234,13 +1236,17 @@ namespace
         {
             result.hearthBedBounds = FindHearthBedBounds(nif);
         }
-        if (!includeRender)
+        if (includeRender)
         {
-            return result;
+            result.fireExclusion = BuildFireExclusion(nif);
         }
-        result.fireExclusion = BuildFireExclusion(nif);
         for (auto *shape : nif.GetShapes())
         {
+            const bool isWater = dynamic_cast<nifly::BSWaterShaderProperty *>(nif.GetShader(shape)) != nullptr;
+            if (!includeRender && !isWater)
+            {
+                continue;
+            }
             if (IsOperablePart(nif, shape, operableNodes))
             {
                 result.operablePartsExcluded = true;
@@ -1257,28 +1263,45 @@ namespace
             {
                 continue;
             }
-            const auto base = static_cast<std::uint32_t>(result.render.vertices.size());
-            result.render.shapes.push_back(shape->name.get());
-            result.render.vertices.reserve(result.render.vertices.size() + vertices.size());
+            auto &geometry = isWater ? result.water : result.render;
+            const auto base = static_cast<std::uint32_t>(geometry.vertices.size());
+            geometry.shapes.push_back(shape->name.get());
+            geometry.vertices.reserve(geometry.vertices.size() + vertices.size());
             for (const auto &vertex : vertices)
             {
                 const auto transformed = *transform * vertex;
-                result.render.vertices.push_back({transformed.x, transformed.y, transformed.z});
+                geometry.vertices.push_back({transformed.x, transformed.y, transformed.z});
             }
             for (const auto &triangle : triangles)
             {
                 if (triangle.p1 >= vertices.size() || triangle.p2 >= vertices.size() || triangle.p3 >= vertices.size())
                 {
-                    ++result.render.invalidIndices;
+                    ++geometry.invalidIndices;
                     continue;
                 }
                 if (triangle.p1 == triangle.p2 || triangle.p1 == triangle.p3 || triangle.p2 == triangle.p3)
                 {
-                    ++result.render.degenerateTriangles;
+                    ++geometry.degenerateTriangles;
                     continue;
                 }
-                result.render.triangles.push_back({{base + triangle.p1, base + triangle.p2, base + triangle.p3}});
+                geometry.triangles.push_back({{base + triangle.p1, base + triangle.p2, base + triangle.p3}});
             }
+        }
+        if (includeRender && !result.water.triangles.empty())
+        {
+            const auto base = static_cast<std::uint32_t>(result.render.vertices.size());
+            result.render.vertices.insert(result.render.vertices.end(), result.water.vertices.begin(),
+                                          result.water.vertices.end());
+            for (auto triangle : result.water.triangles)
+            {
+                for (auto &vertex : triangle.vertices)
+                {
+                    vertex += base;
+                }
+                result.render.triangles.push_back(triangle);
+            }
+            result.render.shapes.insert(result.render.shapes.end(), result.water.shapes.begin(),
+                                        result.water.shapes.end());
         }
         return result;
     }
@@ -1665,9 +1688,10 @@ namespace navmesh::skyrim
                 shapeBytes += shape.capacity();
             }
             const auto bytes = GeometryBytes(value->render) + GeometryBytes(value->collision) +
-                               GeometryBytes(value->fireExclusion) + key.capacity() + sizeof(NifGeometry) -
-                               3 * sizeof(TriangleGeometry) + shapeBytes + value->version.capacity() +
-                               value->readFailure.capacity() + sizeof(Entry<NifGeometry>) + 64;
+                               GeometryBytes(value->fireExclusion) + GeometryBytes(value->water) + key.capacity() +
+                               sizeof(NifGeometry) - 4 * sizeof(TriangleGeometry) + shapeBytes +
+                               value->version.capacity() + value->readFailure.capacity() + sizeof(Entry<NifGeometry>) +
+                               64;
             if (bytes <= budget)
             {
                 models.emplace(key, Entry<NifGeometry>{value, bytes, ++clock});
@@ -1874,6 +1898,33 @@ namespace navmesh::skyrim
             const auto model = cache.impl_->Model(modelPath, includeRender, hearthAsset, operableActivator,
                                                   IsPassageAsset(reference.modelPath), modelIdentity);
             const auto &nifGeometry = *model;
+            if (!reference.envelope && !nifGeometry.water.triangles.empty())
+            {
+                const auto transform =
+                    core::Transform::FromSkyrimReference(reference.position, reference.rotation, reference.scale);
+                const auto placed = cache.impl_->Placement(nifGeometry.water, transform, modelIdentity + ":water");
+                if (!placed->invalidVertices)
+                {
+                    auto &water = output.scene.waterSurfaces;
+                    const auto base = static_cast<std::uint32_t>(water.vertices.size());
+                    water.vertices.insert(water.vertices.end(), placed->mesh.vertices.begin(),
+                                          placed->mesh.vertices.end());
+                    for (auto triangle : placed->mesh.triangles)
+                    {
+                        for (auto &vertex : triangle.vertices)
+                        {
+                            vertex += base;
+                        }
+                        const auto a = water.vertices[triangle.vertices[0]];
+                        const auto b = water.vertices[triangle.vertices[1]];
+                        const auto c = water.vertices[triangle.vertices[2]];
+                        if (std::max({a.z, b.z, c.z}) - std::min({a.z, b.z, c.z}) <= 0.01F)
+                        {
+                            water.triangles.push_back(triangle);
+                        }
+                    }
+                }
+            }
             const auto addFailure = [&](std::string category, std::string reason)
             {
                 if (archiveFailureReferences.contains(reference.id))

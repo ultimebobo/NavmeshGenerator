@@ -139,6 +139,14 @@ namespace
             regions.push_back(std::move(region));
         }
         candidate.regions = std::move(regions);
+        std::erase_if(
+            candidate.ledgeLinks, [&](const auto &link)
+            { return polygonRemap.at(link.upperPolygon) == Removed || polygonRemap.at(link.lowerPolygon) == Removed; });
+        for (auto &link : candidate.ledgeLinks)
+        {
+            link.upperPolygon = polygonRemap[link.upperPolygon];
+            link.lowerPolygon = polygonRemap[link.lowerPolygon];
+        }
         std::erase_if(candidate.borderLinks,
                       [&](const auto &link) { return polygonRemap.at(link.polygon) == Removed; });
         for (auto &link : candidate.borderLinks)
@@ -351,6 +359,27 @@ namespace navmesh::core
                 retained[root] = true;
             }
         }
+
+        // Extend access only in the traversable direction, including chains of descents.
+        // A landing in an anchored network cannot provide access to the departure floor above it.
+        bool changed{};
+        do
+        {
+            changed = false;
+            for (std::size_t index{}; index < targets.size(); ++index)
+            {
+                for (const auto &link : targets[index].candidate->ledgeLinks)
+                {
+                    const auto upper = floors.Root(offsets[index] + link.upperPolygon);
+                    const auto lower = floors.Root(offsets[index] + link.lowerPolygon);
+                    if (retained[upper] && !retained[lower])
+                    {
+                        retained[lower] = true;
+                        changed = true;
+                    }
+                }
+            }
+        } while (changed);
 
         // Plan all polygon identities before editing any candidate, then update
         // reciprocal destinations using the same maps so no kept portal dangles.

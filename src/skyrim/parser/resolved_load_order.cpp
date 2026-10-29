@@ -69,12 +69,12 @@ namespace
         // Keep the full roadmap subset, including base forms that provide a model
         // and doors/links needed by later navigation work.  Other record types
         // remain outside this bounded in-memory reader.
-        return type == "WRLD" || type == "CELL" || type == "LAND" || type == "REFR" || type == "ACHR" ||
-               type == "NAVM" || type == "NAVI" || type == "STAT" || type == "MSTT" || type == "ACTI" ||
-               type == "DOOR" || type == "FURN" || type == "TREE" || type == "FLOR" || type == "CONT" ||
-               type == "LVLI" || type == "MISC" || type == "WEAP" || type == "ARMO" || type == "AMMO" ||
-               type == "ALCH" || type == "BOOK" || type == "SLGM" || type == "KEYM" || type == "INGR" ||
-               type == "SCRL" || type == "LIGH" || type == "HAZD" || type == "IDLM";
+        return type == "GMST" || type == "WRLD" || type == "CELL" || type == "LAND" || type == "REFR" ||
+               type == "ACHR" || type == "NAVM" || type == "NAVI" || type == "STAT" || type == "MSTT" ||
+               type == "ACTI" || type == "DOOR" || type == "FURN" || type == "TREE" || type == "FLOR" ||
+               type == "CONT" || type == "LVLI" || type == "MISC" || type == "WEAP" || type == "ARMO" ||
+               type == "AMMO" || type == "ALCH" || type == "BOOK" || type == "SLGM" || type == "KEYM" ||
+               type == "INGR" || type == "SCRL" || type == "LIGH" || type == "HAZD" || type == "IDLM";
     }
     bool DecodePayload(const std::vector<std::uint8_t> &fileBytes, std::size_t begin, std::size_t end, bool compressed,
                        std::vector<std::uint8_t> &decoded, std::string &error)

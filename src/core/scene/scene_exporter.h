@@ -24,7 +24,9 @@ namespace navmesh::core
         /// Derived ownership group included by ExistingNavmesh selection.
         OriginalNavmesh,
         /// Derived connection group included by ExistingNavmesh selection.
-        NavmeshLinks
+        NavmeshLinks,
+        /// Pink drop edges and both linked triangles; derived from displayed navigation layers.
+        LedgeLinks
     };
     struct SceneBounds
     {
@@ -64,6 +66,8 @@ namespace navmesh::core
         /// Generated exterior connections; invalid or unavailable destination triangles are omitted.
         /// Displaying a candidate suppresses authored bars involving the selected cell's original NAVMs.
         const std::vector<CandidateBorderLink> *candidateBorderLinks{};
+        /// Same-mesh descents for the single candidate; both landing triangles are displayed in pink.
+        const std::vector<CandidateLedgeLink> *candidateLedgeLinks{};
         /// Multi-cell candidates, including per-cell exit indices and generated-neighbor connections.
         /// Used instead of the single-candidate fields when nonempty; candidate pointers must be nonnull.
         std::vector<SceneCandidate> candidates;

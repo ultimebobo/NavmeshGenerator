@@ -22,6 +22,7 @@ MUTED = (157, 174, 185)
 AUTHORED = (238, 185, 91)
 GENERATED = (70, 216, 181)
 WATER = (13, 76, 255)
+LEDGE = (255, 51, 166)
 # Skyrim world units retained above the highest selected navigation vertex.
 INTERIOR_CUT_MARGIN = 64.0
 
@@ -288,6 +289,10 @@ def render(scene, navigation, bounds, width, height, azimuth, elevation, cut_hei
             "water", "water_preferred_path") else color
         rasterize(crop_triangles(triangles, bounds), face_color, basis, framing,
                   pixels, depth, wire=True, depth_tolerance=0.001)
+    for layer, name, triangles in scene:
+        if layer == "Ledge links" and name.startswith("Authored" if navigation.startswith("Original") else "Candidate"):
+            rasterize(crop_triangles(triangles, bounds), LEDGE, basis, framing,
+                      pixels, depth, wire=True, depth_tolerance=0.001)
     return Image.fromarray(pixels)
 
 
@@ -353,6 +358,9 @@ def scene_image(scene, output, filename, title, subtitle, bounds=None, azimuth=-
     text(draw, (104, 1364), "Authored navigation" if authored else "Generated navigation", 26)
     draw.rounded_rectangle((485, 1373, 509, 1397), radius=3, fill=(118, 130, 138))
     text(draw, (525, 1364), "Collision geometry", 26)
+    if any(layer == "Ledge links" and len(triangles) for layer, _, triangles in scene):
+        draw.rounded_rectangle((900, 1373, 924, 1397), radius=3, fill=LEDGE)
+        text(draw, (940, 1364), "Ledge links", 26)
     geometry_note = "Interior cutaway • Unmodified navigation" if cut_height is not None else "Unmodified exported triangles"
     text(draw, (60, 1430), geometry_note + " • Shared depth testing", 24, MUTED)
     image.save(output / filename)

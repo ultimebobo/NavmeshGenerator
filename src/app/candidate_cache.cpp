@@ -21,7 +21,7 @@ namespace navmesh::app::detail
         // This identity versions both storage and successful generation semantics.
         // Change its pipeline revision when successful output becomes incompatible;
         // executable rebuilds alone must not discard completed generation work.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-10/recast-pipeline-50";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-12/recast-pipeline-58";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)
@@ -72,7 +72,7 @@ namespace navmesh::app::detail
         template <class Archive> void Fields(Archive &a, core::NavigationProfile &v)
         {
             a(v.name, v.agentRadius, v.agentHeight, v.maxSlopeDegrees, v.stepHeight, v.clearance, v.weldTolerance,
-              v.minimumRegionArea, v.contourSimplificationTolerance, v.cellBorderPolicy);
+              v.minimumRegionArea, v.contourSimplificationTolerance, v.cellBorderPolicy, v.maximumDropHeight);
         }
         template <class Archive> void Fields(Archive &a, core::RecastSettings &v)
         {
@@ -103,6 +103,10 @@ namespace navmesh::app::detail
         {
             a(v.region, v.closed, v.vertices);
         }
+        template <class Archive> void Fields(Archive &a, core::CandidateLedgeLink &v)
+        {
+            a(v.upperPolygon, v.lowerPolygon, v.upperEdge, v.lowerEdge);
+        }
         template <class Archive> void Fields(Archive &a, core::CandidateTopology &v)
         {
             a(v.valid, v.findings);
@@ -118,7 +122,8 @@ namespace navmesh::app::detail
             a(v.profile, v.recastSettings, v.partitioningAlgorithm, v.triangleTagging, v.mesh, v.polygonSourceTriangles,
               v.polygonContributingTriangles, v.regions, v.exits, v.borderLinks, v.contours, v.topology, v.statistics,
               v.warnings, v.authoredBorderVertexEdits, v.coverGeometry.vertices, v.coverGeometry.triangles,
-              v.closedAuthoredPortals);
+              v.closedAuthoredPortals, v.ledgeLinks, v.ledgeGeometry.vertices, v.ledgeGeometry.triangles,
+              v.ledgeWaterGeometry.vertices, v.ledgeWaterGeometry.triangles, v.ledgeWaterHeight);
         }
 
         /// One field visitor supplies deterministic hashing and private binary storage without copying whole candidates.
@@ -270,7 +275,8 @@ namespace navmesh::app::detail
         Archive archive(hash);
         archive(Writable(scene.mesh.vertices), Writable(scene.mesh.triangles), Writable(scene.geometrySources),
                 Writable(scene.triangleProvenance), Writable(profile), Writable(settings), bounds, Writable(exits),
-                Writable(neighbors), Writable(authored), waterHeight, tagTriangles);
+                Writable(neighbors), Writable(authored), waterHeight, tagTriangles,
+                Writable(scene.waterSurfaces.vertices), Writable(scene.waterSurfaces.triangles));
         return archive.good ? hash.Hex() : std::string{};
     }
 
@@ -365,6 +371,24 @@ namespace navmesh::app::detail
                 !std::isfinite(loaded.profile.stepHeight) || loaded.profile.stepHeight < 0 ||
                 !std::all_of(loaded.mesh.vertices.begin(), loaded.mesh.vertices.end(), finite) ||
                 !std::all_of(loaded.coverGeometry.vertices.begin(), loaded.coverGeometry.vertices.end(), finite) ||
+                !std::all_of(loaded.ledgeGeometry.vertices.begin(), loaded.ledgeGeometry.vertices.end(), finite) ||
+                !std::all_of(loaded.ledgeWaterGeometry.vertices.begin(), loaded.ledgeWaterGeometry.vertices.end(),
+                             finite) ||
+                (loaded.ledgeWaterHeight && !std::isfinite(*loaded.ledgeWaterHeight)) ||
+                std::any_of(
+                    loaded.ledgeWaterGeometry.triangles.begin(), loaded.ledgeWaterGeometry.triangles.end(),
+                    [&](const auto &face)
+                    {
+                        return std::any_of(face.vertices.begin(), face.vertices.end(), [&](auto index)
+                                           { return index >= loaded.ledgeWaterGeometry.vertices.size(); });
+                    }) ||
+                std::any_of(
+                    loaded.ledgeGeometry.triangles.begin(), loaded.ledgeGeometry.triangles.end(),
+                    [&](const auto &face)
+                    {
+                        return std::any_of(face.vertices.begin(), face.vertices.end(),
+                                           [&](auto index) { return index >= loaded.ledgeGeometry.vertices.size(); });
+                    }) ||
                 std::any_of(
                     loaded.coverGeometry.triangles.begin(), loaded.coverGeometry.triangles.end(),
                     [&](const auto &face)

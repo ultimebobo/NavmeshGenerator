@@ -4,6 +4,13 @@ This project is intentionally split into processing stages so the analysis logic
 
 The build targets the Windows application, neutral core, and tests. Runtime game APIs are outside the processing pipeline.
 
+`core/navmesh/ledge_links` detects conservative downward edge pairs and checks
+standing-body clearance against retained authoritative collision. The Skyrim parser
+resolves the NPC fall-height GMST into the shared movement profile; the neutral
+algorithm owns no plugin or runtime types. Reachability and scene serialization
+consume the same directed pairs, and the plugin writer encodes their reciprocal
+Skyrim traversal records after allocating output NAVM identities.
+
 The app-owned `app/run_progress` reporter serializes activity events, publishes
 idle heartbeats, and appends flushed UTF-8 logs independently of processing and
 export policy. The CLI and desktop consume the same stream. The reporter owns
@@ -109,8 +116,9 @@ Exterior default heights use winning WRLD water data and master-aware parent-wor
 inheritance; invalid, cyclic or unresolved data supplies no water plane. Both engine default-height
 sentinel forms request world water rather than becoming literal elevations.
 The range interpretation follows [CommonLibSSE-NG](https://github.com/CharmedBaryon/CommonLibSSE-NG/blob/main/src/RE/T/TESObjectCELL.cpp).
-The neutral `core/navmesh/triangle_tagging` module classifies final generated
-triangles using that plane and winning authored floor markings. App cell and
+Horizontal placed water-shader surfaces cross extraction as separate non-solid
+scene geometry. The neutral `core/navmesh/triangle_tagging` module classifies final generated
+triangles using physical water coverage and winning authored preferred-route markings. App cell and
 batch paths invoke it after border reshaping; cache inputs include all tagging
 dependencies. The serializer retains flags and inspection exports expose them.
 

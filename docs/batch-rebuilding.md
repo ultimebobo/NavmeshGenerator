@@ -28,7 +28,8 @@ and unsupported NAVM counts and the first finding of each kind per NAVM, includi
 resolved CELL/NAVM identities and a triangle index where applicable. Deleted records,
 disabled triangle geometry, valid empty NAVMs and cells without navigation do not select repairs.
 Unsupported layouts are counted, never inferred as faults; normal export guards
-can still reject unsafe inputs. Intentional open borders, disconnected islands and
+can still reject unsafe inputs. One-sided adjacency across an indexed shared edge,
+intentional open borders, disconnected islands and
 authored portal offsets are preserved. Selection does not test terrain/model support,
 obstructions, arbitrary overlaps or heuristic gaps, and does not promise that
 regeneration will resolve every finding; generation skips and export failures remain

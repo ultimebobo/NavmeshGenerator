@@ -892,8 +892,7 @@ void TestBatchGenerationFailurePolicy()
     }
     assert(app::detail::StoreCandidate(floorCache, successful.candidate, floor));
 
-    // Recast floors are filtered after reconciliation for every partition strategy
-    // and for cache hits. An inaccessible upper platform must not reach final export.
+    // A roof with only a downward exit has no entrance from the retained primary floor.
     auto roofScene = floor;
     roofScene.mesh.vertices.insert(roofScene.mesh.vertices.end(),
                                    {{160, 160, 400}, {352, 160, 400}, {352, 352, 400}, {160, 352, 400}});
@@ -913,11 +912,9 @@ void TestBatchGenerationFailurePolicy()
             assert(app::detail::ReconcileBatchBorders(roofResults, {}).empty());
             const auto &retained = roofResults[0].candidate;
             assert(retained.topology.valid && retained.regions.size() == 1);
-            assert(retained.statistics.rejectedUnreachable > 0);
-            for (const auto vertex : retained.mesh.vertices)
-            {
-                assert(std::abs(vertex.z) <= roofOptions.recastSettings.cellHeight);
-            }
+            assert(retained.ledgeLinks.empty());
+            assert(std::all_of(retained.mesh.vertices.begin(), retained.mesh.vertices.end(),
+                               [](auto point) { return point.z < 400; }));
         }
     }
 

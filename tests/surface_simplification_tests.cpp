@@ -359,6 +359,36 @@ namespace
         }
     }
 
+    void CheckPinnedRim()
+    {
+        // All boundary samples are protected, but the redundant interior sample is removable.
+        NavMesh mesh;
+        mesh.vertices = {{0, 0, 0}, {64, 0, 8}, {64, 64, 16}, {0, 64, 8}, {32, 32, 8}};
+        for (std::uint32_t side{}; side < 4; ++side)
+        {
+            AddFace(mesh, {side, (side + 1) % 4, 4});
+        }
+        const auto original = mesh;
+        const std::array<std::uint32_t, 4> pins{0, 1, 2, 3};
+        assert(SimplifyGeneratedSurface(mesh, {}, {}, pins) == 2);
+        assert(mesh.vertices.size() == pins.size());
+        assert(Area(mesh) == Area(original));
+        for (const auto vertex : pins)
+        {
+            const auto point = original.vertices[vertex];
+            assert(std::any_of(mesh.vertices.begin(), mesh.vertices.end(), [&](auto retained)
+                               { return retained.x == point.x && retained.y == point.y && retained.z == point.z; }));
+        }
+        for (float y = 1; y < 64; y += 4)
+        {
+            for (float x = 1; x < 64; x += 4)
+            {
+                assert(Height(mesh, x, y) == Height(original, x, y));
+            }
+        }
+        CheckTopology(mesh);
+    }
+
     void CheckCandidateRemapping()
     {
         CandidateNavMesh candidate;
@@ -493,6 +523,57 @@ namespace
         }
         std::cout << "Uneven obstacle boundary: " << original.polygons.size() << " -> " << simplified.polygons.size()
                   << " triangles\n";
+
+        // A reserved drop between stacked floors must not freeze unrelated obstacle outlines.
+        CandidateNavMesh linked;
+        for (std::uint32_t floor{}; floor < 2; ++floor)
+        {
+            const auto offset = static_cast<std::uint32_t>(linked.mesh.vertices.size());
+            for (const auto point : original.vertices)
+            {
+                linked.mesh.vertices.push_back({point.x, point.y, point.z - floor * 160.0F});
+            }
+            CandidateRegion region{.id = floor};
+            for (const auto &face : original.polygons)
+            {
+                region.polygons.push_back(static_cast<std::uint32_t>(linked.mesh.polygons.size()));
+                AddFace(linked.mesh, {face.vertices[0] + offset, face.vertices[1] + offset, face.vertices[2] + offset});
+                linked.polygonSourceTriangles.push_back(floor);
+                linked.polygonContributingTriangles.push_back({floor});
+            }
+            linked.regions.push_back(std::move(region));
+        }
+        linked.ledgeLinks.push_back({.upperPolygon = 1,
+                                     .lowerPolygon = static_cast<std::uint32_t>(original.polygons.size() + 1),
+                                     .upperEdge = 2,
+                                     .lowerEdge = 2});
+        RefreshCandidateTopology(linked);
+        assert(linked.topology.valid);
+        const auto portPoints = [&]()
+        {
+            std::vector<Vec3> points;
+            const auto &link = linked.ledgeLinks.front();
+            for (const auto polygon : {link.upperPolygon, link.lowerPolygon})
+            {
+                for (const auto vertex : linked.mesh.polygons.at(polygon).vertices)
+                {
+                    points.push_back(linked.mesh.vertices.at(vertex));
+                }
+            }
+            return points;
+        };
+        const auto ports = portPoints();
+        const auto linkedArea = Area(linked.mesh);
+        assert(SimplifyCandidateSurface(linked) >= samples);
+        assert(linked.topology.valid && linked.ledgeLinks.size() == 1);
+        CheckTopology(linked.mesh, 2);
+        const auto retainedPorts = portPoints();
+        for (std::size_t index{}; index < ports.size(); ++index)
+        {
+            assert(ports[index].x == retainedPorts[index].x && ports[index].y == retainedPorts[index].y &&
+                   ports[index].z == retainedPorts[index].z);
+        }
+        assert(Area(linked.mesh) <= linkedArea && Area(linked.mesh) >= linkedArea * 0.98);
     }
     void CheckNarrowPassage()
     {
@@ -518,6 +599,7 @@ void TestSurfaceSimplification()
     CheckProtectedDetail();
     CheckBoundedApproximation();
     CheckBoundaryEars();
+    CheckPinnedRim();
     CheckCandidateRemapping();
     CheckBoundaryBand();
     CheckUnevenObstacleBoundary();

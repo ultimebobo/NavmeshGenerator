@@ -237,6 +237,65 @@ namespace
         assert(!validate(changed, {}));
     }
 
+    void TestUnchangedAuthoredOneSidedAdjacency(const std::filesystem::path &root)
+    {
+        Bytes geometry;
+        for (const auto value : {12U, 0xA5E9A03CU, 0U, 0x100U, 4U})
+        {
+            Put32(geometry, value);
+        }
+        const navmesh::core::Vec3 vertices[] = {{0, 0, 0}, {32, 0, 0}, {32, 32, 0}, {0, 32, 0}};
+        const auto *points = reinterpret_cast<const std::uint8_t *>(vertices);
+        geometry.insert(geometry.end(), points, points + sizeof(vertices));
+        Put32(geometry, 2);
+        for (const auto value : {0U, 1U, 2U, 65535U, 65535U, 1U, 0U, 0U, 0U, 2U, 3U, 65535U, 65535U, 65535U, 0U, 0U})
+        {
+            Put16(geometry, static_cast<std::uint16_t>(value));
+        }
+        for (const auto value : {0U, 0U, 0U, 1U})
+        {
+            Put32(geometry, value);
+        }
+        geometry.resize(geometry.size() + 32);
+        Put32(geometry, 2);
+        Put16(geometry, 0);
+        Put16(geometry, 1);
+        Bytes payload, mesh, children, plugin;
+        Sub(payload, "NVNM", geometry);
+        Record(mesh, "NAVM", 0x900, payload);
+        Record(children, "CELL", 0x100, {});
+        Group(children, 0x100, 6, mesh);
+        Record(plugin, "TES4", 0, {});
+        Group(plugin, 0x4C4C4543, 0, children);
+        const auto path = root / "OneSidedAuthored.esm";
+        Write(path, plugin);
+        const auto input = ResolveLoadOrder({.dataDirectory = root, .plugins = {path}});
+        assert(input.diagnostics.empty() && input.cells.size() == 1);
+        const auto records = Read(path);
+        std::string error;
+        const auto validate = [&](const ResolvedLoadOrder &source, const std::map<std::uint32_t, float> &generated)
+        {
+            return detail::ValidateNavigationGraph(records, {}, path.filename().string(), source, {0x900}, {}, error,
+                                                   generated);
+        };
+        // Exact preservation keeps the one-sided relationship; generated geometry cannot introduce it.
+        assert(validate(input, {}));
+        assert(!validate(input, {{0x900, 36.0F}}));
+        assert(error.find("adjacency") != std::string::npos);
+        auto changed = input;
+        changed.cells.front().navMeshes.front().vertices[0].z += 1;
+        assert(!validate(changed, {}));
+        changed = input;
+        changed.cells.front().navMeshes.front().polygons[0].neighbors[2] = 0xffff;
+        assert(!validate(changed, {}));
+        changed = input;
+        changed.cells.front().navMeshes.front().polygons[1].neighbors[0] = 0;
+        assert(!validate(changed, {}));
+        changed = input;
+        changed.cells.front().navMeshes.front().polygons[1].flags |= 1U << 3;
+        assert(!validate(changed, {}));
+    }
+
     void TestAuxiliaryMetadata()
     {
         PluginRecord source;
@@ -435,7 +494,118 @@ namespace
         assert(!WriteNavmeshOverride(root / "disconnected", {source}, resolved, resolved.cells.front(), candidate,
                                      output, error));
         assert(error.find("ledge") != std::string::npos);
+        for (const auto *detail : {"reason=ledge_has_no_generated_floor_route", "type=1", "CELL 00000100",
+                                   "NAVM 00000200", "winner='Traversal.esm'", "triangle=0 edge=1",
+                                   "target_CELL=00000100", "target_NAVM=00000200", "target_triangle=1"})
+        {
+            assert(error.find(detail) != std::string::npos);
+        }
         assert(!std::filesystem::exists(root / "disconnected" / "generated-navmesh.esp"));
+    }
+
+    void TestCarvedLedgeLandings(const std::filesystem::path &root)
+    {
+        std::filesystem::create_directories(root);
+        for (const auto variant : {0U, 1U, 2U})
+        {
+            Bytes geometry;
+            for (const auto value : {12U, 0xA5E9A03CU, 0U, 0x100U, 8U})
+            {
+                Put32(geometry, value);
+            }
+            for (const auto height : {0.0F, 40.0F})
+            {
+                const navmesh::core::Vec3 points[] = {
+                    {0, 100, height}, {100, 100, height}, {0, 0, height}, {100, 0, height}};
+                const auto *bytes = reinterpret_cast<const std::uint8_t *>(points);
+                geometry.insert(geometry.end(), bytes, bytes + sizeof(points));
+            }
+            Put32(geometry, 4);
+            for (const auto layer : {0U, 1U})
+            {
+                const auto vertex = layer * 4;
+                const auto triangle = layer * 2;
+                // The ledge lip has no generated support; its reciprocal local neighbor retains the landing.
+                for (const auto value : {vertex, vertex + 1, vertex + 2, layer, triangle + 1, 65535U, 1U, 0U})
+                {
+                    Put16(geometry, static_cast<std::uint16_t>(value));
+                }
+                const auto reverse = variant == 1 && layer == 0 ? 65535U : triangle;
+                const auto flags = variant == 2 && layer == 0 ? 8U : 0U;
+                for (const auto value : {vertex + 1, vertex + 3, vertex + 2, 65535U, 65535U, reverse, flags, 0U})
+                {
+                    Put16(geometry, static_cast<std::uint16_t>(value));
+                }
+            }
+            Put32(geometry, 2);
+            for (const auto layer : {0U, 1U})
+            {
+                Put32(geometry, layer + 1);
+                Put32(geometry, 0x200);
+                Put16(geometry, static_cast<std::uint16_t>((1 - layer) * 2));
+            }
+            Put32(geometry, 0);
+            Put32(geometry, 0);
+            Put32(geometry, 1);
+            geometry.resize(geometry.size() + 32);
+            Put32(geometry, 4);
+            for (const auto triangle : {0U, 1U, 2U, 3U})
+            {
+                Put16(geometry, static_cast<std::uint16_t>(triangle));
+            }
+            Bytes navm, child, children, cells, plugin;
+            Sub(navm, "NVNM", geometry);
+            Record(child, "NAVM", 0x200, navm);
+            Group(children, 0x100, 9, child);
+            Record(cells, "CELL", 0x100, {});
+            Group(cells, 0x100, 6, children);
+            Record(plugin, "TES4", 0, {});
+            Group(plugin, 0x4C4C4543, 0, cells);
+            const auto source = root / "CarvedLanding.esm";
+            Write(source, plugin);
+            const auto resolved = ResolveLoadOrder({.dataDirectory = root, .plugins = {source}});
+            assert(resolved.diagnostics.empty() && resolved.cells.size() == 1);
+            navmesh::core::CandidateNavMesh candidate;
+            candidate.mesh.vertices = {{80, 0, 0}, {100, 0, 0}, {100, 100, 40}, {80, 100, 40}};
+            candidate.mesh.polygons = {{.vertices = {0, 1, 3}, .neighbors = {0xffffffffU, 1, 0xffffffffU}},
+                                       {.vertices = {1, 2, 3}, .neighbors = {0xffffffffU, 0xffffffffU, 0}}};
+            assert(!navmesh::core::HasCandidateFloorRoute(candidate, {50, 100, 0}, {50, 100, 40}));
+            auto doorCandidate = candidate;
+            doorCandidate.regions = {{.id = 0, .polygons = {0, 1}}};
+            doorCandidate.exits = {{.referenceId = 0x300, .position = {50, 100, 0}},
+                                   {.referenceId = 0x301, .position = {50, 100, 0}}};
+            auto authored = resolved.cells.front().navMeshes;
+            authored.front().doorLinks = {{0, 0x300}};
+            const auto attached = navmesh::core::AttachCandidateAuthoredDoors(doorCandidate, authored);
+            assert(attached == (variant == 0 ? 1U : 0U));
+            assert(doorCandidate.exits.front().polygon.has_value() == (variant == 0));
+            assert(!doorCandidate.exits.back().polygon);
+            assert(navmesh::core::AttachCandidateAuthoredDoors(doorCandidate, authored) == 0);
+            if (variant == 0)
+            {
+                assert(doorCandidate.exits.front().region == 0);
+                assert(doorCandidate.regions.front().exitFormIds == std::vector<std::uint32_t>{0x300});
+            }
+            std::filesystem::path output;
+            std::string error;
+            const auto destination = root / std::to_string(variant);
+            const auto written =
+                WriteNavmeshOverride(destination, {source}, resolved, resolved.cells.front(), candidate, output, error);
+            assert(written == (variant == 0));
+            if (written)
+            {
+                const auto records = Read(output);
+                const auto generated = std::find_if(records.begin(), records.end(),
+                                                    [](const auto &record) { return record.type == "NAVM"; });
+                assert(generated != records.end() && generated->navm->triangleCount == 2);
+                assert(Get32(generated->raw->decodedPayload, generated->navm->trailingData.offset) == 0);
+            }
+            else
+            {
+                assert(error.find("ledge_has_no_generated_floor_route") != std::string::npos);
+                assert(!std::filesystem::exists(destination / "generated-navmesh.esp"));
+            }
+        }
     }
 
     void TestUnsupportedNavigationClosure(const std::filesystem::path &root)
@@ -730,9 +900,11 @@ void TestNavmeshInfoExport()
     std::filesystem::create_directories(root);
     TestInfoEntries(root);
     TestUnchangedAuthoredVerticalTriangle(root);
+    TestUnchangedAuthoredOneSidedAdjacency(root);
     TestAuxiliaryMetadata();
     TestReferenceSafety(root);
     TestReplacedLedge(root / "traversal");
+    TestCarvedLedgeLandings(root / "carved-landings");
     TestUnsupportedNavigationClosure(root / "unsupported");
     TestSourceCopy(root);
     TestSourceCopy(root / "light-source", true);

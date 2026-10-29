@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,9 @@ namespace navmesh::core
         float minimumRegionArea{8172.0F};
         float contourSimplificationTolerance{0.05F};
         std::string cellBorderPolicy{"preserve_open_border"};
+        /// Automatic drop ceiling in Skyrim units, resolved from the NPC fall-damage GMST.
+        /// Finite and nonnegative; zero disables generated drops. Includes a voxel safety margin at use.
+        float maximumDropHeight{450.0F};
     };
 
     /// Recast voxel and contour controls; input geometry remains in Skyrim world space.
@@ -102,6 +106,12 @@ namespace navmesh::core
         bool closed{};
         std::vector<std::uint32_t> vertices;
     };
+    /// One-way descent from a boundary to a boundary or reserved interior landing port; indices start at zero.
+    struct CandidateLedgeLink
+    {
+        std::uint32_t upperPolygon{}, lowerPolygon{};
+        std::uint8_t upperEdge{}, lowerEdge{};
+    };
     /// An authored crossing whose floor is positively classified as excluded obstacle collision.
     struct ClosedAuthoredPortal
     {
@@ -142,6 +152,14 @@ namespace navmesh::core
         NavMesh mesh;
         /// Filtered world-space collision walls retained for cover queries after final batch seam refinement.
         Mesh coverGeometry;
+        /// Authoritative collision and exclusion triangles retained for drop clearance after seam refinement.
+        Mesh ledgeGeometry;
+        /// Physical placed water coverage in Skyrim world units, retained for safe submerged landings and tagging.
+        Mesh ledgeWaterGeometry;
+        /// Effective CELL/WRLD water plane Z; absent when dry or unresolved. Independent of authored navigation.
+        std::optional<float> ledgeWaterHeight;
+        /// Safe descents; reciprocal serialized records describe one upper-to-lower movement.
+        std::vector<CandidateLedgeLink> ledgeLinks;
         /// Primary input triangle for each output polygon, retained for simple source joins.
         std::vector<std::size_t> polygonSourceTriangles;
         /// All input triangles covered by each polygon after interior simplification.
@@ -170,6 +188,54 @@ namespace navmesh::core
      * External portals and vertex-only contact do not establish this replacement route.
      */
     [[nodiscard]] bool HasCandidateFloorRoute(const CandidateNavMesh &candidate, Vec3 departure, Vec3 arrival);
+
+    /** Check generated connectivity between the surviving parts of two authored landings.
+     * @param candidate Valid finite Skyrim-world geometry and agent/voxel settings.
+     * @param departureMesh Authored departure geometry in the same coordinate space.
+     * @param departurePolygon Departure landing triangle index in departureMesh.
+     * @param arrivalMesh Authored arrival geometry in the same coordinate space.
+     * @param arrivalPolygon Arrival landing triangle index in arrivalMesh.
+     * Each landing searches reciprocal local adjacency only as far as the first ring with
+     * generated support. Deleted triangles and external links provide no attachment.
+     * Validation also matches overlapping floor area at compatible heights, independently of tessellation.
+     * @return True only when supported samples on both nearest landing rings share a generated
+     * floor route. Invalid landing indices, missing support and disconnected floors return false.
+     */
+    [[nodiscard]] bool HasCandidateLandingRoute(const CandidateNavMesh &candidate, const NavMesh &departureMesh,
+                                                std::uint32_t departurePolygon, const NavMesh &arrivalMesh,
+                                                std::uint32_t arrivalPolygon);
+
+    /** Locate generated support for validation of an authored landing in Skyrim world space.
+     * @param candidate Generated floor with valid movement and voxel settings; never modified.
+     * @param authored Validation mesh in the same coordinate space; never used to create geometry or links.
+     * @param polygon Authored landing triangle. Searches only its nearest reciprocal local adjacency ring
+     * with surviving generated support; deleted faces and external portals cannot extend that attachment.
+     * @return Unique generated triangle indices, or an empty vector for invalid or unsupported landings.
+     */
+    [[nodiscard]] std::vector<std::uint32_t> CandidateLandingPolygons(const CandidateNavMesh &candidate,
+                                                                      const NavMesh &authored, std::uint32_t polygon);
+
+    /** Check a directed route through generated floors and safe drops between authored landing rings.
+     * @param candidate Valid Skyrim-world geometry with finalized ledgeLinks.
+     * @param upperMesh Authored mesh owning the upper landing, in the same coordinate space.
+     * @param upperPolygon Upper landing triangle index.
+     * @param lowerMesh Authored mesh owning the lower landing.
+     * @param lowerPolygon Lower landing triangle index.
+     * @return True when nearest surviving landing support connects from upper to lower; never climbs a ledge.
+     * Invalid indices and missing landing support return false. External border portals are not traversed.
+     */
+    [[nodiscard]] bool HasCandidateLedgeRoute(const CandidateNavMesh &candidate, const NavMesh &upperMesh,
+                                              std::uint32_t upperPolygon, const NavMesh &lowerMesh,
+                                              std::uint32_t lowerPolygon);
+
+    /** Attach unmatched doors through their authored landing before reachability filtering.
+     * @param candidate Valid finite Skyrim-world geometry with complete regions and live door exits.
+     * @param authored Selected-cell source meshes with resolved door identities in the same coordinate space.
+     * Searches only the nearest surviving reciprocal local adjacency ring of each authored door triangle.
+     * Existing matches are preserved. Missing support leaves an exit unmatched.
+     * @return Number of exits attached. Updates exit triangle/region indices and region door membership.
+     */
+    std::size_t AttachCandidateAuthoredDoors(CandidateNavMesh &candidate, std::span<const NavMesh> authored);
 
     /// Build a candidate from supported terrain and collision triangles in a scene.
     /// @param scene Geometry and source evidence to inspect.
@@ -254,6 +320,8 @@ namespace navmesh::core
     /** Rebuild adjacency, boundary contours, region areas, output counts and topology after mesh edits.
      * @param candidate World-space mesh with complete polygon evidence and region membership.
      * Polygon and vertex identities are preserved; portal and door indices are not remapped.
+     * Reserved interior landing edges close both local adjacency directions while their floor stays
+     * connected around the port endpoints.
      */
     void RefreshCandidateTopology(CandidateNavMesh &candidate);
     /// Write the candidate and its source evidence as JSON; returns false on output failure.

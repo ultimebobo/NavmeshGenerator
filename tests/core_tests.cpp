@@ -2931,6 +2931,8 @@ void TestSurfaceSimplification();
 void ExportNavigationObstacleFixture(const std::filesystem::path &directory);
 void ExportSpiralNavigationFixture(const std::filesystem::path &directory);
 void TestSpiralNavigationFixture();
+void TestLedgeLinkFixture();
+void ExportLedgeLinkFixture(const std::filesystem::path &directory);
 
 namespace
 {
@@ -2943,7 +2945,8 @@ namespace
 
     const std::array SceneFixtures{
         SceneFixture{"navigation-obstacles", TestNavigationObstacleFixture, ExportNavigationObstacleFixture},
-        SceneFixture{"spirals", TestSpiralNavigationFixture, ExportSpiralNavigationFixture}};
+        SceneFixture{"spirals", TestSpiralNavigationFixture, ExportSpiralNavigationFixture},
+        SceneFixture{"ledge-links", TestLedgeLinkFixture, ExportLedgeLinkFixture}};
 
     // The catalog is the discovery and dispatch boundary. Geometry and expected
     // behavior stay in each builder; new entries need no command-specific branch.
@@ -3201,6 +3204,7 @@ int main(int argc, char **argv)
     TestRecastSceneGeneration();
     TestNavigationObstacleFixture();
     TestSpiralNavigationFixture();
+    TestLedgeLinkFixture();
     if (std::filesystem::exists("output/riverwood03-recast-repro/geometry.obj"))
         TestLocalStairs("output/riverwood03-recast-repro/geometry.obj");
     navmesh::core::Mesh mesh{ .vertices = { { -1.0F, 2.0F, 3.0F }, { 4.0F, -5.0F, 6.0F } } };

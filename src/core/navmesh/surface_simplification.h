@@ -35,6 +35,7 @@ namespace navmesh::core
      * @param settings Finite local error, edge and slope limits. Original floor and boundary samples
      * constrain every pass, so errors cannot accumulate. Retained vertex positions remain exact.
      * @param pinnedVertices Mesh vertex indices protected from removal, for example beside doors.
+     * They may bound an interior retriangulation whose rim vertices and edges remain exact.
      * @param originalPolygons Optional output mapping each final polygon to its contributing input polygon indices.
      * @return Number of removed triangles. Unrepresentable local retriangulations leave their fans intact.
      * @throws std::invalid_argument For invalid indices, coordinates, simplification limits or existing connections.
@@ -47,6 +48,7 @@ namespace navmesh::core
     /** Clean up a provisionally linked candidate after authored border repairs, before generated batch linking.
      * Pins every portal and door triangle, exact CELL seams and mixed-region interfaces. Remaps polygon
      * evidence, region membership, doors and authored links transactionally, then rebuilds topology.
+     * Pins generated drop triangles and preserves their shared-edge walking components.
      * @param candidate Valid Z-up candidate with complete polygon evidence and region membership.
      * @param cellBounds Exterior bounds for seam protection; absent for interiors.
      * @return Removed triangle count; zero when no safe reduction exists, validation rejects the result,

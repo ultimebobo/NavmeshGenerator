@@ -1,4 +1,5 @@
 #include "core/navmesh/triangle_tagging.h"
+#include "core/navmesh/ledge_links.h"
 
 #include <algorithm>
 #include <cmath>
@@ -126,8 +127,8 @@ namespace navmesh::core
                 3.0F;
             const auto matched = MatchedFlags(centroid, surfaces, heightTolerance);
             polygon.flags |= matched & PreferredPathFlag;
-            // Water is a physical CELL/WRLD input; authored markings only constrain route preference.
-            if (waterHeight && centroid.z < *waterHeight)
+            const auto placedWater = CandidateWaterHeight(candidate, centroid);
+            if ((waterHeight && centroid.z < *waterHeight) || (placedWater && centroid.z < *placedWater))
             {
                 polygon.flags |= WaterFlag;
             }

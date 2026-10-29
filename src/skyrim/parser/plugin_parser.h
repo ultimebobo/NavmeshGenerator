@@ -219,6 +219,12 @@ namespace navmesh::skyrim
     };
     using LoadOrderProgressCallback = std::function<void(std::size_t completedPlugins, std::size_t totalPlugins,
                                                          const std::filesystem::path &currentPlugin)>;
+    /** Resolve the winning NPC fall-damage height for automatic drop generation, in Skyrim units.
+     * Missing GMST uses the game default; malformed, deleted, negative or nonfinite data disables drops.
+     * @param resolved Complete winning records, including GMST overrides.
+     * @return Finite nonnegative drop ceiling. Does not account for runtime scripts or actor-specific perks.
+     */
+    [[nodiscard]] float ResolveNpcSafeDropHeight(const ResolvedLoadOrder &resolved);
     struct LoadOrderInput
     {
         std::filesystem::path dataDirectory;

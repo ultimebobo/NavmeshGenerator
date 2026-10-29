@@ -50,7 +50,8 @@ namespace navmesh::skyrim
      * parent declarations immediately before persistent door groups to establish their loading context.
      * Changed input snapshots fail export.
      * @param writtenPath Receives the first finalized plugin path on success; cleared on failure.
-     * @param error Receives a failure reason; no final plugin is published on failure.
+     * @param error Receives a failure reason; traversal-remapping failures identify the source,
+     * destination and unmet replacement condition. No final plugin is published on failure.
      * @param copyPlugin Optional active filename to copy with generated NAVMs. Preserves
      * unrelated records, the filename, TES4 flags, and existing master indices. Generated
      * references must belong to that plugin or its existing masters; new IDs must fit
@@ -59,6 +60,10 @@ namespace navmesh::skyrim
      * Exports requiring both splitting and newly allocated NAVM identities fail explicitly; copies stay single-file.
      * @param writtenPaths Optional complete list of published plugins, in installation order; cleared on failure.
      * @return True after read-back and validation against the effective input navigation graph.
+     * @note Reciprocal intra-cell ledges may use the nearest surviving authored landing ring
+     * when the lip is carved away. Landings require a generated floor route or a validated downward ledge route.
+     * Cross-CELL checks can follow planned ordinary portals through generated and untouched navigation;
+     * incoming authored ledges into replaced meshes cannot prove their own replacement.
      * @warning Unrepresentable connector constraints, localized reference resources, unknown
      * reference fields and traversal portals without a safe replacement route reject export instead of being discarded.
      */

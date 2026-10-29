@@ -117,10 +117,25 @@ ONAM base-object dependencies are rebased, and PNAM/NNAM connector constraints
 are remapped to nearby generated vertices. Unknown auxiliary fields, contradictory
 constraints and constraints without a representable vertex reject export.
 Authored crossings require matched generated portals or explicit obstacle-floor
-closure evidence. Reciprocal intra-cell ledges are superseded when nearby generated
-thresholds have a shared-edge route. Ledges without that replacement route and
+closure evidence. Reciprocal intra-cell ledges are superseded when generated floor
+connects their landings. A carved lip attaches through reciprocal authored local
+adjacency to the nearest surviving landing ring; deleted triangles and external
+links cannot supply this attachment. Landing validation matches overlapping floor
+area and compatible heights as well as threshold samples. A validated generated descent can also replace
+the authored landing route. Generated drops encode reciprocal Ledge Down and Ledge
+Up edge-extra-info entries targeting the output primary NAVM; the reciprocal entry
+does not grant upward movement. Interior receiving ports reserve their consuming
+edge and close both local adjacency directions while retaining surrounding floor
+connectivity. Cross-CELL validation follows planned generated floor and descent
+connections through reciprocal ordinary portals and untouched navigation; incoming
+authored ledges to replaced meshes cannot prove their own replacement.
+Ledges without a generated replacement route and
 enable/disable portals reject regeneration. Malformed input or a source edit during
 generation also stops export; no final ESP is published on a validation failure.
+Traversal-remapping failures identify the source CELL, NAVM, winning plugin and
+triangle edge, the destination, and whether authored semantics, reciprocal links
+or a generated floor route prevent replacement. Source connection decoding and
+resolution errors take precedence when connection evidence is incomplete.
 Install a patch after its input plugins and regenerate it after changing that
 load-order snapshot. Unrelated later overrides can supersede its navigation.
 
@@ -154,6 +169,8 @@ enable them. An authored live door without a reachable generated triangle stops
 export. Obsolete associations are removed from other emitted NAVMs. The writer
 copies the winning reference, preserving scripts, locks, ownership, enable
 parents, flags and other supported fields while rebasing their embedded FormIDs.
+Doors outside direct marker reach attach through the nearest surviving authored
+landing ring before island filtering, preserving that floor as a door anchor.
 XNDP uses its authored field position or is inserted before the final DATA placement field.
 Unknown reference layouts fail rather than being copied with incorrect indices.
 Localized reference names require their original filename and string resources.
@@ -165,6 +182,10 @@ and endpoint coordinates; new or moved edges must agree with their reciprocal ed
 Connection-only overrides can retain authored triangles with zero horizontal area
 at unchanged indices and exact coordinates; generated or edited live triangles
 must have positive horizontal winding.
+Connection-only overrides preserve authored one-sided local adjacency across an
+indexed shared edge when both triangles, their coordinates and the opposite open
+edge remain unchanged. Newly created or moved local connections require reciprocity;
+preservation does not add a reverse route.
 This verifies the exported record graph; runtime movement and
 AI behavior still require game testing. The layouts follow
 [xEdit's Skyrim record definitions](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsTES5.pas).

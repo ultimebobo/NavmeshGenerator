@@ -12,6 +12,7 @@
 
 #include <NifFile.hpp>
 #include <bhk.hpp>
+#include <Shaders.hpp>
 #include <lz4frame.h>
 
 #include <algorithm>
@@ -416,6 +417,38 @@ namespace
         const std::vector<nifly::Triangle> faces = {{0, 1, 2}};
         assert(nif.CreateShapeFromData("Display", &visual, &faces, nullptr));
         assert(nif.Save(path) == 0);
+    }
+
+    void CheckPlacedWater(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        std::filesystem::create_directories(root / "meshes/surfaces");
+        const auto path = root / "meshes/surfaces/fixture.nif";
+        WriteConvexModel(path, true, false, 11);
+        nifly::NifFile nif(path);
+        auto *shape = nif.GetShapes().front();
+        nif.SetVertsForShape(shape, {{-64, -64, 0}, {64, -64, 0}, {0, 64, 0}});
+        shape->ShaderPropertyRef()->index = nif.GetHeader().AddBlock(std::make_unique<nifly::BSWaterShaderProperty>());
+        assert(nif.Save(path) == 0);
+        core::Cell cell{.id = 1,
+                        .references = {{.id = 2,
+                                        .recordType = "REFR",
+                                        .modelPath = "surfaces/fixture.nif",
+                                        .position = {1024, 2048, 256},
+                                        .scale = 2,
+                                        .baseRecordType = "ACTI"}}};
+        for (const bool navigationOnly : {false, true})
+        {
+            const auto geometry = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, navigationOnly);
+            assert(geometry.failures.empty());
+            assert(geometry.scene.mesh.triangles.empty());
+            assert(geometry.scene.waterSurfaces.triangles.size() == 1);
+            const auto bounds = geometry.scene.waterSurfaces.Bounds();
+            assert(bounds.min.x == 896 && bounds.max.x == 1152 && bounds.min.z == 256 && bounds.max.z == 256);
+        }
+        cell.references.front().rotation.y = 0.25F;
+        const auto tilted = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, nullptr, true);
+        assert(tilted.scene.waterSurfaces.triangles.empty());
     }
 
     /// Attach a physical shape to a target node; stored transforms on non-T bodies are deliberately inactive.
@@ -1474,6 +1507,7 @@ void TestNativeBsaGeometry()
     CheckPhantomCollision(root);
     CheckSphereCollision(root);
     CheckCollisionEligibility(root);
+    CheckPlacedWater(root);
     CheckFireFootprints(root);
     CheckHearthFireBounds(root);
 }

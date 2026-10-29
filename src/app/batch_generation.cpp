@@ -8,6 +8,7 @@
 #include "core/navmesh/surface_simplification.h"
 #include "core/navmesh/triangle_tagging.h"
 #include "core/navmesh/cover.h"
+#include "core/navmesh/ledge_links.h"
 #include "core/reproducibility/export_metadata.h"
 
 #include <algorithm>
@@ -144,7 +145,9 @@ namespace navmesh::app::detail
         const auto rasterBytes = std::isfinite(rasterCells) ? static_cast<std::size_t>(rasterCells * 128) : 0;
         return rasterBytes + scene.mesh.vertices.capacity() * sizeof(core::Vec3) +
                scene.mesh.triangles.capacity() * (sizeof(core::Triangle) + sizeof(core::TriangleProvenance) + 128) +
-               scene.geometrySources.capacity() * sizeof(core::GeometrySource);
+               scene.geometrySources.capacity() * sizeof(core::GeometrySource) +
+               scene.waterSurfaces.vertices.capacity() * sizeof(core::Vec3) +
+               scene.waterSurfaces.triangles.capacity() * sizeof(core::Triangle);
     }
 
     BatchCellResult BuildBatchCandidate(BatchGenerationInput input, const Options &options)
@@ -186,6 +189,7 @@ namespace navmesh::app::detail
                     result.candidate = core::RecastCandidateGenerator{}.Generate(
                         input.geometry.scene, options.navigationProfile, input.bounds, std::move(input.exits),
                         options.partitioningAlgorithm, options.recastSettings, core::CandidateRetention::AllWalkable);
+                    (void)core::AttachCandidateAuthoredDoors(result.candidate, result.cell->navMeshes);
                     core::RefreshCandidateTopology(result.candidate);
                     if (input.bounds && !input.adjacent.empty())
                     {
@@ -193,6 +197,9 @@ namespace navmesh::app::detail
                                                            result.cell->navMeshes, true, &input.geometry.scene, false,
                                                            result.cell->waterHeight);
                     }
+                    // Detect drops before cleanup so departure and landing triangles stay protected.
+                    core::CaptureLedgeGeometry(result.candidate, input.geometry.scene, result.cell->waterHeight);
+                    (void)core::BuildCandidateLedgeLinks(result.candidate);
                     (void)core::SimplifyCandidateSurface(result.candidate, input.bounds);
                     core::TagCandidateTriangles(result.candidate, result.cell->navMeshes, result.cell->waterHeight,
                                                 options.tagTriangles);
@@ -227,6 +234,7 @@ namespace navmesh::app::detail
             if (!result.reused)
             {
                 core::CaptureCoverGeometry(result.candidate, input.geometry.scene);
+                core::CaptureLedgeGeometry(result.candidate, input.geometry.scene, result.cell->waterHeight);
                 evidence = CompactEvidence(result.candidate, input.geometry.scene);
                 if (!StoreCandidate(result.auditPath, result.candidate, evidence))
                 {
@@ -362,6 +370,10 @@ namespace navmesh::app::detail
                 }
             }
             (void)core::StitchGeneratedCandidates(exterior);
+            for (const auto &target : reachability)
+            {
+                (void)core::BuildCandidateLedgeLinks(*target.candidate);
+            }
             (void)core::RemoveCandidateIslands(reachability);
         }
         catch (const std::exception &error)

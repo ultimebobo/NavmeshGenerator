@@ -90,6 +90,18 @@ namespace navmesh::app::detail
         const auto renderVertexOffset =
             static_cast<std::uint32_t>(destination.scene.renderFallbackMesh.vertices.size());
         const auto triangleOffset = destination.scene.mesh.triangles.size();
+        const auto waterOffset = static_cast<std::uint32_t>(destination.scene.waterSurfaces.vertices.size());
+        destination.scene.waterSurfaces.vertices.insert(destination.scene.waterSurfaces.vertices.end(),
+                                                        source.scene.waterSurfaces.vertices.begin(),
+                                                        source.scene.waterSurfaces.vertices.end());
+        for (auto triangle : source.scene.waterSurfaces.triangles)
+        {
+            for (auto &vertex : triangle.vertices)
+            {
+                vertex += waterOffset;
+            }
+            destination.scene.waterSurfaces.triangles.push_back(triangle);
+        }
         const auto nodeStart = destination.scene.nodes.size();
         // Rebase source identifiers before copying provenance that points into the combined source table.
         destination.scene.geometrySources.insert(destination.scene.geometrySources.end(),

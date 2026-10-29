@@ -37,8 +37,8 @@ namespace
         return std::hypot(a.x - b.x, a.y - b.y) <= core::AuthoredBorderTolerance && std::abs(a.z - b.z) <= stepHeight;
     }
 
-    /// Check only claimed adjacency. Open boundaries and separate authored islands can be intentional.
-    bool ReciprocalNeighbor(const core::NavMesh &mesh, std::uint32_t index, std::size_t edge, float stepHeight)
+    /// Claimed adjacency can be reciprocal or one-sided across the same indexed shared edge.
+    bool ValidLocalNeighbor(const core::NavMesh &mesh, std::uint32_t index, std::size_t edge, float stepHeight)
     {
         const auto &face = mesh.polygons[index];
         const auto neighborIndex = face.neighbors[edge];
@@ -53,6 +53,12 @@ namespace
         }
         for (std::size_t side{}; side < 3; ++side)
         {
+            if (!(neighbor.flags & (1U << side)) && neighbor.neighbors[side] == 0xffffU &&
+                face.vertices[edge] == neighbor.vertices[(side + 1) % 3] &&
+                face.vertices[(edge + 1) % 3] == neighbor.vertices[side])
+            {
+                return true;
+            }
             if (!(neighbor.flags & (1U << side)) && neighbor.neighbors[side] == index &&
                 SameEndpoint(mesh.vertices[face.vertices[edge]], mesh.vertices[neighbor.vertices[(side + 1) % 3]],
                              stepHeight) &&
@@ -244,7 +250,7 @@ namespace navmesh::skyrim
                                 finding("invalid_external_link", index);
                             }
                         }
-                        else if (face.neighbors[edge] != 0xffffU && !ReciprocalNeighbor(mesh, index, edge, stepHeight))
+                        else if (face.neighbors[edge] != 0xffffU && !ValidLocalNeighbor(mesh, index, edge, stepHeight))
                         {
                             finding("invalid_adjacency", index);
                         }

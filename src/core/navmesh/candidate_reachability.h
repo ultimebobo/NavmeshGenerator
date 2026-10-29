@@ -22,14 +22,16 @@ namespace navmesh::core
 
     /** Remove disconnected floor islands after all generated portals have been reconciled.
      * @param targets Complete successful generated set, with unique CELL keys and mesh pointers. Shared edges
-     * and reciprocal generated portals define connectivity; touching vertices do not.
+     * and reciprocal generated portals define floor connectivity; touching vertices do not.
+     * Validated ledges extend access downward from retained departure floors, including chained descents.
+     * A retained landing alone cannot anchor an otherwise inaccessible departure floor above it.
      * Exterior selections with matched doors retain door-reachable components and routes replacing
      * required authored crossings to untouched neighbors. Incidental boundary matches do not anchor
      * disconnected scenery. Doorless selections and interiors also retain untouched authored destinations
      * and the largest component by horizontal area.
      * Exterior selections are grouped by shared CELL sides within the same worldspace,
      * independently of floor heights. Open CELL borders and generated portals alone are not anchors.
-     * Compacts vertices, polygons, regions, source joins, doors and both ends of generated portals;
+     * Compacts vertices, polygons, regions, source joins, doors and both ends of generated portals and ledges;
      * discards authored vertex edits when no retained portal reaches their NAVM;
      * rebuilds contours and topology, and increments rejectedUnreachable for removed triangles.
      * @return Total removed triangle count. Empty candidates remain valid replacement targets.

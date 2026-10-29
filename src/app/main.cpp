@@ -14,6 +14,7 @@
 #include "core/navmesh/surface_simplification.h"
 #include "core/navmesh/triangle_tagging.h"
 #include "core/navmesh/cover.h"
+#include "core/navmesh/ledge_links.h"
 #include "core/scene/scene_exporter.h"
 #include "skyrim/extraction/geometry_extractor.h"
 #include "skyrim/extraction/terrain_extractor.h"
@@ -702,6 +703,10 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
             return fail(WriteFailure(options.output / "load-order.json"));
         }
     }
+    if (resolved)
+    {
+        options.navigationProfile.maximumDropHeight = navmesh::skyrim::ResolveNpcSafeDropHeight(*resolved);
+    }
     const auto runBatch = [&]()
     {
         if (resolved->plugins.empty())
@@ -1172,6 +1177,7 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                     geometry.scene, options.navigationProfile, candidateBounds, std::move(exits),
                     options.partitioningAlgorithm, options.recastSettings,
                     navmesh::core::CandidateRetention::AllWalkable);
+                (void)navmesh::core::AttachCandidateAuthoredDoors(*candidate, cell->navMeshes);
                 update(85, "Candidate NAVM generated");
                 if (wasCancelled())
                 {
@@ -1216,6 +1222,8 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                         .worldspaceId = candidateBounds ? selectedRecord->worldspaceFormId : std::nullopt,
                         .bounds = candidateBounds,
                         .candidate = &*candidate}};
+                    navmesh::core::CaptureLedgeGeometry(*candidate, geometry.scene, cell->waterHeight);
+                    (void)navmesh::core::BuildCandidateLedgeLinks(*candidate);
                     (void)navmesh::core::RemoveCandidateIslands(reachability);
                     (void)navmesh::core::SimplifyCandidateSurface(*candidate, candidateBounds);
                 }
@@ -1291,6 +1299,7 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
             sceneOptions.layers.push_back(navmesh::core::SceneLayer::CandidateNavmesh);
             sceneOptions.candidateNavmesh = &candidate->mesh;
             sceneOptions.candidateBorderLinks = &candidate->borderLinks;
+            sceneOptions.candidateLedgeLinks = &candidate->ledgeLinks;
         }
         if (options.sceneBounds)
         {

@@ -2,6 +2,45 @@
 
 ## Current generator
 
+After seam reconciliation, automatic ledge detection uses generated floors and
+physical collision independently of authored navigation. It clips overlapping
+boundary spans and can insert receiving edges inside lower floor triangles,
+preserving the floor planes and connectivity around interior port endpoints.
+Matched external portals remain pinned. Ordinary floor paths already satisfy
+traversal; separate floors receive clear downward connections before island
+compaction. Validated descents extend an anchored network downward from reachable
+departure floors, including chains of descents. A landing in that network cannot
+retain an otherwise inaccessible floor above it merely because it has a downward exit.
+Scarce departure apertures are allocated before broad floors consume
+their receiving edges, and existing valid links are reused when rebuilding.
+Standing-body sweeps follow the actual collision support within the configured
+floor-height approximation allowance. Uneven support within walking climb remains
+traversable, with the same extra headroom reserved for stepping. Thin walls, ceilings and navigation
+exclusions still block the swept volume; horizontal voids supply no landing route.
+
+Solid landings must exceed walking climb and stay below the resolved
+`fJumpFallHeightMinNPC`, with vertical voxel uncertainty. Missing settings use the
+game default; invalid settings disable drops. Deep landings covered by physical
+water can absorb a larger fall; water depth must accommodate the standing profile.
+Effective CELL/WRLD planes and placed horizontal water-shader surfaces supply this
+coverage, independently of authored water flags. Water-supported searches account
+for the greater horizontal projection of deep descents. These surfaces supply no
+solid raster floor. Floor simplification preserves walking components and exact
+departure and landing triangles for generated drops, allows bounded boundary trimming
+elsewhere, and remaps linked triangles. Batch caches retain collision, water coverage
+and the resolved fall ceiling.
+Automatic drop generation remains within each generated CELL; validation can
+follow ordinary cell portals to prove an equivalent route outside that CELL.
+
+Creation Kit dropdowns are authored traversal permissions, not a runtime damage
+test: actors trust them without evaluating obstacles or fall distance. See the
+[Creation Kit navmesh guidance](https://ck.uesp.net/wiki/Category:Navmesh) and
+[Bethesda editor workflow](https://geckwiki.com/index.php/Navmesh_Creation_Workflow).
+The NPC fall-height setting, rather than the player's threshold, bounds solid-ground
+falls; [fall-damage mod settings](https://www.nexusmods.com/skyrim/mods/73286)
+document their separate roles. Runtime scripts and actor-specific movement or
+damage changes are outside this static collision check.
+
 The application now uses Recast Navigation for candidate generation. The
 polygon-based measurements and decisions below document the previous spike and
 remain useful as comparison evidence; they do not describe the active run path.
@@ -192,8 +231,10 @@ contributor neighborhoods are bounded to keep approximation local. Replacement
 slopes stay within the greater of the movement profile's slope limit and the
 original patch's slope envelope. The approximation pass runs once, after the
 generator's exact cleanup, so separate stages do not spend the height budget twice.
-Door and portal triangles are pinned;
-source contributors, region membership and connection indices are remapped
+Door and portal triangles are pinned; protected vertices may bound an interior
+retriangulation that preserves every rim vertex and edge, allowing redundant
+interior detail to be removed beside protected floor boundaries.
+Source contributors, region membership and connection indices are remapped
 transactionally, and failed topology validation leaves the candidate intact.
 Single-cell runs invoke this pass after reachability filtering; batch workers
 invoke it before caching and generated-to-generated border reconciliation, so

@@ -1230,6 +1230,7 @@ namespace navmesh::core
         validate(profile.agentHeight, "agent height", true);
         validate(profile.clearance, "agent clearance", true);
         validate(profile.stepHeight, "step height", false);
+        validate(profile.maximumDropHeight, "NPC safe drop height", false);
         validate(profile.maxSlopeDegrees, "walkable slope", false);
         if (profile.maxSlopeDegrees >= 90)
         {

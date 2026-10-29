@@ -4450,36 +4450,223 @@ namespace
         }
         candidate.topology.valid = candidate.topology.findings.empty();
     }
+    /// A supported authored sample and its nearest generated triangle in Skyrim world coordinates.
+    struct LandingAnchor
+    {
+        Vec3 position;
+        std::uint32_t polygon{};
+    };
+
+    /// Match a landing sample within the agent footprint and voxel-height tolerance, keeping stacked floors apart.
+    std::optional<std::uint32_t> CandidateFloorPolygon(const CandidateNavMesh &candidate, Vec3 point)
+    {
+        const auto tolerance = std::hypot(candidate.profile.agentRadius + 2 * candidate.recastSettings.cellSize,
+                                          2 * candidate.recastSettings.cellHeight);
+        std::optional<std::uint32_t> found;
+        auto best = tolerance * tolerance;
+        for (std::uint32_t polygon{}; polygon < candidate.mesh.polygons.size(); ++polygon)
+        {
+            if (candidate.mesh.polygons[polygon].flags & (1U << 3))
+            {
+                continue;
+            }
+            const auto distance = DoorDistanceSquared(point, candidate.mesh, candidate.mesh.polygons[polygon]);
+            if (distance <= best)
+            {
+                best = distance;
+                found = polygon;
+            }
+        }
+        return found;
+    }
+
+    /// Match overlapping floor area in double-precision XY, comparing both interpolated world-space heights.
+    std::optional<Vec3> OverlappingLandingSample(const NavMesh &generated, std::uint32_t polygon, Vec3 a, Vec3 b,
+                                                 Vec3 c, float heightTolerance)
+    {
+        struct Point
+        {
+            double x, y;
+        };
+        const auto cross = [](Point first, Point last, Point point)
+        { return (last.x - first.x) * (point.y - first.y) - (last.y - first.y) * (point.x - first.x); };
+        const auto toPoint = [](Vec3 point) { return Point{point.x, point.y}; };
+        const std::array authored{toPoint(a), toPoint(b), toPoint(c)};
+        const auto &face = generated.polygons[polygon];
+        const auto p = generated.vertices[face.vertices[0]];
+        const auto q = generated.vertices[face.vertices[1]];
+        const auto r = generated.vertices[face.vertices[2]];
+        if (std::max({a.x, b.x, c.x}) < std::min({p.x, q.x, r.x}) ||
+            std::max({p.x, q.x, r.x}) < std::min({a.x, b.x, c.x}) ||
+            std::max({a.y, b.y, c.y}) < std::min({p.y, q.y, r.y}) ||
+            std::max({p.y, q.y, r.y}) < std::min({a.y, b.y, c.y}))
+        {
+            return std::nullopt;
+        }
+        const std::array floor{toPoint(p), toPoint(q), toPoint(r)};
+        const auto authoredArea = cross(authored[0], authored[1], authored[2]);
+        const auto floorArea = cross(floor[0], floor[1], floor[2]);
+        if (authoredArea == 0 || floorArea <= 0)
+        {
+            return std::nullopt;
+        }
+        std::vector<Point> overlap(authored.begin(), authored.end());
+        for (std::size_t edge{}; edge < 3 && !overlap.empty(); ++edge)
+        {
+            std::vector<Point> clipped;
+            auto previous = overlap.back();
+            auto previousDistance = cross(floor[edge], floor[(edge + 1) % 3], previous);
+            for (const auto point : overlap)
+            {
+                const auto distance = cross(floor[edge], floor[(edge + 1) % 3], point);
+                if ((distance >= 0) != (previousDistance >= 0))
+                {
+                    const auto fraction = previousDistance / (previousDistance - distance);
+                    clipped.push_back({previous.x + (point.x - previous.x) * fraction,
+                                       previous.y + (point.y - previous.y) * fraction});
+                }
+                if (distance >= 0)
+                {
+                    clipped.push_back(point);
+                }
+                previous = point;
+                previousDistance = distance;
+            }
+            overlap = std::move(clipped);
+        }
+        if (overlap.size() < 3)
+        {
+            return std::nullopt;
+        }
+        Point center{};
+        double area{};
+        for (std::size_t index{}; index < overlap.size(); ++index)
+        {
+            center.x += overlap[index].x / overlap.size();
+            center.y += overlap[index].y / overlap.size();
+            area += cross(overlap[0], overlap[index], overlap[(index + 1) % overlap.size()]);
+        }
+        if (area == 0)
+        {
+            return std::nullopt;
+        }
+        const auto height =
+            (cross(center, authored[1], authored[2]) * a.z + cross(authored[0], center, authored[2]) * b.z +
+             cross(authored[0], authored[1], center) * c.z) /
+            authoredArea;
+        const auto floorHeight = (cross(center, floor[1], floor[2]) * p.z + cross(floor[0], center, floor[2]) * q.z +
+                                  cross(floor[0], floor[1], center) * r.z) /
+                                 floorArea;
+        if (std::abs(height - floorHeight) > heightTolerance)
+        {
+            return std::nullopt;
+        }
+        return Vec3{static_cast<float>(center.x), static_cast<float>(center.y), static_cast<float>(height)};
+    }
+
+    /** Locate surviving generated floor in the nearest authored adjacency ring of a landing.
+     * Recast may carve the ledge lip away from an otherwise retained landing. Follow only
+     * reciprocal local floor edges, stopping at the first ring with supported samples;
+     * external traversal links and deleted triangles cannot move the attachment elsewhere.
+     */
+    std::vector<LandingAnchor> SurvivingLandingAnchors(const CandidateNavMesh &candidate, const NavMesh &authored,
+                                                       std::uint32_t landing, bool validateArea = false)
+    {
+        std::vector<bool> visited(authored.polygons.size());
+        std::vector<std::uint32_t> ring{landing};
+        visited[landing] = true;
+        while (!ring.empty())
+        {
+            std::vector<LandingAnchor> anchors;
+            std::vector<std::uint32_t> next;
+            for (const auto polygon : ring)
+            {
+                const auto &face = authored.polygons[polygon];
+                if ((face.flags & (1U << 3)) || std::any_of(face.vertices.begin(), face.vertices.end(), [&](auto vertex)
+                                                            { return vertex >= authored.vertices.size(); }))
+                {
+                    continue;
+                }
+                const auto a = authored.vertices[face.vertices[0]];
+                const auto b = authored.vertices[face.vertices[1]];
+                const auto c = authored.vertices[face.vertices[2]];
+                for (const auto point : {a, b, c, (a + b) * 0.5F, (b + c) * 0.5F, (c + a) * 0.5F, (a + b + c) / 3.0F})
+                {
+                    if (const auto generated = CandidateFloorPolygon(candidate, point))
+                    {
+                        anchors.push_back({point, *generated});
+                    }
+                }
+                if (validateArea)
+                {
+                    const auto tolerance =
+                        std::hypot(candidate.profile.agentRadius + 2 * candidate.recastSettings.cellSize,
+                                   2 * candidate.recastSettings.cellHeight);
+                    for (std::uint32_t generated{}; generated < candidate.mesh.polygons.size(); ++generated)
+                    {
+                        if (!(candidate.mesh.polygons[generated].flags & (1U << 3)))
+                        {
+                            if (const auto point =
+                                    OverlappingLandingSample(candidate.mesh, generated, a, b, c, tolerance))
+                            {
+                                anchors.push_back({*point, generated});
+                            }
+                        }
+                    }
+                }
+                for (std::size_t edge{}; edge < 3; ++edge)
+                {
+                    const auto neighbor = face.neighbors[edge];
+                    if ((face.flags & (1U << edge)) || neighbor >= authored.polygons.size() || visited[neighbor])
+                    {
+                        continue;
+                    }
+                    const auto &other = authored.polygons[neighbor];
+                    for (std::size_t reverse{}; reverse < 3; ++reverse)
+                    {
+                        if (!(other.flags & (1U << reverse)) && other.neighbors[reverse] == polygon &&
+                            other.vertices[reverse] == face.vertices[(edge + 1) % 3] &&
+                            other.vertices[(reverse + 1) % 3] == face.vertices[edge])
+                        {
+                            visited[neighbor] = true;
+                            next.push_back(neighbor);
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!anchors.empty())
+            {
+                return anchors;
+            }
+            ring = std::move(next);
+        }
+        return {};
+    }
+
 } // namespace
 
 namespace navmesh::core
 {
+    std::vector<std::uint32_t> CandidateLandingPolygons(const CandidateNavMesh &candidate, const NavMesh &authored,
+                                                        std::uint32_t polygon)
+    {
+        std::set<std::uint32_t> polygons;
+        if (polygon < authored.polygons.size())
+        {
+            for (const auto &anchor : SurvivingLandingAnchors(candidate, authored, polygon, true))
+            {
+                polygons.insert(anchor.polygon);
+            }
+        }
+        return {polygons.begin(), polygons.end()};
+    }
+
     bool HasCandidateFloorRoute(const CandidateNavMesh &candidate, Vec3 departure, Vec3 arrival)
     {
         const auto &mesh = candidate.mesh;
-        const auto tolerance = std::hypot(candidate.profile.agentRadius + 2 * candidate.recastSettings.cellSize,
-                                          2 * candidate.recastSettings.cellHeight);
-        const auto nearest = [&](Vec3 point) -> std::optional<std::uint32_t>
-        {
-            std::optional<std::uint32_t> found;
-            auto best = tolerance * tolerance;
-            for (std::uint32_t polygon{}; polygon < mesh.polygons.size(); ++polygon)
-            {
-                if (mesh.polygons[polygon].flags & (1U << 3))
-                {
-                    continue;
-                }
-                const auto distance = DoorDistanceSquared(point, mesh, mesh.polygons[polygon]);
-                if (distance <= best)
-                {
-                    best = distance;
-                    found = polygon;
-                }
-            }
-            return found;
-        };
-        const auto first = nearest(departure);
-        const auto last = nearest(arrival);
+        const auto first = CandidateFloorPolygon(candidate, departure);
+        const auto last = CandidateFloorPolygon(candidate, arrival);
         if (!first || !last)
         {
             return false;
@@ -4512,6 +4699,151 @@ namespace navmesh::core
             }
         }
         return false;
+    }
+
+    bool HasCandidateLandingRoute(const CandidateNavMesh &candidate, const NavMesh &departureMesh,
+                                  std::uint32_t departurePolygon, const NavMesh &arrivalMesh,
+                                  std::uint32_t arrivalPolygon)
+    {
+        if (departurePolygon >= departureMesh.polygons.size() || arrivalPolygon >= arrivalMesh.polygons.size())
+        {
+            return false;
+        }
+        const auto departureAnchors = SurvivingLandingAnchors(candidate, departureMesh, departurePolygon, true);
+        const auto arrivalAnchors = SurvivingLandingAnchors(candidate, arrivalMesh, arrivalPolygon, true);
+        std::vector<bool> destinations(candidate.mesh.polygons.size());
+        std::vector<bool> visited(candidate.mesh.polygons.size());
+        std::vector<std::uint32_t> pending;
+        for (const auto &anchor : departureAnchors)
+        {
+            pending.push_back(anchor.polygon);
+        }
+        for (const auto &anchor : arrivalAnchors)
+        {
+            destinations[anchor.polygon] = true;
+        }
+        while (!pending.empty())
+        {
+            const auto polygon = pending.back();
+            pending.pop_back();
+            if (destinations[polygon])
+            {
+                return true;
+            }
+            if (visited[polygon])
+            {
+                continue;
+            }
+            visited[polygon] = true;
+            const auto &face = candidate.mesh.polygons[polygon];
+            for (std::size_t edge{}; edge < 3; ++edge)
+            {
+                const auto neighbor = face.neighbors[edge];
+                if (!(face.flags & (1U << edge)) && neighbor < candidate.mesh.polygons.size() &&
+                    !(candidate.mesh.polygons[neighbor].flags & (1U << 3)))
+                {
+                    pending.push_back(neighbor);
+                }
+            }
+        }
+        return false;
+    }
+
+    bool HasCandidateLedgeRoute(const CandidateNavMesh &candidate, const NavMesh &upperMesh, std::uint32_t upperPolygon,
+                                const NavMesh &lowerMesh, std::uint32_t lowerPolygon)
+    {
+        if (upperPolygon >= upperMesh.polygons.size() || lowerPolygon >= lowerMesh.polygons.size())
+        {
+            return false;
+        }
+        const auto upper = SurvivingLandingAnchors(candidate, upperMesh, upperPolygon, true);
+        const auto lower = SurvivingLandingAnchors(candidate, lowerMesh, lowerPolygon, true);
+        std::vector<bool> visited(candidate.mesh.polygons.size());
+        std::vector<std::uint32_t> pending;
+        for (const auto anchor : upper)
+        {
+            pending.push_back(anchor.polygon);
+        }
+        // Shared edges are reversible; reciprocal ledge metadata supplies only downward movement.
+        while (!pending.empty())
+        {
+            const auto polygon = pending.back();
+            pending.pop_back();
+            if (visited.at(polygon))
+            {
+                continue;
+            }
+            visited[polygon] = true;
+            if (std::any_of(lower.begin(), lower.end(), [&](const auto &anchor) { return anchor.polygon == polygon; }))
+            {
+                return true;
+            }
+            for (const auto neighbor : candidate.mesh.polygons[polygon].neighbors)
+            {
+                if (neighbor != NoNeighbor)
+                {
+                    pending.push_back(neighbor);
+                }
+            }
+            for (const auto &link : candidate.ledgeLinks)
+            {
+                if (link.upperPolygon == polygon)
+                {
+                    pending.push_back(link.lowerPolygon);
+                }
+            }
+        }
+        return false;
+    }
+
+    std::size_t AttachCandidateAuthoredDoors(CandidateNavMesh &candidate, std::span<const NavMesh> authored)
+    {
+        std::size_t attached{};
+        for (auto &exit : candidate.exits)
+        {
+            if (exit.polygon)
+            {
+                continue;
+            }
+            std::optional<std::uint32_t> matched;
+            auto best = std::numeric_limits<float>::max();
+            for (const auto &mesh : authored)
+            {
+                for (const auto &door : mesh.doorLinks)
+                {
+                    if (door.referenceId != exit.referenceId || door.polygon >= mesh.polygons.size())
+                    {
+                        continue;
+                    }
+                    for (const auto &anchor : SurvivingLandingAnchors(candidate, mesh, door.polygon))
+                    {
+                        const auto distance =
+                            DoorDistanceSquared(exit.position, candidate.mesh, candidate.mesh.polygons[anchor.polygon]);
+                        if (distance < best)
+                        {
+                            best = distance;
+                            matched = anchor.polygon;
+                        }
+                    }
+                }
+            }
+            if (!matched)
+            {
+                continue;
+            }
+            for (auto &region : candidate.regions)
+            {
+                if (std::find(region.polygons.begin(), region.polygons.end(), *matched) != region.polygons.end())
+                {
+                    exit.polygon = matched;
+                    exit.region = region.id;
+                    region.exitFormIds.push_back(exit.referenceId);
+                    ++attached;
+                    break;
+                }
+            }
+        }
+        return attached;
     }
 
     std::size_t StitchCandidateBorders(CandidateNavMesh &candidate, const AABB &cellBounds,
@@ -5431,6 +5763,28 @@ namespace navmesh::core
     void RefreshCandidateTopology(CandidateNavMesh &candidate)
     {
         BuildAdjacency(candidate.mesh, candidate.profile.weldTolerance, candidate.profile.stepHeight);
+        // An interior landing port reserves one side of a short floor edge for its reciprocal ledge entry.
+        // Both local directions close; the subdivided floor remains connected around the port endpoints.
+        for (const auto &link : candidate.ledgeLinks)
+        {
+            if (link.lowerPolygon >= candidate.mesh.polygons.size() || link.lowerEdge >= 3)
+            {
+                continue;
+            }
+            auto &face = candidate.mesh.polygons[link.lowerPolygon];
+            const auto neighbor = face.neighbors[link.lowerEdge];
+            if (neighbor != NoNeighbor)
+            {
+                for (auto &other : candidate.mesh.polygons[neighbor].neighbors)
+                {
+                    if (other == link.lowerPolygon)
+                    {
+                        other = NoNeighbor;
+                    }
+                }
+                face.neighbors[link.lowerEdge] = NoNeighbor;
+            }
+        }
         for (auto &region : candidate.regions)
         {
             region.area = 0;
@@ -5461,6 +5815,11 @@ namespace navmesh::core
             result.findings.push_back("polygon contributor count mismatch");
         }
         std::map<Edge, std::vector<std::pair<std::size_t, std::size_t>>> edges;
+        std::set<std::pair<std::size_t, std::size_t>> landingPorts;
+        for (const auto &link : candidate.ledgeLinks)
+        {
+            landingPorts.emplace(link.lowerPolygon, link.lowerEdge);
+        }
         std::set<std::array<std::uint32_t, 3>> faces;
         std::vector<bool> used(mesh.vertices.size());
         for (std::size_t i{}; i < mesh.polygons.size(); ++i)
@@ -5518,7 +5877,10 @@ namespace navmesh::core
                 }
                 else if (other && !matches.ambiguous[*other] && matches.neighbors[*other] == i)
                 {
-                    expected = static_cast<std::uint32_t>(uses[*other].first);
+                    if (!landingPorts.contains({index, side}) && !landingPorts.contains(uses[*other]))
+                    {
+                        expected = static_cast<std::uint32_t>(uses[*other].first);
+                    }
                 }
                 if (mesh.polygons[index].neighbors[side] != expected)
                 {
@@ -5531,6 +5893,27 @@ namespace navmesh::core
             if (!used[i])
             {
                 result.findings.push_back(std::format("orphan vertex {}", i));
+            }
+        }
+        std::set<std::pair<std::uint32_t, std::uint8_t>> ledgeEdges;
+        for (const auto &link : candidate.borderLinks)
+        {
+            ledgeEdges.emplace(link.polygon, link.edge);
+        }
+        for (const auto &link : candidate.ledgeLinks)
+        {
+            for (const auto [polygon, edge] :
+                 {std::pair{link.upperPolygon, link.upperEdge}, std::pair{link.lowerPolygon, link.lowerEdge}})
+            {
+                if (polygon >= mesh.polygons.size() || edge >= 3 ||
+                    mesh.polygons[polygon].neighbors[edge] != NoNeighbor || !ledgeEdges.emplace(polygon, edge).second)
+                {
+                    result.findings.push_back("ledge link has an invalid or occupied edge");
+                }
+            }
+            if (link.upperPolygon == link.lowerPolygon)
+            {
+                result.findings.push_back("ledge link targets its own triangle");
             }
         }
         std::vector<std::uint32_t> membership(mesh.polygons.size());
@@ -5699,7 +6082,30 @@ namespace navmesh::core
                        link.generatedNeighborCell ? std::format("\"{:08X}\"", *link.generatedNeighborCell) : "null",
                        link.requiredAuthoredCrossing);
         }
-        out << "],\n  \"authored_border_vertex_edits\": [";
+        out << "],\n  \"ledge_links\": [";
+        for (std::size_t i{}; i < candidate.ledgeLinks.size(); ++i)
+        {
+            const auto &link = candidate.ledgeLinks[i];
+            out << (i ? "," : "")
+                << std::format("{{\"upper_polygon\":{},\"upper_edge\":{},\"lower_polygon\":{},\"lower_edge\":{}}}",
+                               link.upperPolygon, link.upperEdge, link.lowerPolygon, link.lowerEdge);
+        }
+        out << "],\n  \"maximum_drop_height\": " << candidate.profile.maximumDropHeight;
+        out << ",\n  \"water_surfaces\": {\"vertices\":[";
+        for (std::size_t index{}; index < candidate.ledgeWaterGeometry.vertices.size(); ++index)
+        {
+            const auto point = candidate.ledgeWaterGeometry.vertices[index];
+            out << (index ? "," : "") << std::format("[{},{},{}]", point.x, point.y, point.z);
+        }
+        out << "],\"triangles\":[";
+        for (std::size_t index{}; index < candidate.ledgeWaterGeometry.triangles.size(); ++index)
+        {
+            const auto &triangle = candidate.ledgeWaterGeometry.triangles[index];
+            out << (index ? "," : "")
+                << std::format("[{},{},{}]", triangle.vertices[0], triangle.vertices[1], triangle.vertices[2]);
+        }
+        out << "]}";
+        out << ",\n  \"authored_border_vertex_edits\": [";
         for (std::size_t i{}; i < candidate.authoredBorderVertexEdits.size(); ++i)
         {
             const auto &edit = candidate.authoredBorderVertexEdits[i];

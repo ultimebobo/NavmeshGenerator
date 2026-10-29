@@ -29,6 +29,7 @@ namespace navmesh::skyrim
      * @return Structural faults, deduplicated by NAVM and kind in CELL/triangle order. Deleted records,
      * disabled triangle geometry, valid empty meshes and cells without NAVM are not repair targets. Unsupported layouts
      * are counted separately, never guessed. Does not detect collision/support or heuristic island/gap issues.
+     * One-sided local adjacency across an exact indexed shared edge is preserved, not selected for repair.
      * @throws std::invalid_argument If stepHeight is invalid. Performs no I/O or mutations.
      */
     [[nodiscard]] NavigationAudit AuditNavigation(const ResolvedLoadOrder &resolved, float stepHeight,
