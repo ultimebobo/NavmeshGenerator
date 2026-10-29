@@ -360,8 +360,9 @@ namespace navmesh::core
             }
         }
 
-        // Extend access only in the traversable direction, including chains of descents.
-        // A landing in an anchored network cannot provide access to the departure floor above it.
+        // Entrance-anchored exterior navigation must also offer an escape to an access anchor.
+        // Trace descents backward to identify return routes without granting access to their upper floors.
+        auto returnsToAccess = retained;
         bool changed{};
         do
         {
@@ -372,7 +373,28 @@ namespace navmesh::core
                 {
                     const auto upper = floors.Root(offsets[index] + link.upperPolygon);
                     const auto lower = floors.Root(offsets[index] + link.lowerPolygon);
-                    if (retained[upper] && !retained[lower])
+                    if (returnsToAccess[lower] && !returnsToAccess[upper])
+                    {
+                        returnsToAccess[upper] = true;
+                        changed = true;
+                    }
+                }
+            }
+        } while (changed);
+
+        // Extend access only in the traversable direction, including chains of descents.
+        // A landing in an anchored network cannot provide access to the departure floor above it.
+        do
+        {
+            changed = false;
+            for (std::size_t index{}; index < targets.size(); ++index)
+            {
+                for (const auto &link : targets[index].candidate->ledgeLinks)
+                {
+                    const auto upper = floors.Root(offsets[index] + link.upperPolygon);
+                    const auto lower = floors.Root(offsets[index] + link.lowerPolygon);
+                    if (retained[upper] && !retained[lower] &&
+                        (!entranceAnchored[areas.Root(index)] || returnsToAccess[lower]))
                     {
                         retained[lower] = true;
                         changed = true;

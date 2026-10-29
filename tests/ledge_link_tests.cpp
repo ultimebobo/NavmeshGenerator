@@ -360,6 +360,106 @@ namespace
             assert(candidate.topology.valid);
         }
     }
+
+    /// Find an unused boundary on the landing's connected floor for a synthetic external portal.
+    CandidateBorderLink LandingCrossing(const CandidateNavMesh &candidate, const CandidateLedgeLink &landing)
+    {
+        std::vector<std::uint32_t> pending{landing.lowerPolygon};
+        std::vector<bool> visited(candidate.mesh.polygons.size());
+        while (!pending.empty())
+        {
+            const auto polygon = pending.back();
+            pending.pop_back();
+            if (visited[polygon])
+            {
+                continue;
+            }
+            visited[polygon] = true;
+            for (std::uint8_t edge{}; edge < 3; ++edge)
+            {
+                const auto neighbor = candidate.mesh.polygons[polygon].neighbors[edge];
+                if (neighbor != std::numeric_limits<std::uint32_t>::max())
+                {
+                    pending.push_back(neighbor);
+                }
+                else if (polygon != landing.lowerPolygon || edge != landing.lowerEdge)
+                {
+                    return {.polygon = polygon, .edge = edge, .neighborNavmeshId = 3};
+                }
+            }
+        }
+        assert(false);
+        return {};
+    }
+
+    /// Drops into exterior dead ends cannot retain scenery; complete descending exit routes remain usable.
+    void CheckExteriorEscapeRoutes()
+    {
+        Scene scene;
+        scene.geometrySources.push_back({.sourceType = GeometrySourceType::Collision, .confidence = 1});
+        AddBox(scene, {-256, -128, -32}, {0, 128, 320});
+        AddBox(scene, {0, -128, -32}, {256, 128, 160});
+        AddBox(scene, {256, -128, -32}, {512, 128, 0});
+        const auto original = Generate(scene);
+        assert(original.topology.valid && original.ledgeLinks.size() == 2);
+        const auto first = std::find_if(
+            original.ledgeLinks.begin(), original.ledgeLinks.end(), [&](const auto &link)
+            { return original.mesh.vertices[original.mesh.polygons[link.upperPolygon].vertices[0]].z > 300; });
+        const auto last = std::find_if(
+            original.ledgeLinks.begin(), original.ledgeLinks.end(), [&](const auto &link)
+            { return original.mesh.vertices[original.mesh.polygons[link.lowerPolygon].vertices[0]].z < 100; });
+        assert(first != original.ledgeLinks.end() && last != original.ledgeLinks.end());
+        enum class TerminalAccess
+        {
+            None,
+            Door,
+            RequiredCrossing,
+            IncidentalCrossing
+        };
+        for (const bool exterior : {false, true})
+        {
+            // A terminal door and a required authored crossing both provide exits.
+            // An incidental border match supplies no access in an entrance-anchored selection.
+            for (const auto terminalAccess : {TerminalAccess::None, TerminalAccess::Door,
+                                              TerminalAccess::RequiredCrossing, TerminalAccess::IncidentalCrossing})
+            {
+                auto candidate = original;
+                candidate.exits.push_back({.referenceId = 1, .polygon = first->upperPolygon});
+                if (terminalAccess == TerminalAccess::Door)
+                {
+                    candidate.exits.push_back({.referenceId = 2, .polygon = last->lowerPolygon});
+                }
+                if (terminalAccess == TerminalAccess::RequiredCrossing ||
+                    terminalAccess == TerminalAccess::IncidentalCrossing)
+                {
+                    auto crossing = LandingCrossing(candidate, *last);
+                    crossing.requiredAuthoredCrossing = terminalAccess == TerminalAccess::RequiredCrossing;
+                    candidate.borderLinks.push_back(crossing);
+                }
+                CandidateReachabilityTarget target{.cellId = 1, .candidate = &candidate};
+                if (exterior)
+                {
+                    target.worldspaceId = 1;
+                    target.bounds = AABB{.min = {-512, -256, -32}, .max = {1024, 256, 1024}};
+                }
+                const auto keepsLandings = !exterior || terminalAccess == TerminalAccess::Door ||
+                                           terminalAccess == TerminalAccess::RequiredCrossing;
+                const auto removed = RemoveCandidateIslands(std::span(&target, 1));
+                assert(candidate.topology.valid);
+                assert(candidate.ledgeLinks.size() == (keepsLandings ? 2 : 0));
+                assert(HasCandidateLedgeRoute(candidate, original.mesh, first->upperPolygon, original.mesh,
+                                              last->lowerPolygon) == keepsLandings);
+                if (!keepsLandings)
+                {
+                    assert(removed > 0);
+                    assert(std::all_of(candidate.mesh.vertices.begin(), candidate.mesh.vertices.end(),
+                                       [](Vec3 point) { return point.z > 300; }));
+                    assert(candidate.borderLinks.empty());
+                }
+                assert(RemoveCandidateIslands(std::span(&target, 1)) == 0);
+            }
+        }
+    }
 } // namespace
 
 void TestLedgeLinkFixture()
@@ -373,6 +473,7 @@ void TestLedgeLinkFixture()
     CheckUnevenDeparture(original);
     const auto interior = BuildInteriorLandingFixture();
     CheckDeepWaterLandings();
+    CheckExteriorEscapeRoutes();
     auto translated = candidate;
     for (auto *mesh : {&translated.mesh.vertices, &translated.ledgeGeometry.vertices})
     {
@@ -399,15 +500,12 @@ void TestLedgeLinkFixture()
                                         .candidate = &candidate}};
         (void)RemoveCandidateIslands(targets);
         assert(candidate.topology.valid);
-        assert(candidate.ledgeLinks.size() == (upperAnchor ? 1 : 0));
-        assert(candidate.regions.size() == (upperAnchor ? 2 : 1));
+        assert(candidate.ledgeLinks.empty());
+        assert(candidate.regions.size() == 1);
         if (upperAnchor)
         {
-            const auto &retained = candidate.ledgeLinks.front();
-            assert(HasCandidateLedgeRoute(candidate, candidate.mesh, retained.upperPolygon, candidate.mesh,
-                                          retained.lowerPolygon));
-            assert(!HasCandidateLedgeRoute(candidate, candidate.mesh, retained.lowerPolygon, candidate.mesh,
-                                           retained.upperPolygon));
+            assert(std::all_of(candidate.mesh.vertices.begin(), candidate.mesh.vertices.end(),
+                               [](auto point) { return point.z > 128; }));
         }
         else
         {

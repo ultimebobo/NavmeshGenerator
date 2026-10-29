@@ -11,6 +11,9 @@ traversal; separate floors receive clear downward connections before island
 compaction. Validated descents extend an anchored network downward from reachable
 departure floors, including chains of descents. A landing in that network cannot
 retain an otherwise inaccessible floor above it merely because it has a downward exit.
+In entrance-anchored exterior selections, descended-to floors must also have a directed
+route back to a matched door or required authored crossing, so one-way drops cannot
+retain surrounding scenery with no exit.
 Scarce departure apertures are allocated before broad floors consume
 their receiving edges, and existing valid links are reused when rebuilding.
 Standing-body sweeps follow the actual collision support within the configured

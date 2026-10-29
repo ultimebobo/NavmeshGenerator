@@ -25,7 +25,9 @@ namespace navmesh::core
      * and reciprocal generated portals define floor connectivity; touching vertices do not.
      * Validated ledges extend access downward from retained departure floors, including chained descents.
      * A retained landing alone cannot anchor an otherwise inaccessible departure floor above it.
-     * Exterior selections with matched doors retain door-reachable components and routes replacing
+     * Exterior selections with matched doors require descended-to floors to have a directed return route
+     * to a matched door or required authored crossing; drop-only dead ends do not anchor scenery.
+     * These selections retain door-reachable components and routes replacing
      * required authored crossings to untouched neighbors. Incidental boundary matches do not anchor
      * disconnected scenery. Doorless selections and interiors also retain untouched authored destinations
      * and the largest component by horizontal area.
