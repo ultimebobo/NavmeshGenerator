@@ -59,13 +59,15 @@ namespace navmesh::skyrim
      * @param autoSplit Automatically partition navigation patches that exceed the reduced master limit.
      * Exports requiring both splitting and newly allocated NAVM identities fail explicitly; copies stay single-file.
      * @param writtenPaths Optional complete list of published plugins, in installation order; cleared on failure.
+     * @param warnings Optional diagnostics for authored ledge entries with no equivalent generated route,
+     * including incoming entries from untouched NAVMs. Cleared on entry; may contain findings on failure.
      * @return True after read-back and validation against the effective input navigation graph.
      * @note Reciprocal intra-cell ledges may use the nearest surviving authored landing ring
-     * when the lip is carved away. Landings require a generated floor route or a validated downward ledge route.
-     * Cross-CELL checks can follow planned ordinary portals through generated and untouched navigation;
-     * incoming authored ledges into replaced meshes cannot prove their own replacement.
+     * when the lip is carved away. Floor and downward routes, including paths through neighboring cells,
+     * supersede authored ledges. Authored ledges without replacement routes are omitted with warnings;
+     * their incoming references are cleared, leaving open boundaries. Generated ledges remain validated.
      * @warning Unrepresentable connector constraints, localized reference resources, unknown
-     * reference fields and traversal portals without a safe replacement route reject export instead of being discarded.
+     * reference fields, enable/disable portals and unknown traversal types reject export instead of being discarded.
      */
     [[nodiscard]] bool WriteNavmeshOverrides(const std::filesystem::path &outputDirectory,
                                              const std::vector<std::filesystem::path> &inputPlugins,
@@ -73,7 +75,8 @@ namespace navmesh::skyrim
                                              const std::vector<NavmeshReplacement> &replacements,
                                              std::filesystem::path &writtenPath, std::string &error,
                                              const std::string &copyPlugin = {}, bool autoSplit = true,
-                                             std::vector<std::filesystem::path> *writtenPaths = nullptr);
+                                             std::vector<std::filesystem::path> *writtenPaths = nullptr,
+                                             std::vector<std::string> *warnings = nullptr);
     /** Write generated navigation as overrides, or a new NAVM when the selected cell has none.
      * @param outputDirectory Directory for a new ESP; existing files are never replaced.
      * @param inputPlugins Physical active plugin paths in resolved load order.
@@ -89,6 +92,7 @@ namespace navmesh::skyrim
      * @param error Human-readable reason when the source cannot be safely serialized.
      * @param autoSplit Permit automatic splitting after dependency reduction, using the combined writer's rules.
      * @param writtenPaths Optional complete list of published plugins in installation order.
+     * @param warnings Optional dropped authored ledge diagnostics, with the combined writer's clearing rules.
      * @return True only after a successful write and independent reader round trip;
      * false with an error when a required border portal cannot be serialized.
      * @note The ESP is ESL-flagged when its master table and new identities fit a light plugin.
@@ -100,5 +104,6 @@ namespace navmesh::skyrim
                                             const ResolvedLoadOrder &resolved, const core::Cell &cell,
                                             const core::CandidateNavMesh &candidate, std::filesystem::path &writtenPath,
                                             std::string &error, bool autoSplit = true,
-                                            std::vector<std::filesystem::path> *writtenPaths = nullptr);
+                                            std::vector<std::filesystem::path> *writtenPaths = nullptr,
+                                            std::vector<std::string> *warnings = nullptr);
 } // namespace navmesh::skyrim

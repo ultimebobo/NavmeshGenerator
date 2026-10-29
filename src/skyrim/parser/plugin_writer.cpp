@@ -202,8 +202,7 @@ namespace
     }
 
     /// Return a diagnostic reason, or empty when the planned graph retains downward traversal.
-    std::string_view TraversalReplacementFailure(const navmesh::core::CandidateNavMesh &candidate,
-                                                 const navmesh::core::Cell &cell, const navmesh::core::NavMesh &source,
+    std::string_view TraversalReplacementFailure(const navmesh::core::NavMesh &source,
                                                  const navmesh::core::NavmeshExternalLink &portal,
                                                  const TraversalValidationGraph &graph)
     {
@@ -219,9 +218,10 @@ namespace
         {
             return "invalid_source_edge";
         }
-        const auto target = std::find_if(cell.navMeshes.begin(), cell.navMeshes.end(),
-                                         [&](const auto &mesh) { return mesh.id == portal.navmeshId; });
-        if (target == cell.navMeshes.end())
+        const auto sourceCell = graph.replacedMeshes.find(source.id);
+        const auto targetCell = graph.replacedMeshes.find(portal.navmeshId);
+        if (sourceCell == graph.replacedMeshes.end() || targetCell == graph.replacedMeshes.end() ||
+            sourceCell->second != targetCell->second)
         {
             const auto other = graph.authored.find(portal.navmeshId);
             if (other == graph.authored.end() || portal.targetPolygon >= other->second->polygons.size())
@@ -246,6 +246,8 @@ namespace
                     : HasEffectiveDownwardRoute(graph, destination, portal.targetPolygon, source, portal.polygon);
             return connected ? std::string_view{} : "ledge_has_no_generated_floor_route";
         }
+        const auto *target = graph.authored.at(portal.navmeshId);
+        const auto &candidate = *graph.candidates.at(sourceCell->second);
         if (portal.targetPolygon >= target->polygons.size())
         {
             return "invalid_target_triangle";
@@ -297,6 +299,43 @@ namespace
             return {};
         }
         return "ledge_has_no_generated_floor_route";
+    }
+
+    /// Missing ledge routes are lossy regeneration diagnostics; conditional and unknown portal types remain errors.
+    bool CheckAuthoredTraversal(const navmesh::skyrim::ResolvedLoadOrder &resolved,
+                                const navmesh::core::NavMesh &source, const navmesh::core::NavmeshExternalLink &portal,
+                                const TraversalValidationGraph &graph, std::vector<std::string> *warnings,
+                                std::string &error)
+    {
+        if (portal.type == 0)
+        {
+            return true;
+        }
+        const auto reason = TraversalReplacementFailure(source, portal, graph);
+        if (reason.empty())
+        {
+            return true;
+        }
+        const auto *record = resolved.FindWinning(source.id);
+        const auto *destination = resolved.FindWinning(portal.navmeshId);
+        const auto details = std::format(
+            "reason={} type={} CELL {} NAVM {:08X} winner='{}' triangle={} edge={} "
+            "target_CELL={} target_NAVM={:08X} target_triangle={} target_winner='{}'",
+            reason, portal.type,
+            record && record->cellFormId ? std::format("{:08X}", *record->cellFormId) : "unresolved", source.id,
+            record ? record->winning.plugin : "unresolved", portal.polygon, portal.edge,
+            destination && destination->cellFormId ? std::format("{:08X}", *destination->cellFormId) : "unresolved",
+            portal.navmeshId, portal.targetPolygon, destination ? destination->winning.plugin : "unresolved");
+        if (portal.type == 1 || portal.type == 2)
+        {
+            if (warnings)
+            {
+                warnings->push_back("Dropped authored ledge connection: " + details);
+            }
+            return true;
+        }
+        error = "An authored traversal portal cannot be safely remapped to generated geometry.\n" + details;
+        return false;
     }
 
     void U16(Bytes &b, std::uint16_t n)
@@ -1356,19 +1395,21 @@ namespace
     }
 } // namespace
 
-bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputDirectory,
-                                            const std::vector<std::filesystem::path> &inputPlugins,
-                                            const ResolvedLoadOrder &resolved,
-                                            const std::vector<NavmeshReplacement> &replacements,
-                                            std::filesystem::path &writtenPath, std::string &error,
-                                            const std::string &copyPlugin, bool autoSplit,
-                                            std::vector<std::filesystem::path> *writtenPaths)
+bool navmesh::skyrim::WriteNavmeshOverrides(
+    const std::filesystem::path &outputDirectory, const std::vector<std::filesystem::path> &inputPlugins,
+    const ResolvedLoadOrder &resolved, const std::vector<NavmeshReplacement> &replacements,
+    std::filesystem::path &writtenPath, std::string &error, const std::string &copyPlugin, bool autoSplit,
+    std::vector<std::filesystem::path> *writtenPaths, std::vector<std::string> *warnings)
 {
     error.clear();
     writtenPath.clear();
     if (writtenPaths)
     {
         writtenPaths->clear();
+    }
+    if (warnings)
+    {
+        warnings->clear();
     }
     const bool resolvedIdentities = copyPlugin.empty();
     const auto rebaseSource = [&](const SourceInfo &source, const std::vector<std::string> &table, std::uint32_t raw)
@@ -1621,27 +1662,10 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
             // Diagnose source decoding/resolution first; traversal replacement assumes complete connection evidence.
             for (const auto &portal : mesh.externalLinks)
             {
-                if (portal.type == 0)
+                if (!CheckAuthoredTraversal(resolved, mesh, portal, traversalGraph, warnings, error))
                 {
-                    continue;
+                    return false;
                 }
-                const auto reason = TraversalReplacementFailure(candidate, cell, mesh, portal, traversalGraph);
-                if (reason.empty())
-                {
-                    continue;
-                }
-                const auto *destination = resolved.FindWinning(portal.navmeshId);
-                error = std::format(
-                    "An authored ledge or enable/disable portal cannot be safely remapped to generated geometry.\n"
-                    "reason={} type={} CELL {:08X} '{}' NAVM {:08X} winner='{}' triangle={} edge={}\n"
-                    "target_CELL={} target_NAVM={:08X} target_triangle={} target_winner='{}'",
-                    reason, portal.type, cell.id,
-                    cell.editorId.size() > 128 ? cell.editorId.substr(0, 128) + "...[truncated]" : cell.editorId,
-                    mesh.id, navm->winning.plugin, portal.polygon, portal.edge,
-                    destination && destination->cellFormId ? std::format("{:08X}", *destination->cellFormId)
-                                                           : "unresolved",
-                    portal.navmeshId, portal.targetPolygon, destination ? destination->winning.plugin : "unresolved");
-                return false;
             }
             for (const auto &portal : mesh.externalLinks)
             {
@@ -1921,6 +1945,19 @@ bool navmesh::skyrim::WriteNavmeshOverrides(const std::filesystem::path &outputD
     if (!CollectIncomingNeighbors(resolved, inputPlugins, records, neighborRecords, neighborMeshes))
     {
         return fail("Cannot safely collect authored portals targeting replaced NAVMs.");
+    }
+    // Untouched sources can hold the only surviving half of an authored ledge pair.
+    // Inspect those incoming routes before their replaced triangle references are removed.
+    for (const auto &[id, mesh] : neighborMeshes)
+    {
+        for (const auto &portal : mesh.externalLinks)
+        {
+            if (traversalGraph.replacedMeshes.contains(portal.navmeshId) &&
+                !CheckAuthoredTraversal(resolved, mesh, portal, traversalGraph, warnings, error))
+            {
+                return false;
+            }
+        }
     }
     if (!CollectDoorNavigation(resolved, records, doorAssignments, neighborRecords, neighborMeshes, doorReferences,
                                authoredDoorAssignments, error))
@@ -3086,8 +3123,9 @@ bool navmesh::skyrim::WriteNavmeshOverride(const std::filesystem::path &outputDi
                                            const ResolvedLoadOrder &resolved, const core::Cell &cell,
                                            const core::CandidateNavMesh &candidate, std::filesystem::path &writtenPath,
                                            std::string &error, bool autoSplit,
-                                           std::vector<std::filesystem::path> *writtenPaths)
+                                           std::vector<std::filesystem::path> *writtenPaths,
+                                           std::vector<std::string> *warnings)
 {
     return WriteNavmeshOverrides(outputDirectory, inputPlugins, resolved, {{&cell, &candidate}}, writtenPath, error, {},
-                                 autoSplit, writtenPaths);
+                                 autoSplit, writtenPaths, warnings);
 }

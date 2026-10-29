@@ -129,13 +129,17 @@ edge and close both local adjacency directions while retaining surrounding floor
 connectivity. Cross-CELL validation follows planned generated floor and descent
 connections through reciprocal ordinary portals and untouched navigation; incoming
 authored ledges to replaced meshes cannot prove their own replacement.
-Ledges without a generated replacement route and
-enable/disable portals reject regeneration. Malformed input or a source edit during
+Authored ledges without a generated replacement route are omitted; incoming entries
+from untouched NAVMs are removed and their consuming edges become open boundaries.
+Each dropped entry is reported with its source, destination and reason in export
+warnings in the batch or single-cell generation report and run log. Generated ledges
+still require valid geometry and reciprocal entries. Enable/disable portals and
+unknown traversal types reject regeneration. Malformed input or a source edit during
 generation also stops export; no final ESP is published on a validation failure.
-Traversal-remapping failures identify the source CELL, NAVM, winning plugin and
-triangle edge, the destination, and whether authored semantics, reciprocal links
-or a generated floor route prevent replacement. Source connection decoding and
-resolution errors take precedence when connection evidence is incomplete.
+Traversal diagnostics identify the source CELL, NAVM, winning plugin and triangle
+edge, the destination, and the reason for dropping a ledge or rejecting a portal.
+Source connection decoding and resolution errors take precedence when connection
+evidence is incomplete.
 Install a patch after its input plugins and regenerate it after changing that
 load-order snapshot. Unrelated later overrides can supersede its navigation.
 

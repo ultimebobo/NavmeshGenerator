@@ -468,8 +468,10 @@ namespace
                                    {.vertices = {1, 2, 3}, .neighbors = {0xffffffffU, 0xffffffffU, 0}}};
         std::filesystem::path output;
         std::string error;
+        std::vector<std::string> warnings{"stale warning"};
         assert(WriteNavmeshOverride(root / "connected", {source}, resolved, resolved.cells.front(), candidate, output,
-                                    error));
+                                    error, true, nullptr, &warnings));
+        assert(warnings.empty());
         const auto written = Read(output);
         const auto mesh = std::find_if(written.begin(), written.end(), [](const auto &r) { return r.type == "NAVM"; });
         assert(mesh != written.end() && mesh->navm->triangleCount == 2);
@@ -491,16 +493,20 @@ namespace
             face.flags &= static_cast<std::uint16_t>(~7U);
             face.neighbors.fill(0xffffffffU);
         }
-        assert(!WriteNavmeshOverride(root / "disconnected", {source}, resolved, resolved.cells.front(), candidate,
-                                     output, error));
-        assert(error.find("ledge") != std::string::npos);
+        assert(WriteNavmeshOverride(root / "disconnected", {source}, resolved, resolved.cells.front(), candidate,
+                                    output, error, true, nullptr, &warnings));
+        assert(error.empty() && warnings.size() == 2);
         for (const auto *detail : {"reason=ledge_has_no_generated_floor_route", "type=1", "CELL 00000100",
                                    "NAVM 00000200", "winner='Traversal.esm'", "triangle=0 edge=1",
                                    "target_CELL=00000100", "target_NAVM=00000200", "target_triangle=1"})
         {
-            assert(error.find(detail) != std::string::npos);
+            assert(warnings.front().find(detail) != std::string::npos);
         }
-        assert(!std::filesystem::exists(root / "disconnected" / "generated-navmesh.esp"));
+        const auto disconnected = Read(output);
+        const auto generated = std::find_if(disconnected.begin(), disconnected.end(),
+                                            [](const auto &record) { return record.type == "NAVM"; });
+        assert(generated != disconnected.end());
+        assert(Get32(generated->raw->decodedPayload, generated->navm->trailingData.offset) == 0);
     }
 
     void TestCarvedLedgeLandings(const std::filesystem::path &root)
@@ -588,23 +594,17 @@ namespace
             }
             std::filesystem::path output;
             std::string error;
+            std::vector<std::string> warnings;
             const auto destination = root / std::to_string(variant);
-            const auto written =
-                WriteNavmeshOverride(destination, {source}, resolved, resolved.cells.front(), candidate, output, error);
-            assert(written == (variant == 0));
-            if (written)
-            {
-                const auto records = Read(output);
-                const auto generated = std::find_if(records.begin(), records.end(),
-                                                    [](const auto &record) { return record.type == "NAVM"; });
-                assert(generated != records.end() && generated->navm->triangleCount == 2);
-                assert(Get32(generated->raw->decodedPayload, generated->navm->trailingData.offset) == 0);
-            }
-            else
-            {
-                assert(error.find("ledge_has_no_generated_floor_route") != std::string::npos);
-                assert(!std::filesystem::exists(destination / "generated-navmesh.esp"));
-            }
+            assert(WriteNavmeshOverride(destination, {source}, resolved, resolved.cells.front(), candidate, output,
+                                        error, true, nullptr, &warnings));
+            assert(error.empty());
+            assert(warnings.size() == (variant == 0 ? 0U : 2U));
+            const auto records = Read(output);
+            const auto generated =
+                std::find_if(records.begin(), records.end(), [](const auto &record) { return record.type == "NAVM"; });
+            assert(generated != records.end() && generated->navm->triangleCount == 2);
+            assert(Get32(generated->raw->decodedPayload, generated->navm->trailingData.offset) == 0);
         }
     }
 

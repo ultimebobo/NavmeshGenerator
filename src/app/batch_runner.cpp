@@ -566,6 +566,7 @@ namespace navmesh::app::detail
         using Result = BatchCellResult;
         std::vector<Result> results;
         std::vector<std::filesystem::path> writtenPlugins;
+        std::vector<std::string> exportWarnings;
         results.reserve(targets.size());
         for (const auto *target : targets)
         {
@@ -754,6 +755,12 @@ namespace navmesh::app::detail
                 firstArtifact = false;
             }
             out << "},\n";
+            out << "  \"export_warnings\":[";
+            for (std::size_t index{}; index < exportWarnings.size(); ++index)
+            {
+                out << (index ? "," : "") << '"' << JsonEscape(exportWarnings[index]) << '"';
+            }
+            out << "],\n";
             out << "  \"skip_existing_navmesh\":" << (options.skipExistingNavmesh ? "true" : "false") << ",\n";
             out << "  \"copy_plugin\":" << (options.copyPlugin ? "true" : "false") << ",\n";
             out << "  \"auto_split_plugins\":" << (options.autoSplitPlugins ? "true" : "false") << ",\n";
@@ -1392,9 +1399,14 @@ namespace navmesh::app::detail
             }
             if (!skyrim::WriteNavmeshOverrides(options.output, paths, resolved, replacements, written, error,
                                                options.copyPlugin ? copySource : "", options.autoSplitPlugins,
-                                               &writtenPlugins))
+                                               &writtenPlugins, &exportWarnings))
             {
                 return fail(error);
+            }
+            for (const auto &warning : exportWarnings)
+            {
+                std::cout << "Warning: " << warning << '\n';
+                progress(94, "Warning: " + warning);
             }
             std::cout << (options.copyPlugin ? "Generated plugin copy: " : "Generated batch NAVM override plugin: ")
                       << navmesh::core::PathToUtf8(written) << '\n';
@@ -1413,11 +1425,15 @@ namespace navmesh::app::detail
         {
             return fail("Cannot finalize batch-report.json");
         }
-        const auto status = std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; "
-                                        "generated polygons: {}; generation failures: {}; extraction failures: {}",
-                                        targets.size(), generatedByCell.size(), targets.size() - generatedByCell.size(),
-                                        originalPolygons, generatedPolygons, generationFailures, extractionFailures) +
-                            (missingModelWarning.empty() ? "" : "; " + missingModelWarning);
+        const auto status =
+            std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; "
+                        "generated polygons: {}; generation failures: {}; extraction failures: {}",
+                        targets.size(), generatedByCell.size(), targets.size() - generatedByCell.size(),
+                        originalPolygons, generatedPolygons, generationFailures, extractionFailures) +
+            (missingModelWarning.empty() ? "" : "; " + missingModelWarning) +
+            (exportWarnings.empty()
+                 ? ""
+                 : std::format("; dropped authored ledge entries: {} (see batch-report.json)", exportWarnings.size()));
         std::cout << status << '\n';
         if (progress)
         {

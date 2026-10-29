@@ -47,6 +47,27 @@ def navm(x, y=0, flags=(0, 0)):
     return sub("NVNM", body)
 
 
+def navm_with_traversal(x, entries, height=0):
+    """Attach typed external entries to boundary edges of the synthetic floor."""
+    body = bytearray(navm(x)[6:])
+    vertices = struct.unpack_from("<I", body, 16)[0]
+    for vertex in range(vertices):
+        struct.pack_into("<f", body, 20 + vertex * 12 + 8, height)
+    triangle_at = 24 + vertices * 12
+    triangles = struct.unpack_from("<I", body, triangle_at - 4)[0]
+    links_at = triangle_at + triangles * 16
+    struct.pack_into("<I", body, links_at, len(entries))
+    links = b""
+    for index, (polygon, edge, kind, target, target_polygon) in enumerate(entries):
+        face = triangle_at + polygon * 16
+        struct.pack_into("<H", body, face + 6 + edge * 2, index)
+        flags = struct.unpack_from("<H", body, face + 12)[0]
+        struct.pack_into("<H", body, face + 12, flags | (1 << edge))
+        links += struct.pack("<IIH", kind, target, target_polygon)
+    body[links_at + 4:links_at + 4] = links
+    return sub("NVNM", body)
+
+
 def read_records(path, include_groups=False):
     """Inspect emitted record identities and payloads independently of the C++ reader."""
     data = path.read_bytes()
@@ -535,7 +556,7 @@ class BatchRebuild(unittest.TestCase):
             manifest.write(str(output / "generated-navmesh.esp") + "\n")
         self.run_cli("--list-cells", output="read-back")
 
-    def test_traversal_portal_failures_identify_the_source_and_reason(self):
+    def test_traversal_diagnostics_identify_dropped_ledges_and_rejected_portals(self):
         triangles_at = 20 + 4 * 12
         connections_at = triangles_at + 4 + 2 * 16
         cases = [
@@ -558,11 +579,21 @@ class BatchRebuild(unittest.TestCase):
                     door_at = connections_at + 14
                     body[door_at:door_at + 4] = struct.pack("<IHII", 1, 0, 0xE48B73F3, 0)
                 self.write_baseline(navmeshes={0: sub("NVNM", body), 1: navm(1), 2: navm(2)})
+                dropped_ledge = portal_type in (1, 2) and not unresolved_door
                 output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin",
-                                      output=reason, code=2)
+                                      output=f"{reason}-{target:08X}-{target_triangle}", code=0 if dropped_ledge else 2)
                 report = json.loads((output / "batch-report.json").read_text())
-                pasteable = (output / "bug-report.txt").read_text(encoding="ascii")
-                for text in (report["error"], pasteable):
+                if dropped_ledge:
+                    self.assertEqual(report["status"], "complete")
+                    self.assertEqual(report["error"], "")
+                    self.assertEqual(len(report["export_warnings"]), 1)
+                    diagnostics = report["export_warnings"]
+                    self.assertFalse((output / "bug-report.txt").exists())
+                else:
+                    pasteable = (output / "bug-report.txt").read_text(encoding="ascii")
+                    self.assertLessEqual(len(pasteable), 4500)
+                    diagnostics = (report["error"], pasteable)
+                for text in diagnostics:
                     for detail in (reason, "CELL 00000100", "NAVM 00000200", "Baseline.esm"):
                         self.assertIn(detail, text)
                     if not unresolved_door:
@@ -570,11 +601,10 @@ class BatchRebuild(unittest.TestCase):
                                        f"target_NAVM={target:08X}", f"target_triangle={target_triangle}",
                                        "target_winner='Baseline.esm'"):
                             self.assertIn(detail, text)
-                self.assertLessEqual(len(pasteable), 4500)
                 self.assertEqual(report["generation_failed_cells"], 0)
-                self.assertFalse((output / "generated-navmesh.esp").exists())
+                self.assertEqual((output / "generated-navmesh.esp").exists(), dropped_ledge)
 
-    def test_cross_cell_ledge_validation_requires_an_effective_generated_route(self):
+    def test_cross_cell_ledges_without_generated_routes_are_reported(self):
         def ledge(x, polygon, edge, portal_type, target, target_polygon, height):
             body = bytearray(navm(x)[6:])
             for vertex in range(4):
@@ -601,14 +631,16 @@ class BatchRebuild(unittest.TestCase):
                     self.assertEqual(payload.count(marker), 1)
                     baseline.write_bytes(payload.replace(marker, record("LAND", 0x301, land(height))))
                 output = self.run_cli("--cells", "100,101", "--generate-plugin",
-                                      output=f"cross-cell-ledge-{separated}", code=2 if separated else 0)
+                                      output=f"cross-cell-ledge-{separated}")
                 report = json.loads((output / "batch-report.json").read_text())
+                self.assertEqual(report["status"], "complete")
+                self.assertTrue((output / "generated-navmesh.esp").exists())
                 if separated:
-                    self.assertIn("ledge_has_no_generated_floor_route", report["error"])
-                    self.assertFalse((output / "generated-navmesh.esp").exists())
+                    self.assertEqual(len(report["export_warnings"]), 2)
+                    self.assertTrue(all("ledge_has_no_generated_floor_route" in warning
+                                        for warning in report["export_warnings"]))
                 else:
-                    self.assertEqual(report["status"], "complete")
-                    self.assertTrue((output / "generated-navmesh.esp").exists())
+                    self.assertEqual(report["export_warnings"], [])
 
     def test_navmesh_connection_failures_have_pasteable_diagnostics(self):
         body = bytearray(navm(0)[6:])
@@ -2527,6 +2559,78 @@ class BatchRebuild(unittest.TestCase):
         required = [link for link in candidate["border_links"] if link["required_authored_crossing"]]
         self.assertEqual(len(required), 1)
         self.assertEqual(required[0]["neighbor_navmesh_id"], "00000201")
+
+    def test_unrepresentable_ledges_export_with_warnings(self):
+        source = navm_with_traversal(0, [(0, 0, 1, 0x200, 1), (1, 1, 2, 0x200, 0)], height=512)
+        self.write_baseline({0: source, 1: navm(1), 2: navm(2)})
+        original = (self.root / "Baseline.esm").read_bytes()
+        modes = (
+            ("single", ("--cell-formid", "100"), "generation-report.json", "generated-navmesh.esp"),
+            ("batch", ("--cells", "100,101"), "batch-report.json", "generated-navmesh.esp"),
+            ("copy", ("--cells", "100", "--copy-plugin", "--copy-plugin-source", "Baseline.esm"),
+             "batch-report.json", "Baseline.esm"),
+        )
+        for name, selectors, report_name, plugin_name in modes:
+            with self.subTest(mode=name):
+                output = self.run_cli(*selectors, "--generate-plugin", "--cell-error-policy", "stop",
+                                      output=f"dropped-ledges-{name}")
+                report = json.loads((output / report_name).read_text(encoding="utf-8"))
+                self.assertEqual(report["status"], "complete")
+                warnings = report["export_warnings"]
+                self.assertEqual(len(warnings), 2)
+                for warning in warnings:
+                    self.assertIn("Dropped authored ledge connection", warning)
+                    self.assertIn("reason=ledge_has_no_generated_floor_route", warning)
+                    self.assertIn("CELL 00000100 NAVM 00000200", warning)
+                    self.assertIn("target_NAVM=00000200", warning)
+                self.assertIn(warnings[0], (output / "run.log").read_text(encoding="utf-8"))
+                self.assertFalse((output / "bug-report.txt").exists())
+                emitted = [dict(read_subrecords(payload))[b"NVNM"]
+                           for kind, form, _, payload in read_records(output / plugin_name)
+                           if kind == "NAVM" and form == 0x200]
+                self.assertEqual(len(emitted), 1)
+                body = emitted[0]
+                triangle_at = 24 + struct.unpack_from("<I", body, 16)[0] * 12
+                triangles = struct.unpack_from("<I", body, triangle_at - 4)[0]
+                self.assertGreater(triangles, 0)
+                links_at = triangle_at + triangles * 16
+                count = struct.unpack_from("<I", body, links_at)[0]
+                self.assertTrue(all(struct.unpack_from("<I", body, links_at + 4 + index * 10)[0] == 0
+                                    for index in range(count)))
+        self.assertEqual((self.root / "Baseline.esm").read_bytes(), original)
+
+    def test_dropped_incoming_ledge_clears_edge_and_compacts_neighbor_links(self):
+        neighbor = navm_with_traversal(1, [(0, 0, 1, 0x200, 0), (0, 1, 2, 0x202, 1)])
+        third = navm_with_traversal(2, [(1, 2, 1, 0x201, 0)])
+        self.write_baseline({0: navm(0), 1: neighbor, 2: third})
+        output = self.run_cli("--cell-formid", "100", "--generate-plugin", "--cell-error-policy", "stop")
+        report = json.loads((output / "generation-report.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(len(report["export_warnings"]), 1)
+        self.assertIn("reason=ledge_has_no_unique_reciprocal", report["export_warnings"][0])
+        self.assertIn("NAVM 00000201", report["export_warnings"][0])
+        body = next(dict(read_subrecords(payload))[b"NVNM"]
+                    for kind, form, _, payload in read_records(output / "generated-navmesh.esp")
+                    if kind == "NAVM" and form == 0x201)
+        triangle_at = 24 + struct.unpack_from("<I", body, 16)[0] * 12
+        triangles = struct.unpack_from("<I", body, triangle_at - 4)[0]
+        links_at = triangle_at + triangles * 16
+        flags = struct.unpack_from("<H", body, triangle_at + 12)[0]
+        self.assertFalse(flags & 1)
+        self.assertEqual(struct.unpack_from("<H", body, triangle_at + 6)[0], 65535)
+        self.assertTrue(flags & 2)
+        retained = struct.unpack_from("<H", body, triangle_at + 8)[0]
+        self.assertEqual(retained, 0)
+        self.assertEqual(struct.unpack_from("<IIH", body, links_at + 4 + retained * 10), (2, 0x202, 1))
+        self.assertEqual(navm_geometry(sub("NVNM", body)), navm_geometry(neighbor))
+
+    def test_enable_disable_portal_still_rejects_export(self):
+        source = navm_with_traversal(0, [(0, 0, 3, 0x200, 1)])
+        self.write_baseline({0: source, 1: navm(1), 2: navm(2)})
+        output = self.run_cli("--cell-formid", "100", "--generate-plugin", code=2)
+        self.assertFalse((output / "generated-navmesh.esp").exists())
+        self.assertIn("enable_disable_portal_requires_authored_semantics",
+                      (output / "run.log").read_text(encoding="utf-8"))
 
     def assert_door_navigation(self, path):
         emitted = read_records(path)

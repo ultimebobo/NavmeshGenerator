@@ -1377,6 +1377,7 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
             }
             std::filesystem::path pluginPath;
             std::vector<std::filesystem::path> pluginPaths;
+            std::vector<std::string> exportWarnings;
             std::string error;
             update(89, "Writing NAVM override plugin");
             if (bosInputs && !navmesh::skyrim::BaseObjectSwapSnapshotMatches(*bosInputs))
@@ -1384,12 +1385,31 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                 return fail("BOS configurations changed during generation; rerun with coherent inputs.\n", 2);
             }
             if (!navmesh::skyrim::WriteNavmeshOverride(options.output, inputPaths, *resolved, *cell, *candidate,
-                                                       pluginPath, error, options.autoSplitPlugins, &pluginPaths))
+                                                       pluginPath, error, options.autoSplitPlugins, &pluginPaths,
+                                                       &exportWarnings))
             {
                 return fail(std::format(
                     "Plugin generation failed: {}. Review candidate-navm.json and scene.glb in '{}' before retrying. "
                     "For unsupported record or linking failures, include this reason when reporting the issue.",
                     error, PathUtf8(std::filesystem::absolute(options.output))));
+            }
+            // Persist lossy traversal diagnostics even when inspection artifacts were written before export.
+            std::ofstream generationReport(options.output / "generation-report.json", std::ios::trunc);
+            generationReport << "{\n  \"metadata\": " << navmesh::reproducibility::ToJson(metadata, "    ") << ",\n";
+            generationReport << std::format("  \"form_id\":\"{:08X}\",\"status\":\"complete\",\"export_warnings\":[",
+                                            cell->id);
+            for (std::size_t index{}; index < exportWarnings.size(); ++index)
+            {
+                generationReport << (index ? "," : "") << '"'
+                                 << navmesh::reproducibility::EscapeJson(exportWarnings[index]) << '"';
+                std::cout << "Warning: " << exportWarnings[index] << '\n';
+                update(89, "Warning: " + exportWarnings[index]);
+            }
+            generationReport << "]\n}\n";
+            generationReport.close();
+            if (!generationReport)
+            {
+                return fail(WriteFailure(options.output / "generation-report.json"));
             }
             std::ifstream writtenPlugin(pluginPath, std::ios::binary);
             std::array<unsigned char, 12> pluginHeader{};
