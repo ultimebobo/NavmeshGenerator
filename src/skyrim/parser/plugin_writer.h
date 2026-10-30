@@ -51,7 +51,8 @@ namespace navmesh::skyrim
      * Changed input snapshots fail export.
      * @param writtenPath Receives the first finalized plugin path on success; cleared on failure.
      * @param error Receives a failure reason; traversal-remapping failures identify the source,
-     * destination and unmet replacement condition. No final plugin is published on failure.
+     * destination and unmet replacement condition. Blocking load-order diagnostics include a limited
+     * summary of plugin names and parser details. No final plugin is published on failure.
      * @param copyPlugin Optional active filename to copy with generated NAVMs. Preserves
      * unrelated records, the filename, TES4 flags, and existing master indices. Generated
      * references must belong to that plugin or its existing masters; new IDs must fit

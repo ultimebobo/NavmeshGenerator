@@ -32,6 +32,40 @@ namespace
     constexpr std::uint32_t PathingCellCrc = 0xA5E9A03CU;
     constexpr std::uint32_t PathingDoorCrc = 0xE48B73F3U;
 
+    /// Keep the first blocking input diagnostics in the shared failure text consumed by desktop status and reports.
+    std::string LoadOrderExportFailure(const std::vector<navmesh::skyrim::Diagnostic> &diagnostics)
+    {
+        constexpr std::size_t maximumDetails = 3;
+        std::size_t blockingCount{};
+        std::string details;
+        for (const auto &diagnostic : diagnostics)
+        {
+            if (diagnostic.kind == navmesh::skyrim::DiagnosticKind::UnsupportedVersion)
+            {
+                continue;
+            }
+            if (blockingCount < maximumDetails)
+            {
+                details += "\n" + diagnostic.plugin + ": " + diagnostic.message;
+            }
+            ++blockingCount;
+        }
+        if (blockingCount == 0)
+        {
+            return {};
+        }
+        std::string message =
+            "Plugin export blocked by input diagnostics from the active load order, including plugins outside the "
+            "selected cells. Check the named plugins and their required masters in your mod manager, then rerun. "
+            "If the cause is unclear, include these details in a bug report:";
+        message += details;
+        if (blockingCount > maximumDetails)
+        {
+            message += "\nAdditional blocking diagnostics: " + std::to_string(blockingCount - maximumDetails) + ".";
+        }
+        return message;
+    }
+
     bool SupportedNavmeshSubrecord(const std::string &type)
     {
         return type == "NVNM" || type == "EDID" || type == "ONAM" || type == "PNAM" || type == "NNAM";
@@ -1430,11 +1464,10 @@ bool navmesh::skyrim::WriteNavmeshOverrides(
     {
         return false;
     }
-    if (std::any_of(resolved.diagnostics.begin(), resolved.diagnostics.end(),
-                    [](const auto &diagnostic) { return diagnostic.kind != DiagnosticKind::UnsupportedVersion; }))
+    if (auto failure = LoadOrderExportFailure(resolved.diagnostics); !failure.empty())
     {
-        return fail(
-            "Input load order contains malformed records or unresolved dependencies; resolve them before export.");
+        error = std::move(failure);
+        return false;
     }
     std::map<std::uint32_t, const NavmeshReplacement *> byCell;
     std::map<std::uint32_t, core::NavMesh> generatedMeshes;

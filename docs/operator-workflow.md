@@ -110,7 +110,11 @@ options.
 Failed runs show the cause and a next step in desktop status and CLI stderr.
 Invalid settings identify the field and supplied value; input failures retain the
 plugin, profile or path involved; export errors identify the destination and
-storage checks. Use **Copy error details** to copy a desktop failure for a report.
+storage checks. Export failures caused by load-order diagnostics include the first
+blocking plugins and their diagnostic details in desktop status, `run.log` and
+`bug-report.txt`, and identify when more diagnostics remain. These checks cover
+the active load order, including plugins outside the selected cells.
+Use **Copy error details** to copy a desktop failure for a report.
 Saved diagnostic reports are named in the failure message when available.
 CLI parsing rejects unknown options, missing values and malformed numbers before
 reading game inputs.

@@ -3249,6 +3249,28 @@ class BatchRebuild(unittest.TestCase):
                 for fragment in fragments:
                     self.assertIn(fragment, result.stderr)
 
+    def test_export_input_diagnostics_reach_status_and_saved_reports(self):
+        self.write_baseline(navmeshes={})
+        plugin = self.root / "Patch.esp"
+        malformed = record("STAT", 0x01000800, b"EDID\xff\x7fshort")
+        plugin.write_bytes(plugin.read_bytes() + group(int.from_bytes(b"STAT", "little"), 0, malformed))
+        sources = {path: path.read_bytes() for path in (self.root / "Baseline.esm", plugin)}
+        selections = [("--cell-formid", "100"), ("--cells", "100"),
+                      ("--cells", "100", "--copy-plugin", "--copy-plugin-source", "Baseline.esm")]
+        for index, selection in enumerate(selections):
+            with self.subTest(selection=selection):
+                output = self.run_cli(*selection, "--generate-plugin", output=f"input-failure-{index}", code=2)
+                for filename in ("run.log", "bug-report.txt"):
+                    saved = (output / filename).read_text()
+                    for fragment in ("Plugin export blocked", "Patch.esp: STAT 0x01000800",
+                                     "subrecord EDID exceeds decoded payload", "outside the selected cells",
+                                     "mod manager"):
+                        self.assertIn(fragment, saved)
+                self.assertFalse(list(output.glob("*.esp")))
+                self.assertFalse(list(output.glob("*.esl")))
+                for path, original in sources.items():
+                    self.assertEqual(path.read_bytes(), original)
+
     def test_catalog_write_failure_is_reported(self):
         output = self.root / "blocked-catalog"
         (output / "cells.json").mkdir(parents=True)

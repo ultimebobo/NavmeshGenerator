@@ -3,6 +3,7 @@
 #endif
 
 #include "skyrim/parser/patch_export.h"
+#include "skyrim/parser/plugin_writer.h"
 
 #include <cassert>
 
@@ -25,6 +26,40 @@ namespace
         bytes.push_back(static_cast<std::uint8_t>(data.size() >> 8));
         bytes.insert(bytes.end(), data.begin(), data.end());
     }
+
+    void CheckLoadOrderExportFailure(const std::filesystem::path &root)
+    {
+        using namespace navmesh::skyrim;
+        ResolvedLoadOrder input;
+        input.diagnostics = {{DiagnosticKind::UnsupportedVersion, "SupportedInput.esm", "Preserved NAVM version"},
+                             {DiagnosticKind::MalformedInput, "Unrelated.esp",
+                              "STAT 0x01000800 at file offset 66: subrecord EDID exceeds decoded payload"},
+                             {DiagnosticKind::UnresolvedFormId, "MissingDependency.esp", "Missing master identity"}};
+        std::filesystem::path written = "must-be-cleared.esp";
+        std::string error;
+        // The input guard must report its evidence before touching any replacement or output file.
+        assert(!WriteNavmeshOverrides(root, {}, input, {{}}, written, error));
+        assert(written.empty());
+        assert(error.contains("Unrelated.esp: STAT 0x01000800 at file offset 66"));
+        assert(error.contains("subrecord EDID exceeds decoded payload"));
+        assert(error.contains("MissingDependency.esp: Missing master identity"));
+        assert(error.contains("outside the selected cells"));
+        assert(error.contains("mod manager") && error.contains("bug report"));
+        assert(!error.contains("SupportedInput.esm"));
+
+        for (int index = 0; index < 10; ++index)
+        {
+            input.diagnostics.push_back({DiagnosticKind::MalformedInput, "More.esp", "Additional input failure"});
+        }
+        assert(!WriteNavmeshOverrides(root, {}, input, {{}}, written, error));
+        assert(error.contains("Unrelated.esp: STAT 0x01000800"));
+        assert(error.contains("Additional blocking diagnostics:"));
+        assert(error.size() < 1500);
+
+        input.diagnostics.resize(1);
+        assert(!WriteNavmeshOverrides(root, {}, input, {{}}, written, error));
+        assert(error == "Batch contains an invalid or duplicate CELL.");
+    }
 } // namespace
 
 void TestNavigationPatchExport()
@@ -32,6 +67,7 @@ void TestNavigationPatchExport()
     using namespace navmesh::skyrim;
     const auto root = std::filesystem::current_path() / "build" / "patch-export-tests";
     std::filesystem::create_directories(root);
+    CheckLoadOrderExportFailure(root);
     // A single retained base-object array can require more owners than any file can encode.
     // No grouping strategy may discard those references or publish part of that record.
     ResolvedLoadOrder input;
