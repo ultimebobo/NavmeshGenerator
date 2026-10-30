@@ -1,0 +1,16 @@
+{
+  "max_polygon_growth_percent": 10,
+  "plugins": ["Skyrim.esm"],
+  "baseline_polygons": {
+    "riverwood": 4584,
+    "whiterundragonsreach": 659,
+    "winterhold": 5351,
+    "riften": 4526,
+    "dawnstar": 7857,
+    "dragon-bridge": 2494,
+    "falkreath": 3470,
+    "morthal": 2594,
+    "rorikstead": 2997,
+    "whiterun": 6275
+  }
+}

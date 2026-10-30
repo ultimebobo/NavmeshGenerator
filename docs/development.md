@@ -75,6 +75,32 @@ repository. See the [fixture policy](../fixtures/README.md) and
 [optional local-game checks](../tests/integration/README.md). Restore the desired
 build mode with `xmake f -m release` or `xmake f -m releasedbg` after running debug tests.
 
+### Prerelease showcase validation
+
+With `SKYRIM_DATA_DIR` set to the installed game's Data directory, xmake on PATH,
+and the [renderer requirements](render-media.md#requirements) installed, run:
+
+```powershell
+python tools/validate_prerelease.py
+```
+
+No arguments are needed. The script builds the release desktop executable and
+generates and renders every recipe in `tools/showcase-scenes.json` using the
+plugin list in `tools/showcase-validation.json`. That policy file holds the
+reviewed polygon baselines and permitted percentage growth; validation never
+updates them. Counts cover the complete generated selection before image cropping.
+All selected cells must complete with valid topology, consistent candidate/scene
+counts, disabled tagging and no batch skips or required asset failures. Valid
+empty cells are allowed, but each showcase must contain navigation. Images must
+render successfully with matching counts. Every showcase is attempted even if
+another fails; any failure or excessive polygon growth returns a nonzero exit code.
+
+Fresh evidence, commands, logs, images, input/build hashes and JSON/Markdown reports
+are saved under `output/prerelease-validation/`; `latest.json` identifies the most
+recent run. This CLI check reads installed game assets without opening the desktop
+UI or writing a plugin. It does not verify in-game pathfinding. Run its synthetic
+gate regressions with `python tests/test_prerelease_validation.py`.
+
 Synthetic scene fixtures share the selection, testing and export commands in the
 [fixture workflow](../fixtures/README.md). Discover available fixtures through
 the test executable; their builders and generated reports define their details.
