@@ -503,9 +503,13 @@ namespace
 
     void Help(const char *text)
     {
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) && ImGui::BeginTooltip())
         {
-            ImGui::SetTooltip("%s", text);
+            const float wrapWidth = std::min(ImGui::GetFontSize() * 35.0f, ImGui::GetMainViewport()->WorkSize.x * 0.9f);
+            ImGui::PushTextWrapPos(wrapWidth);
+            ImGui::TextUnformatted(text);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
         }
     }
 
