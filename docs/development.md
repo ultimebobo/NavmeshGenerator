@@ -77,16 +77,20 @@ build mode with `xmake f -m release` or `xmake f -m releasedbg` after running de
 
 ### Prerelease showcase validation
 
-With `SKYRIM_DATA_DIR` set to the installed game's Data directory, xmake on PATH,
-and the [renderer requirements](render-media.md#requirements) installed, run:
+With an existing showcase source or saved desktop mod-manager configuration,
+xmake on PATH, and the [renderer requirements](render-media.md#requirements)
+installed, run:
 
 ```powershell
 python tools/validate_prerelease.py
 ```
 
 No arguments are needed. The script builds the release desktop executable and
-generates and renders every recipe in `tools/showcase-scenes.json` using the
-plugin list in `tools/showcase-validation.json`. That policy file holds the
+generates and renders every recipe in `tools/showcase-scenes.json`. It reuses the
+live MO2 profile or Vortex deployment recorded in the default showcase manifest,
+or the saved desktop mod-manager settings when no manifest exists. The complete
+active plugin order and winning mod assets supply the scene; missing source
+configuration fails validation. `tools/showcase-validation.json` holds the
 reviewed polygon baselines and permitted percentage growth; validation never
 updates them. Counts cover the complete generated selection before image cropping.
 All selected cells must complete with valid topology, consistent candidate/scene
@@ -95,9 +99,10 @@ empty cells are allowed, but each showcase must contain navigation. Images must
 render successfully with matching counts. Every showcase is attempted even if
 another fails; any failure or excessive polygon growth returns a nonzero exit code.
 
-Fresh evidence, commands, logs, images, input/build hashes and JSON/Markdown reports
-are saved under `output/prerelease-validation/`; `latest.json` identifies the most
-recent run. This CLI check reads installed game assets without opening the desktop
+Fresh evidence, commands, logs, images, audited scene winners, input snapshot/build
+hashes and JSON/Markdown reports are saved under `output/prerelease-validation/`;
+`latest.json` identifies the most recent run. This CLI check reads installed game
+assets without opening the desktop
 UI or writing a plugin. It does not verify in-game pathfinding. Run its synthetic
 gate regressions with `python tests/test_prerelease_validation.py`.
 

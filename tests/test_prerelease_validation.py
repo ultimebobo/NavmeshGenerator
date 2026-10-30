@@ -19,6 +19,7 @@ class PrereleaseValidationTests(unittest.TestCase):
     def setUp(self):
         self.preset = {"id": "synthetic-region", "title": "Synthetic region",
                        "cells": ["SyntheticCell"], "view": "exterior", "azimuth": 0, "elevation": 78}
+        self.inputs = {"mo2": "synthetic-instance", "profile": "Synthetic profile"}
 
     def write_export(self, folder, cells=None, counts=None):
         cells = cells or self.preset["cells"]
@@ -35,6 +36,12 @@ class PrereleaseValidationTests(unittest.TestCase):
         write_scene(folder / "scene.glb", [("Candidate NAVM", "generated", square(0, 1))])
         validation.showcase.write_json(folder / "scene.glb.metadata.json", {
             "metadata": {"selected_cells": selection}})
+        validation.showcase.write_json(folder / "scene.glb.provenance.json", {
+            "metadata": {"selected_cells": selection}, "objects": []})
+        validation.showcase.write_json(folder / "load-order.json", {"records": [
+            {"form_id": cell["form_id"], "winning_plugin": "SyntheticOverride.esp"} for cell in selection]})
+        validation.showcase.write_json(folder / "input-report.json", {
+            "snapshot_hash": "synthetic-snapshot", "loose_asset_winners": []})
         if len(cells) > 1:
             validation.showcase.write_json(folder / "batch-report.json", {
                 "status": "complete", "cells": [{"status": "generated"}] * len(cells),
@@ -93,28 +100,27 @@ class PrereleaseValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Missing batch"):
                 validation.check_candidates(folder, preset)
 
-    def test_real_render_matches_uncropped_candidates_and_does_not_need_manager_reports(self):
+    def test_real_render_matches_uncropped_candidates_and_audits_mod_winners(self):
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)
             self.write_export(folder)
-            image = validation.render_showcase(folder / "scene.glb", self.preset, folder, 2,
-                                               ["Synthetic.esm"])
+            image = validation.render_showcase(folder / "scene.glb", self.preset, folder, 2)
             self.assertTrue(Path(image).is_file())
+            evidence = validation.read_json(folder / "source-evidence.json")
+            self.assertEqual(evidence["record_plugins"], ["SyntheticOverride.esp"])
             with self.assertRaisesRegex(ValueError, "polygon total mismatch"):
-                validation.render_showcase(folder / "scene.glb", self.preset, folder, 3,
-                                           ["Synthetic.esm"])
+                validation.render_showcase(folder / "scene.glb", self.preset, folder, 3)
 
     def test_growth_failure_retains_render_and_a_failed_result(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            policy = {"plugins": ["Synthetic.esm"], "max_polygon_growth_percent": 10,
+            policy = {"max_polygon_growth_percent": 10,
                       "baseline_polygons": {self.preset["id"]: 1}}
             with patch.object(validation.showcase, "run_command",
                               side_effect=lambda command, folder, stage: self.write_export(folder)), \
                  patch.object(validation, "render_showcase", return_value="synthetic.png") as render, \
                  redirect_stdout(io.StringIO()):
-                row = validation.validate_showcase(self.preset, policy, root,
-                                                   root / "load-order.txt", root)
+                row = validation.validate_showcase(self.preset, policy, self.inputs, root)
             self.assertEqual(row["status"], "failed")
             self.assertEqual(row["polygons"], 2)
             self.assertEqual(row["image"], "synthetic.png")
@@ -124,17 +130,21 @@ class PrereleaseValidationTests(unittest.TestCase):
     def test_runs_remaining_showcases_after_failure_with_fresh_evidence_and_failure_exit(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "Synthetic.esm").write_bytes(b"synthetic input")
             presets = [dict(self.preset, id="failed-region"), self.preset]
             recipes = root / "presets.json"
             validation.showcase.write_json(recipes, presets)
-            policy = {"plugins": ["Synthetic.esm"], "max_polygon_growth_percent": 10,
+            policy = {"max_polygon_growth_percent": 10,
                       "baseline_polygons": {preset["id"]: 2 for preset in presets}}
             generated = []
 
             def run(command, folder, stage):
                 if stage == "generator":
                     generated.append(folder)
+                    self.assertIn("--mo2", command)
+                    self.assertEqual(command[command.index("--mo2") + 1], self.inputs["mo2"])
+                    self.assertEqual(command[command.index("--profile") + 1], self.inputs["profile"])
+                    self.assertNotIn("--data", command)
+                    self.assertNotIn("--load-order", command)
                     if folder.name == "failed-region":
                         raise ValueError("Synthetic generator failure")
                     self.write_export(folder)
@@ -146,9 +156,9 @@ class PrereleaseValidationTests(unittest.TestCase):
                      patch.object(validation, "EXECUTABLE", Path(sys.executable)), \
                      patch.object(validation.showcase, "PRESETS", recipes), \
                      patch.object(validation, "load_policy", return_value=policy), \
+                     patch.object(validation, "load_inputs", return_value=(self.inputs, recipes)), \
                      patch.object(validation.showcase, "run_command", side_effect=run), \
                      patch.object(validation, "render_showcase", return_value="synthetic.png"), \
-                     patch.dict(os.environ, SKYRIM_DATA_DIR=str(root)), \
                      patch.object(sys, "argv", ["validate_prerelease.py"]), redirect_stdout(io.StringIO()):
                     for _ in range(2):
                         self.assertEqual(validation.main(), 1)
@@ -163,7 +173,7 @@ class PrereleaseValidationTests(unittest.TestCase):
             self.assertIn("Synthetic generator failure", report["items"][0]["errors"])
 
     def test_policy_requires_baselines_for_exactly_the_current_showcases(self):
-        policy = {"max_polygon_growth_percent": 10, "plugins": ["Synthetic.esm"],
+        policy = {"max_polygon_growth_percent": 10,
                   "baseline_polygons": {self.preset["id"]: 2}}
         with patch.object(validation, "read_json", return_value=policy):
             self.assertEqual(validation.load_policy([self.preset]), policy)
@@ -171,6 +181,38 @@ class PrereleaseValidationTests(unittest.TestCase):
                 validation.load_policy([])
             with self.assertRaisesRegex(ValueError, "baseline"):
                 validation.load_policy([dict(self.preset, id="new-region")])
+
+    def test_source_reuses_showcase_manifest_before_desktop_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = root / "output/showcase/showcase-manifest.json"
+            manifest.parent.mkdir(parents=True)
+            validation.showcase.write_json(manifest, {"input": self.inputs})
+            with patch.object(validation, "ROOT", root):
+                self.assertEqual(validation.load_inputs(), (self.inputs, manifest))
+                validation.showcase.write_json(manifest, {"input": {"mo2": "instance"}})
+                with self.assertRaisesRegex(ValueError, "needs a profile"):
+                    validation.load_inputs()
+
+    def test_source_reads_selected_desktop_manager_without_a_vanilla_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings_path = root / "NavmeshGenerator/config.ini"
+            settings_path.parent.mkdir()
+            with patch.object(validation, "ROOT", root), \
+                 patch.object(validation.Path, "home", return_value=root), \
+                 patch.dict(os.environ, LOCALAPPDATA=str(root), SKYRIM_DATA_DIR=str(root)):
+                with self.assertRaisesRegex(ValueError, "Configure a mod-manager"):
+                    validation.load_inputs()
+                settings_path.write_text("[options]\nmod_manager=mo2\nmo2=synthetic-instance\n"
+                                         "profile=Synthetic profile\n", encoding="utf-8")
+                self.assertEqual(validation.load_inputs(), (self.inputs, settings_path))
+                settings_path.write_text("[options]\nmod_manager=vortex\nvortex=synthetic-game\n"
+                                         "vortex_plugins=synthetic-plugins\nmo2=ignored\nprofile=ignored\n",
+                                         encoding="utf-8")
+                inputs, origin = validation.load_inputs()
+                self.assertEqual(inputs, {"vortex": "synthetic-game", "vortex_plugins": "synthetic-plugins"})
+                self.assertEqual(origin, settings_path)
 
 
 if __name__ == "__main__":

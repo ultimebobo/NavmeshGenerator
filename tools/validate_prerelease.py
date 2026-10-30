@@ -1,6 +1,7 @@
 """Build the release executable and validate fresh showcases without arguments."""
 
 import argparse
+import configparser
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -42,9 +43,43 @@ def load_policy(presets):
             "Polygon baselines must be positive integers")
     growth = policy["max_polygon_growth_percent"]
     require(type(growth) is int and growth >= 0, "Polygon growth percent must be a nonnegative integer")
-    require(policy["plugins"] and all(isinstance(name, str) and Path(name).name == name
-                                    for name in policy["plugins"]), "Expected plugin filenames")
     return policy
+
+
+def load_inputs():
+    """Reuse the showcase's live source, or the desktop's configured mod manager."""
+    manifest_path = ROOT / "output/showcase/showcase-manifest.json"
+    if manifest_path.is_file():
+        inputs = read_json(manifest_path)["input"]
+        origin = manifest_path
+    else:
+        settings_paths = []
+        if os.environ.get("LOCALAPPDATA"):
+            settings_paths.append(Path(os.environ["LOCALAPPDATA"]) / "NavmeshGenerator/config.ini")
+        settings_paths.append(Path.home() / "AppData/Local/NavmeshGenerator/config.ini")
+        origin = next((path for path in settings_paths if path.is_file()), None)
+        require(origin is not None,
+                "Configure a mod-manager source in the desktop or generate the showcase once before validation")
+        settings = configparser.ConfigParser(interpolation=None)
+        settings.read(origin, encoding="utf-8-sig")
+        options = settings["options"]
+        manager = options.get("mod_manager", "mo2")
+        require(manager in ("mo2", "vortex"), f"Unknown saved mod manager: {manager}")
+        if manager == "mo2":
+            inputs = {"mo2": options.get("mo2", ""), "profile": options.get("profile", "")}
+        else:
+            inputs = {"vortex": options.get("vortex", "")}
+            if options.get("vortex_plugins"):
+                inputs["vortex_plugins"] = options["vortex_plugins"]
+        if options.get("asset_cache"):
+            inputs["asset_cache"] = options["asset_cache"]
+    require(bool(inputs.get("mo2")) != bool(inputs.get("vortex")),
+            f"Expected one configured MO2 or Vortex source in {origin}")
+    require(not inputs.get("mo2") or bool(inputs.get("profile")),
+            f"Configured MO2 source needs a profile in {origin}")
+    require(not inputs.get("vortex_plugins") or bool(inputs.get("vortex")),
+            f"Configured Vortex plugin directory needs a Vortex source in {origin}")
+    return inputs, origin
 
 
 def check_candidates(folder, preset):
@@ -92,14 +127,15 @@ def check_polygon_growth(polygons, baseline, growth_percent):
             f"Polygon growth exceeds +{growth_percent}%: {polygons} versus baseline {baseline}")
 
 
-def render_showcase(scene, preset, folder, polygons, plugins):
+def render_showcase(scene, preset, folder, polygons):
     """Cross-check scene and rendered counts against the fresh candidate evidence."""
     meshes = renderer.read_scene(scene)
     generated = renderer.layer_triangles(meshes, "Candidate NAVM")
     require(len(generated) == polygons, "Scene/candidate polygon total mismatch")
     visible_count = len(renderer.crop_triangles(generated, preset.get("bounds")))
     require(visible_count > 0, "No generated navigation inside the showcase crop")
-    attribution = "Input plugins: " + ", ".join(plugins)
+    attribution, evidence = showcase.scene_sources(scene)
+    showcase.write_json(folder / "source-evidence.json", evidence)
     entry = {"preset": preset, "scene": str(scene), "attribution": attribution}
     images = folder / "images"
     images.mkdir()
@@ -115,7 +151,7 @@ def render_showcase(scene, preset, folder, polygons, plugins):
     return str(images / filename)
 
 
-def validate_showcase(preset, policy, data, load_order, run_root):
+def validate_showcase(preset, policy, inputs, run_root):
     folder = run_root / preset["id"]
     folder.mkdir()
     baseline = policy["baseline_polygons"][preset["id"]]
@@ -125,9 +161,9 @@ def validate_showcase(preset, policy, data, load_order, run_root):
     started = time.monotonic()
     print(f"Validating {preset['title']}...", flush=True)
     try:
-        source = ["--data", str(data), "--load-order", str(load_order)]
-        command = showcase.generation_command(EXECUTABLE, source, preset, folder,
-                                              ROOT / ".cache/prerelease-assets")
+        source = showcase.source_arguments(inputs)
+        cache = Path(inputs["asset_cache"]) if inputs.get("asset_cache") else ROOT / ".cache/prerelease-assets"
+        command = showcase.generation_command(EXECUTABLE, source, preset, folder, cache)
         showcase.run_command(command, folder, "generator")
         scene, polygons = check_candidates(folder, preset)
         row.update(polygons=polygons, growth_percent=(polygons / baseline - 1) * 100)
@@ -136,7 +172,7 @@ def validate_showcase(preset, policy, data, load_order, run_root):
         except ValueError as error:
             row["errors"].append(str(error))
         # Retain renders for diagnosing growth failures as well as successful runs.
-        row["image"] = render_showcase(scene, preset, folder, polygons, policy["plugins"])
+        row["image"] = render_showcase(scene, preset, folder, polygons)
         if not row["errors"]:
             row["status"] = "passed"
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
@@ -150,9 +186,11 @@ def validate_showcase(preset, policy, data, load_order, run_root):
 
 def write_report(run_root, report):
     showcase.write_json(run_root / "validation.json", report)
-    lines = ["# Prerelease validation", "", f"Result: **{report['status'].upper()}**", "",
-             "| Showcase | Baseline | Polygons | Change | Result |",
-             "| --- | ---: | ---: | ---: | --- |"]
+    lines = ["# Prerelease validation", "", f"Result: **{report['status'].upper()}**", ""]
+    if report.get("input"):
+        lines.extend(["Mod-manager source: `" + " ".join(showcase.source_arguments(report["input"])) + "`", ""])
+    lines.extend(["| Showcase | Baseline | Polygons | Change | Result |",
+                  "| --- | ---: | ---: | ---: | --- |"])
     for row in report["items"]:
         growth = f"{row['growth_percent']:+.2f}%" if row["growth_percent"] is not None else "n/a"
         lines.append(f"| {row['title']} | {row['baseline_polygons']} | {row['polygons']} | "
@@ -176,28 +214,21 @@ def main():
         policy = load_policy(presets)
         report["policy"] = policy
         report["presets"] = presets
-        data_path = os.environ.get("SKYRIM_DATA_DIR")
-        require(bool(data_path), "Set SKYRIM_DATA_DIR to your installed Skyrim Data directory")
-        data = Path(data_path).resolve()
-        for plugin in policy["plugins"]:
-            require((data / plugin).is_file(), f"Missing input plugin: {data / plugin}")
-        report["data_directory"] = str(data)
-        report["input_plugins"] = [
-            {"name": plugin, "sha256": hashlib.sha256((data / plugin).read_bytes()).hexdigest()}
-            for plugin in policy["plugins"]]
-        load_order = run_root / "load-order.txt"
-        load_order.write_text("\n".join(policy["plugins"]) + "\n", encoding="utf-8")
+        inputs, origin = load_inputs()
+        report["input"] = inputs
+        report["input_source"] = str(origin)
+        print(f"Using mod-manager source from {origin}: {showcase.source_arguments(inputs)}", flush=True)
         print("Building release desktop executable...", flush=True)
         showcase.run_command(["xmake", "f", "-m", "release"], run_root, "configure")
         showcase.run_command(["xmake", "build", "NavmeshGenerator"], run_root, "build")
         report["executable"] = str(EXECUTABLE)
         report["executable_sha256"] = hashlib.sha256(EXECUTABLE.read_bytes()).hexdigest()
         for preset in presets:
-            report["items"].append(validate_showcase(preset, policy, data, load_order, run_root))
+            report["items"].append(validate_showcase(preset, policy, inputs, run_root))
             write_report(run_root, report)
         if all(row["status"] == "passed" for row in report["items"]):
             report["status"] = "passed"
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, configparser.Error) as error:
         report["errors"].append(str(error))
         print(f"FAILED: {error}", flush=True)
     write_report(run_root, report)

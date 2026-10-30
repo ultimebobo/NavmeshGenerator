@@ -1,6 +1,5 @@
 {
   "max_polygon_growth_percent": 10,
-  "plugins": ["Skyrim.esm"],
   "baseline_polygons": {
     "riverwood": 4584,
     "whiterundragonsreach": 659,
