@@ -389,6 +389,110 @@ namespace
         CheckTopology(mesh);
     }
 
+    void CheckFoldedFloorReduction()
+    {
+        // A redundant sample on a ridge can be removed without flattening either side of the floor.
+        NavMesh original;
+        original.vertices = {{8, 8, 8}, {0, 0, 0}, {16, 0, 8}, {16, 16, 0}, {0, 16, 8}};
+        for (std::uint32_t side = 1; side <= 4; ++side)
+        {
+            AddFace(original, {0, side, side % 4 + 1});
+        }
+        auto simplified = original;
+        assert(SimplifyGeneratedSurface(simplified, {}, {.maximumHeightError = 1}) == 2);
+        CheckTopology(simplified);
+        assert(Area(simplified) == Area(original));
+        for (float y{}; y <= 16; y += 0.5F)
+        {
+            for (float x{}; x <= 16; x += 0.5F)
+            {
+                assert(Height(original, x, y) == Height(simplified, x, y));
+            }
+        }
+        auto peak = original;
+        peak.vertices[0].z = 12;
+        assert(SimplifyGeneratedSurface(peak, {}, {.maximumHeightError = 1}) == 0);
+
+        // Matching every input vertex is insufficient when the new diagonal crosses an old ridge.
+        auto crossing = original;
+        crossing.vertices[0] = {4, 8, 6};
+        const auto crossingInput = crossing;
+        assert(SimplifyGeneratedSurface(crossing, {}, {.maximumHeightError = 1}) == 0);
+        assert(SimplifyGeneratedSurface(crossing, {}, {.maximumHeightError = 4}) == 2);
+        for (float y{}; y <= 16; y += 0.5F)
+        {
+            for (float x{}; x <= 16; x += 0.5F)
+            {
+                assert(std::abs(*Height(crossingInput, x, y) - *Height(crossing, x, y)) <= 4);
+            }
+        }
+    }
+
+    void CheckCandidateTriangleReduction(bool opening)
+    {
+        CandidateNavMesh candidate;
+        candidate.mesh = Grid(opening);
+        for (std::size_t vertex{}; vertex < candidate.mesh.vertices.size(); ++vertex)
+        {
+            candidate.mesh.vertices[vertex].z += vertex % 2 ? 0.4F : -0.4F;
+        }
+        // Omitted grid squares leave unused input samples; candidates require compact vertex storage.
+        const auto inputVertices = std::move(candidate.mesh.vertices);
+        std::map<std::uint32_t, std::uint32_t> remap;
+        for (auto &face : candidate.mesh.polygons)
+        {
+            for (auto &vertex : face.vertices)
+            {
+                const auto [found, inserted] = remap.emplace(vertex, static_cast<std::uint32_t>(remap.size()));
+                if (inserted)
+                {
+                    candidate.mesh.vertices.push_back(inputVertices[vertex]);
+                }
+                vertex = found->second;
+            }
+        }
+        CandidateRegion region{.id = 0, .sourceTriangles = {0}};
+        for (std::uint32_t index{}; index < candidate.mesh.polygons.size(); ++index)
+        {
+            region.polygons.push_back(index);
+            candidate.polygonSourceTriangles.push_back(0);
+            candidate.polygonContributingTriangles.push_back({0});
+        }
+        candidate.regions.push_back(region);
+        RefreshCandidateTopology(candidate);
+        const auto original = candidate.mesh;
+        assert(candidate.topology.valid);
+        assert(SimplifyCandidateSurface(candidate) > original.polygons.size() * 2 / 3);
+        assert(candidate.topology.valid);
+        CheckTopology(candidate.mesh);
+        assert(Area(candidate.mesh) >= Area(original) * 0.9);
+        if (!opening)
+        {
+            assert(Area(candidate.mesh) == Area(original));
+        }
+        const auto heightBudget = candidate.recastSettings.cellHeight;
+        for (float y = 16; y < 144; y += 2)
+        {
+            for (float x = 16; x < 144; x += 2)
+            {
+                const auto before = Height(original, x, y);
+                const auto after = Height(candidate.mesh, x, y);
+                assert(!after || (before && std::abs(*before - *after) <= heightBudget));
+            }
+        }
+        // Both rooms retain their shared narrow route at the production trimming budget.
+        for (float x = 16; x < 144; x += 2)
+        {
+            assert(Height(candidate.mesh, x, 88));
+        }
+        if (opening)
+        {
+            assert(!Height(candidate.mesh, 104, 40) && !Height(candidate.mesh, 104, 120));
+        }
+        std::cout << "Candidate floor reduction: " << original.polygons.size() << " -> "
+                  << candidate.mesh.polygons.size() << " triangles\n";
+    }
+
     void CheckCandidateRemapping()
     {
         CandidateNavMesh candidate;
@@ -573,7 +677,7 @@ namespace
             assert(ports[index].x == retainedPorts[index].x && ports[index].y == retainedPorts[index].y &&
                    ports[index].z == retainedPorts[index].z);
         }
-        assert(Area(linked.mesh) <= linkedArea && Area(linked.mesh) >= linkedArea * 0.98);
+        assert(Area(linked.mesh) <= linkedArea && Area(linked.mesh) >= linkedArea * 0.9);
     }
     void CheckNarrowPassage()
     {
@@ -589,6 +693,7 @@ namespace
         }
         assert(!Height(mesh, 104, 40) && !Height(mesh, 104, 120));
     }
+
 } // namespace
 
 void TestSurfaceSimplification()
@@ -598,6 +703,9 @@ void TestSurfaceSimplification()
     CheckGrid(true, 1000000);
     CheckProtectedDetail();
     CheckBoundedApproximation();
+    CheckFoldedFloorReduction();
+    CheckCandidateTriangleReduction(false);
+    CheckCandidateTriangleReduction(true);
     CheckBoundaryEars();
     CheckPinnedRim();
     CheckCandidateRemapping();

@@ -330,7 +330,8 @@ namespace
                                                       const std::optional<AABB> &bounds,
                                                       const std::vector<bool> &pinned,
                                                       const BoundaryReference &reference,
-                                                      std::vector<double> &removedAreas)
+                                                      std::vector<double> &removedAreas,
+                                                      std::span<const std::uint32_t> originalPolygons)
     {
         auto edges = MeshEdgeUses(mesh);
         std::vector<int> boundaryDegree(mesh.vertices.size());
@@ -404,10 +405,11 @@ namespace
             }
             const std::array points{mesh.vertices[face.vertices[0]], mesh.vertices[face.vertices[1]],
                                     mesh.vertices[face.vertices[2]]};
-            const auto component = reference.components[index];
+            const auto originalPolygon = originalPolygons[index];
+            const auto component = reference.components[originalPolygon];
             if (removedAreas[component] + areas[index] >
                     reference.areas[component] * settings.maximumBoundaryAreaFraction ||
-                !WithinOriginalBoundaryBand(reference, points, index, settings.maximumBoundaryInset))
+                !WithinOriginalBoundaryBand(reference, points, originalPolygon, settings.maximumBoundaryInset))
             {
                 continue;
             }
@@ -755,6 +757,98 @@ namespace
         return true;
     }
 
+    /// Clip two counterclockwise XY triangles; the overlap vertices bound any affine height difference.
+    std::vector<FootprintPoint> TriangleOverlap(const std::array<Vec3, 3> &first, const std::array<Vec3, 3> &second)
+    {
+        std::vector<FootprintPoint> overlap;
+        for (const auto point : first)
+        {
+            overlap.push_back({point.x, point.y});
+        }
+        for (std::size_t side{}; side < 3 && !overlap.empty(); ++side)
+        {
+            const auto a = second[side];
+            const auto b = second[(side + 1) % 3];
+            const auto distance = [&](FootprintPoint point)
+            {
+                return (static_cast<double>(b.x) - a.x) * (point.y - a.y) -
+                       (static_cast<double>(b.y) - a.y) * (point.x - a.x);
+            };
+            std::vector<FootprintPoint> clipped;
+            auto previous = overlap.back();
+            auto previousDistance = distance(previous);
+            for (const auto point : overlap)
+            {
+                const auto currentDistance = distance(point);
+                if ((previousDistance < 0) != (currentDistance < 0))
+                {
+                    const auto fraction = previousDistance / (previousDistance - currentDistance);
+                    clipped.push_back({previous.x + fraction * (point.x - previous.x),
+                                       previous.y + fraction * (point.y - previous.y)});
+                }
+                if (currentDistance >= 0)
+                {
+                    clipped.push_back(point);
+                }
+                previous = point;
+                previousDistance = currentDistance;
+            }
+            overlap = std::move(clipped);
+        }
+        return overlap;
+    }
+
+    double TriangleHeight(const std::array<Vec3, 3> &triangle, FootprintPoint point)
+    {
+        const auto a = triangle[0];
+        const auto b = triangle[1];
+        const auto c = triangle[2];
+        const double bx = static_cast<double>(b.x) - a.x;
+        const double by = static_cast<double>(b.y) - a.y;
+        const double cx = static_cast<double>(c.x) - a.x;
+        const double cy = static_cast<double>(c.y) - a.y;
+        const auto denominator = bx * cy - by * cx;
+        const auto u = ((point.x - a.x) * cy - (point.y - a.y) * cx) / denominator;
+        const auto v = (bx * (point.y - a.y) - by * (point.x - a.x)) / denominator;
+        return a.z + u * (static_cast<double>(b.z) - a.z) + v * (static_cast<double>(c.z) - a.z);
+    }
+
+    /** Compare replacement floors directly with immutable input over their complete projected overlap.
+     * Each intersecting triangle pair has an affine height difference, whose extrema occur at overlap
+     * vertices, including crossing edges. This also accepts nonplanar patches without accumulating error.
+     */
+    bool WithinReplacementHeightError(const NavMesh &mesh, const std::vector<NavPolygon> &original,
+                                      const std::vector<std::uint32_t> &sources,
+                                      const std::vector<NavPolygon> &replacement, float maximumError)
+    {
+        if (maximumError == 0)
+        {
+            return false;
+        }
+        for (const auto &face : replacement)
+        {
+            const std::array output{mesh.vertices[face.vertices[0]], mesh.vertices[face.vertices[1]],
+                                    mesh.vertices[face.vertices[2]]};
+            for (const auto source : sources)
+            {
+                const auto &inputFace = original[source];
+                const std::array input{mesh.vertices[inputFace.vertices[0]], mesh.vertices[inputFace.vertices[1]],
+                                       mesh.vertices[inputFace.vertices[2]]};
+                for (const auto point : TriangleOverlap(input, output))
+                {
+                    const auto difference = std::abs(TriangleHeight(input, point) - TriangleHeight(output, point));
+                    if (!std::isfinite(difference) ||
+                        (difference > maximumError &&
+                         !RoundoffZero(difference - maximumError, difference + maximumError)))
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
     /// New diagonals cannot consume an existing edge outside the cavity or reuse a nonmanifold rim.
     bool ReplacementEdgesAreManifold(const std::map<Edge, std::vector<std::uint32_t>> &edgeUses,
                                      const std::vector<std::uint32_t> &faces,
@@ -884,18 +978,29 @@ namespace navmesh::core
         }
         const auto boundaryReference = settings.maximumBoundaryInset > 0 ? OriginalBoundary(mesh) : BoundaryReference{};
         std::vector<double> removedBoundaryAreas(originalCount);
-        if (settings.maximumBoundaryInset > 0)
+        const auto pruneBoundary = [&]
         {
-            const auto retained =
-                PruneBoundaryTriangles(mesh, settings, cellBounds, pinned, boundaryReference, removedBoundaryAreas);
+            if (settings.maximumBoundaryInset == 0)
+            {
+                return;
+            }
+            std::vector<std::uint32_t> originalIndices;
+            for (const auto &sources : contributors)
+            {
+                originalIndices.push_back(sources.front());
+            }
+            const auto retained = PruneBoundaryTriangles(mesh, settings, cellBounds, pinned, boundaryReference,
+                                                         removedBoundaryAreas, originalIndices);
             std::vector<std::vector<std::uint32_t>> retainedContributors;
             for (const auto index : retained)
             {
                 retainedContributors.push_back(std::move(contributors[index]));
             }
             contributors = std::move(retainedContributors);
-        }
-        constexpr std::size_t maximumPasses = 12;
+        };
+        // Exhaust footprint-preserving reductions before spending any inward trimming budget.
+        bool trimming{};
+        constexpr std::size_t maximumPasses = 64;
         for (std::size_t pass{}; pass < maximumPasses; ++pass)
         {
             std::vector<std::vector<std::uint32_t>> incident(mesh.vertices.size());
@@ -915,7 +1020,37 @@ namespace navmesh::core
             std::vector<NavPolygon> replacements;
             std::vector<std::vector<std::uint32_t>> replacementContributors;
             bool changed{};
-            for (std::uint32_t center{}; center < incident.size(); ++center)
+            // Spend the footprint budget on inexpensive vertex removals before cutting whole triangles.
+            // Interior samples cost no area; boundary ears are ordered by the area lost per removed sample.
+            std::vector<std::vector<std::uint32_t>> boundaryNeighbors(mesh.vertices.size());
+            for (const auto &[edge, uses] : edgeUses)
+            {
+                if (uses.size() == 1)
+                {
+                    boundaryNeighbors[edge.first].push_back(edge.second);
+                    boundaryNeighbors[edge.second].push_back(edge.first);
+                }
+            }
+            std::vector<double> costs(mesh.vertices.size());
+            std::vector<std::uint32_t> centers(mesh.vertices.size());
+            std::iota(centers.begin(), centers.end(), 0U);
+            for (const auto center : centers)
+            {
+                const auto &neighbors = boundaryNeighbors[center];
+                if (neighbors.size() == 2)
+                {
+                    costs[center] = std::abs(Orientation(mesh.vertices[neighbors[0]], mesh.vertices[center],
+                                                         mesh.vertices[neighbors[1]])) *
+                                    0.5;
+                }
+                else if (!neighbors.empty())
+                {
+                    costs[center] = std::numeric_limits<double>::infinity();
+                }
+            }
+            std::stable_sort(centers.begin(), centers.end(),
+                             [&](auto left, auto right) { return costs[left] < costs[right]; });
+            for (const auto center : centers)
             {
                 if (blocked[center] || pinned[center] || IsCellSeam(mesh.vertices[center], cellBounds))
                 {
@@ -946,6 +1081,10 @@ namespace navmesh::core
                                           0.5);
                     if (removedEarArea > 0)
                     {
+                        if (!trimming)
+                        {
+                            continue;
+                        }
                         const auto originalPolygon = contributors[faces.front()].front();
                         earComponent = boundaryReference.components[originalPolygon];
                         if (removedBoundaryAreas[earComponent] + removedEarArea >
@@ -985,11 +1124,6 @@ namespace navmesh::core
                     continue;
                 }
                 const std::vector<std::uint32_t> sources(sourceSet.begin(), sourceSet.end());
-                if (fan->rim.size() > 2 &&
-                    !WithinFanHeightError(mesh, *fan, faces, original, sources, settings.maximumHeightError))
-                {
-                    continue;
-                }
                 std::vector<NavPolygon> replacement;
                 try
                 {
@@ -1000,6 +1134,10 @@ namespace navmesh::core
                     continue;
                 }
                 if (!ReplacementEdgesAreManifold(edgeUses, faces, replacement) || replacement.size() >= faces.size() ||
+                    (fan->rim.size() > 2 &&
+                     !WithinFanHeightError(mesh, *fan, faces, original, sources, settings.maximumHeightError) &&
+                     !WithinReplacementHeightError(mesh, original, sources, replacement,
+                                                   settings.maximumHeightError)) ||
                     !WithinSlopeEnvelope(mesh, original, sources, replacement, settings.maximumSlopeDegrees))
                 {
                     continue;
@@ -1029,6 +1167,12 @@ namespace navmesh::core
             }
             if (!changed)
             {
+                if (!trimming && settings.maximumBoundaryInset > 0)
+                {
+                    trimming = true;
+                    pruneBoundary();
+                    continue;
+                }
                 break;
             }
             std::vector<NavPolygon> retained;
@@ -1048,6 +1192,7 @@ namespace navmesh::core
                                         std::make_move_iterator(replacementContributors.end()));
             contributors = std::move(retainedContributors);
         }
+        pruneBoundary();
         CompactVertices(mesh);
         if (originalPolygons)
         {
@@ -1111,7 +1256,7 @@ namespace navmesh::core
                                                      .maximumHeightError = candidate.recastSettings.cellHeight,
                                                      .maximumSlopeDegrees = candidate.profile.maxSlopeDegrees,
                                                      .maximumBoundaryInset = candidate.profile.agentRadius * 2,
-                                                     .maximumBoundaryAreaFraction = 0.02F};
+                                                     .maximumBoundaryAreaFraction = 0.1F};
         auto simplified = candidate;
         std::vector<std::vector<std::uint32_t>> originalPolygons;
         const std::vector<std::uint32_t> pinnedVertices(pins.begin(), pins.end());

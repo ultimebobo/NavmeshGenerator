@@ -208,11 +208,13 @@ possible triangle count. Both desktop and CLI generation use this automatic
 stage, including batch workers. The candidate pipeline revision invalidates
 cached meshes produced with different simplification semantics.
 
-After authored border repairs, a second cleanup targets small triangles with
-exposed edges, including uneven collision outlines. It prunes exposed triangles
-smallest first, including leaves attached to the remaining floor by one shared
-edge. A triangle with one exposed edge can be removed only when its opposite
-vertex is interior, preserving an alternate shared-edge route through that fan.
+After authored border repairs, a second cleanup reduces triangle count on uneven
+floors and collision outlines. It exhausts footprint-preserving vertex removals
+before spending the boundary trimming budget. Smallest-first exposed-triangle
+pruning and low-area boundary fan cuts then remove detail within that shared
+budget, followed by a final pruning pass. Leaves attached by one shared edge
+can be pruned; a triangle with one exposed edge requires an interior opposite vertex,
+preserving an alternate shared-edge route through that fan.
 Triangles spanning a passage between boundary vertices and entire islands remain
 intact. Every removed footprint must stay inside a horizontal band around the
 immutable original boundary of its own connected floor. The band width derives
@@ -223,16 +225,18 @@ Several original boundary segments can jointly cover a long, thin triangle.
 Coverage is proven by subdividing its footprint into pieces whose corners lie
 within one convex segment-distance band. A piece with unproven interior coverage
 at the subdivision limit is retained. Corner-only distance tests are insufficient.
-Pruning changes no surviving floor heights. Subsequent fan retriangulation can
+Pruning changes no surviving floor heights. Fan retriangulation can
 trim outward ears, but never fill concave obstacle corners. Both pruning and fan
 cuts consume the same original-boundary and area budgets, preventing progressive
 inward peeling. New boundary edges respect the configured contour edge limit.
 
 Vertical approximation during fan cleanup is bounded by the vertical voxel size
-against the candidate entering this stage. Every contributing original triangle's
-vertices must lie within half that budget of a fitted plane. Linear interpolation
-then bounds the difference between input and output everywhere in the replacement
-patch. Immutable contributor unions preserve this bound across all passes;
+against the candidate entering this stage. Nearly planar patches can be
+validated against a fitted plane. Other patches compare original and replacement
+heights at every vertex of their projected triangle intersections, including edge
+crossings. The height difference is affine on each intersection, so those checks
+bound the error throughout the retained floor without requiring a planar patch.
+Immutable contributor unions preserve this bound across all passes;
 contributor neighborhoods are bounded to keep approximation local. Replacement
 slopes stay within the greater of the movement profile's slope limit and the
 original patch's slope envelope. The approximation pass runs once, after the

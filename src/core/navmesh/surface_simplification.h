@@ -24,9 +24,10 @@ namespace navmesh::core
     };
 
     /** Remove redundant samples from an unlinked generated floor with bounded vertical approximation.
-     * Interior samples require a nearly planar incident fan; exposed samples also require a straight
-     * boundary in world XYZ or an outward ear within the inward deviation budget. Exposed triangles
-     * may be pruned only with a retained shared-edge route and complete coverage by the original boundary band.
+     * Retriangulates complete incident fans within the height budget, including nonplanar floors.
+     * Exposed samples also require a straight boundary in world XYZ or an outward ear within the
+     * inward deviation budget. Footprint-preserving fan edits precede bounded triangle pruning and
+     * low-area fan cuts. Removed footprints require original boundary-band coverage and a retained shared-edge route.
      * Height changes exceed neither the error budget nor the original slope envelope; mixed flags
      * and ambiguous fans remain intact. Trimming never expands the floor or removes an entire island.
      * @param mesh Finite, counterclockwise Z-up floor triangles with valid indices and no door/external links.
