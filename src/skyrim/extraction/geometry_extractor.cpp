@@ -98,22 +98,7 @@ namespace
     /// Placed furniture and containers obstruct movement without supplying climbable navigation support.
     [[nodiscard]] bool IsFurniture(const navmesh::core::Reference &reference)
     {
-        const auto path = NormalizedModelPath(reference.modelPath);
-        const auto name = navmesh::core::PathToUtf8(navmesh::core::PathFromUtf8(path).stem());
-        constexpr std::array furnitureKinds{"chair",   "table",    "shelf", "cupboard",
-                                            "dresser", "wardrobe", "bench", "bed"};
-        const bool clutterFurniture = path.starts_with("clutter/") &&
-                                      std::any_of(furnitureKinds.begin(), furnitureKinds.end(), [&](const char *kind)
-                                                  { return name.find(kind) != std::string::npos; });
-        return reference.baseRecordType == "FURN" || reference.baseRecordType == "CONT" ||
-               path.starts_with("furniture/") || clutterFurniture;
-    }
-
-    /// Static clutter and containers are permanent obstacles; inventory and movable bases keep their own policies.
-    [[nodiscard]] bool IsFixedClutter(const navmesh::core::Reference &reference)
-    {
-        return (reference.baseRecordType == "STAT" || reference.baseRecordType == "CONT") &&
-               NormalizedModelPath(reference.modelPath).starts_with("clutter/");
+        return reference.baseRecordType == "FURN" || reference.baseRecordType == "CONT";
     }
 
     [[nodiscard]] std::string EscapeJson(std::string value)
@@ -1843,8 +1828,8 @@ namespace navmesh::skyrim
                 .modelPath = reference.modelPath,
                 .reference = {reference.sourcePlugin, reference.id, reference.recordType},
                 .baseObject = {reference.basePlugin, reference.baseObjectId, reference.baseRecordType},
-                .navigationObstacle = IsLandscapeRock(reference.modelPath) || IsFurniture(reference) ||
-                                      IsFixedClutter(reference) || fireEffect || reference.envelope.has_value(),
+                .navigationObstacle = reference.navigationObstacle || IsLandscapeRock(reference.modelPath) ||
+                                      IsFurniture(reference) || fireEffect || reference.envelope.has_value(),
                 .inputConfig = reference.inputConfig};
             if (reference.deleted || reference.initiallyDisabled || reference.editorMarker)
             {

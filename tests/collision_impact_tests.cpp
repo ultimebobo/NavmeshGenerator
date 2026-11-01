@@ -191,6 +191,21 @@ void TestCollisionImpactSelection()
                                      .baseFormId = 10,
                                      .position = core::Vec3{1024, 1024, 0}};
     {
+        // Changing only floor eligibility must select the owning cell even when collision vertices are identical.
+        auto order = Fixture();
+        auto placement = added;
+        placement.plugin = "Base.esm";
+        PutReference(order, {placement});
+        Require(Select(order, root).empty());
+        auto &base = order.records[order.records.size() - 2];
+        auto changed = base.winning;
+        changed.plugin = "Edit.esp";
+        changed.navigationObstacle = true;
+        base.winning = changed;
+        base.origins.push_back(changed);
+        Require(Select(order, root) == std::set<std::uint32_t>{101});
+    }
+    {
         auto order = Fixture();
         for (auto &record : order.records)
         {

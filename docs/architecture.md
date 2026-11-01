@@ -30,8 +30,8 @@ global linking and serialization remain mandatory for partial outputs.
 
 The neutral `core/geometry/convex_hull` helper triangulates closed vertex hulls
 without game or platform dependencies. Skyrim extraction decodes Havok vertices,
-applies the existing rigid-body and reference transforms, and classifies fixed
-clutter as obstacle-only before passing geometry to generation or impact selection.
+applies the existing rigid-body and reference transforms, and classifies furniture,
+containers and explicitly marked bases as obstacle-only before passing geometry to generation or impact selection.
 
 The application-owned `app/cell_scene` accumulator joins Cell-mode inspection and
 batch extraction into an optional complete-selection scene. It deduplicates by

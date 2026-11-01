@@ -353,6 +353,7 @@ namespace navmesh::skyrim
                             reference.localBounds = version->localBounds;
                             reference.automaticDoor = version->automaticDoor;
                             reference.editorMarker = version->editorMarker;
+                            reference.navigationObstacle = version->navigationObstacle;
                         }
                     }
                 }

@@ -758,18 +758,22 @@ void TestBaseObjectSwapper()
     {
         auto order = Fixture();
         order.cells.front().references.front().editorMarker = true;
+        order.cells.front().references.front().navigationObstacle = true;
         (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20\n"));
         assert(!First(order).editorMarker);
+        assert(!First(order).navigationObstacle);
         order = Fixture();
         for (auto &record : order.records)
         {
             if (record.formId == 20)
             {
                 record.winning.editorMarker = true;
+                record.winning.navigationObstacle = true;
             }
         }
         (void)skyrim::ApplyBaseObjectSwaps(order, Input("[Forms]\nBase10|Base20\n"));
         assert(First(order).editorMarker);
+        assert(First(order).navigationObstacle);
     }
     TestRuntimeCompatibility();
     TestPermissivePropertyGrammar();

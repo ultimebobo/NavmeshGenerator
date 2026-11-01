@@ -22,6 +22,9 @@ namespace navmesh::skyrim
     /// Return whether a supported base-record type's header flags identify an editor-only marker.
     [[nodiscard]] bool IsEditorMarker(std::string_view recordType, std::uint32_t flags);
 
+    /// Decode the Obstacle header flag only for base-record types defining it; unrelated record flags return false.
+    [[nodiscard]] bool IsNavigationObstacle(std::string_view recordType, std::uint32_t flags);
+
     /** Decode the external and door tables from supported NVNM trailing bytes for inspection.
      * @param trailing Bytes immediately after the owning mesh's triangle array.
      * @param mesh Geometry whose edge flags consume the external table; connection arrays are replaced.
@@ -97,6 +100,8 @@ namespace navmesh::skyrim
         bool automaticDoor{};
         /// This base-record version uses the editor-marker flag; its model is not runtime geometry.
         bool editorMarker{};
+        /// This base-record version explicitly excludes its collision from walkable floor support.
+        bool navigationObstacle{};
         /// Resolved XTEL destination reference; absent without a supported teleport subrecord.
         std::optional<std::uint32_t> teleportDestinationId;
         /// XTEL standing position in the destination's Skyrim world space; absent for invalid coordinates.

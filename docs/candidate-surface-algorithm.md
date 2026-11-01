@@ -62,11 +62,14 @@ prefix. The neutral generator consumes this tag without interpreting model
 names. Every tagged face contributes a solid raster span but cannot become
 a walkable floor, including through coincident terrain or low-obstacle promotion.
 The policy leaves architectural stone and terrain eligible for navigation.
-Furniture base records, containers, furniture-directory assets, recognized
-clutter furniture and static assets in the clutter directory retain supported
-collision with the same obstacle-only tag. Seats, barrels, crates, sacks and other
-fixed clutter cannot become floor evidence or seam-repair anchors. Inventory
-placements retain their existing exclusion policy. Extraction triangulates closed
+Furniture and container base records, and bases explicitly carrying Skyrim's
+Obstacle header flag, retain supported collision with the same obstacle-only tag.
+These placements cannot become floor evidence or seam-repair anchors. The flag
+follows winning overrides, historical versions and effective runtime base swaps.
+Other static collision is eligible regardless of asset filename or clutter/furniture
+directory; slope, climb, clearance, erosion, region size and reachability determine
+its surviving floor.
+Inventory placements retain their existing exclusion policy. Extraction triangulates closed
 `bhkConvexVerticesShape` vertex hulls and boxes, and tessellates spheres and capsule
 sides with hemispherical ends, including through list and shape-transform wrappers.
 Shape and compressed-chunk transforms apply in Havok space; active `bhkRigidBodyT`

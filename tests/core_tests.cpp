@@ -2093,6 +2093,65 @@ namespace
         }
     }
 
+    void TestObstacleInputResolution()
+    {
+        using namespace navmesh;
+        const auto root = std::filesystem::temp_directory_path() / "navmesh-obstacle-input-test";
+        std::filesystem::create_directories(root);
+        for (const auto type : {"STAT", "ACTI", "MSTT", "CONT", "FURN", "TREE", "DOOR"})
+        {
+            for (const bool obstacle : {false, true})
+            {
+                std::vector<std::uint8_t> base;
+                PutText(base, "MODL", {'s', 'u', 'r', 'f', 'a', 'c', 'e', '.', 'n', 'i', 'f', 0});
+                std::vector<std::uint8_t> placement, name;
+                PutU32(name, 0x310);
+                PutText(placement, "NAME", name);
+                std::vector<std::uint8_t> references, cells, plugin;
+                PutRecord(references, "REFR", 0x300, placement, 1U << 25);
+                PutRecord(cells, "CELL", 0x100, CellPayload("ObstacleInputCell"));
+                PutGroup(cells, 0x100, 6, references);
+                PutRecord(plugin, "TES4", 0, {});
+                PutRecord(plugin, type, 0x310, base, obstacle ? 1U << 25 : 0);
+                PutGroup(plugin, 0, 0, cells);
+                const auto source = root / "Obstacle.esm";
+                {
+                    std::ofstream file(source, std::ios::binary);
+                    file.write(reinterpret_cast<const char *>(plugin.data()),
+                               static_cast<std::streamsize>(plugin.size()));
+                }
+                const auto resolved = skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source}});
+                const auto direct = skyrim::ListCells(source);
+                Require(resolved.cells.size() == 1 && direct.size() == 1);
+                Require(resolved.FindWinning(0x310)->winning.navigationObstacle == obstacle);
+                for (const auto &cell : {resolved.cells.front(), direct.front()})
+                {
+                    Require(cell.references.size() == 1 && cell.references.front().navigationObstacle == obstacle);
+                }
+                // The winning base controls the placement; each historical base version retains its own intent.
+                std::vector<std::uint8_t> header, overrideBytes;
+                PutText(header, "MAST", {'O', 'b', 's', 't', 'a', 'c', 'l', 'e', '.', 'e', 's', 'm', 0});
+                PutRecord(overrideBytes, "TES4", 0, header);
+                PutRecord(overrideBytes, type, 0x310, base, obstacle ? 0 : 1U << 25);
+                const auto overridePath = root / "Override.esp";
+                {
+                    std::ofstream file(overridePath, std::ios::binary);
+                    file.write(reinterpret_cast<const char *>(overrideBytes.data()),
+                               static_cast<std::streamsize>(overrideBytes.size()));
+                }
+                const auto overridden =
+                    skyrim::ResolveLoadOrder({.dataDirectory = root, .plugins = {source, overridePath}});
+                const auto *winning = overridden.FindWinning(0x310);
+                Require(winning && winning->origins.size() == 2);
+                Require(winning->origins.front().navigationObstacle == obstacle);
+                Require(winning->winning.navigationObstacle != obstacle);
+                Require(overridden.cells.front().references.front().navigationObstacle != obstacle);
+            }
+        }
+        Require(!skyrim::IsNavigationObstacle("REFR", 1U << 25));
+        Require(!skyrim::IsNavigationObstacle("MISC", 1U << 25));
+    }
+
     void TestEditorMarkerInputResolution()
     {
         using namespace navmesh;
@@ -3035,6 +3094,7 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && std::string_view(argv[1]) == "--bsa-only")
     {
+        TestObstacleInputResolution();
         TestNativeBsaGeometry();
         return 0;
     }
@@ -3190,6 +3250,7 @@ int main(int argc, char **argv)
     TestFormIdResolution();
     TestNativeBsaGeometry();
     TestTeleportInputResolution();
+    TestObstacleInputResolution();
     TestEditorMarkerInputResolution();
     TestCellOverrideAcrossPlugins();
     TestMo2ProfileImport();

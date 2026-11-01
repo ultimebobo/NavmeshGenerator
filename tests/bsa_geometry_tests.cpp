@@ -738,6 +738,106 @@ namespace
         }
     }
 
+    /// Identical static collision must supply the same connected floor under arbitrary asset names and folders.
+    void CheckStaticFloorEligibility(const std::filesystem::path &root)
+    {
+        using namespace navmesh;
+        const auto directory = root / "meshes/clutter/common";
+        std::filesystem::create_directories(directory);
+        WriteCollisionModel(root / "meshes/approach.nif", 128, 0);
+        WriteCollisionModel(directory / "table.nif", 128, 0);
+        WriteCollisionModel(directory / "crate.nif", 128, 256);
+        nifly::NifFile ramp;
+        assert(ramp.Load(directory / "table.nif") == 0);
+        constexpr float havokUnits = 69.99125F;
+        for (std::uint32_t block = 0; block < ramp.GetHeader().GetNumBlocks(); ++block)
+        {
+            if (auto *data = ramp.GetHeader().GetBlock<nifly::hkPackedNiTriStripsData>(block))
+            {
+                for (auto &vertex : data->compressedVertData)
+                {
+                    vertex.z = vertex.x + 128 / havokUnits;
+                }
+            }
+        }
+        assert(ramp.Save(directory / "table.nif") == 0);
+        for (const auto folder : {"furniture", "custom"})
+        {
+            const auto destination = root / "meshes" / folder;
+            std::filesystem::create_directories(destination);
+            for (const auto filename : {"table.nif", "crate.nif"})
+            {
+                std::filesystem::copy_file(directory / filename, destination / filename,
+                                           std::filesystem::copy_options::overwrite_existing);
+            }
+        }
+        core::Cell cell;
+        cell.references = {{.id = 1,
+                            .recordType = "REFR",
+                            .modelPath = "approach.nif",
+                            .position = {-256, 0, 0},
+                            .baseRecordType = "STAT"},
+                           {.id = 2,
+                            .recordType = "REFR",
+                            .modelPath = "MESHES\\CLUTTER\\COMMON\\Table.nif",
+                            .baseRecordType = "STAT"},
+                           {.id = 3,
+                            .recordType = "REFR",
+                            .modelPath = "clutter/common/crate.nif",
+                            .position = {256, 0, 0},
+                            .baseRecordType = "STAT"}};
+        skyrim::ModelGeometryCache cache;
+        for (const auto folder : {"CLUTTER\\COMMON", "FURNITURE", "CUSTOM"})
+        {
+            cell.references[1].modelPath = std::string("MESHES\\") + folder + "\\Table.nif";
+            cell.references[2].modelPath = std::string(folder) + "\\Crate.nif";
+            for (const bool navigationOnly : {false, true})
+            {
+                const auto geometry =
+                    skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, navigationOnly);
+                assert(geometry.collisionModelsLoaded == 3 && geometry.scene.HasCompleteTriangleProvenance());
+                for (const auto &source : geometry.scene.geometrySources)
+                {
+                    assert(!source.navigationObstacle);
+                }
+                core::NavigationProfile profile;
+                profile.maxSlopeDegrees = 50;
+                for (const auto partitioning :
+                     {core::RegionPartitioningAlgorithm::Watershed, core::RegionPartitioningAlgorithm::Monotone,
+                      core::RegionPartitioningAlgorithm::Layers})
+                {
+                    const auto candidate = core::RecastCandidateGenerator{}.Generate(
+                        geometry.scene, profile, std::nullopt, {{.referenceId = 4, .position = {-256, 0, 0}}},
+                        partitioning);
+                    assert(candidate.topology.valid && candidate.regions.size() == 1);
+                    for (int sample = -256; sample <= 256; sample += 32)
+                    {
+                        const float height = std::clamp(static_cast<float>(sample + 128), 0.0F, 256.0F);
+                        assert(HasNavigationAt(candidate, {static_cast<float>(sample), 0, height}));
+                    }
+                }
+            }
+        }
+        // Exclusion follows record intent even when the same decoded collision is already cached as a floor.
+        cell.references.resize(1);
+        for (const auto recordType : {"STAT", "FURN", "CONT"})
+        {
+            cell.references[0].baseRecordType = recordType;
+            cell.references[0].modelPath = "custom/crate.nif";
+            const auto geometry = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
+            assert(geometry.collisionModelsLoaded == 1);
+            assert(geometry.scene.geometrySources[0].navigationObstacle == (std::string_view(recordType) != "STAT"));
+        }
+        cell.references[0].baseRecordType = "STAT";
+        cell.references[0].navigationObstacle = true;
+        const auto obstacle = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
+        assert(obstacle.collisionModelsLoaded == 1 && obstacle.scene.geometrySources[0].navigationObstacle);
+        const auto blocked = core::RecastCandidateGenerator{}.Generate(obstacle.scene, {}, std::nullopt, {},
+                                                                       core::RegionPartitioningAlgorithm::Watershed, {},
+                                                                       core::CandidateRetention::AllWalkable);
+        assert(blocked.topology.valid && blocked.mesh.polygons.empty());
+    }
+
     void CheckFixedClutter(const std::filesystem::path &root)
     {
         using namespace navmesh;
@@ -753,14 +853,16 @@ namespace
                             .recordType = "REFR",
                             .modelPath = "MESHES\\CLUTTER\\Barrel.nif",
                             .position = {-256, 0, 0},
-                            .baseRecordType = "STAT"},
+                            .baseRecordType = "STAT",
+                            .navigationObstacle = true},
                            {.id = 3,
                             .recordType = "REFR",
                             .modelPath = "clutter/common/crate.nif",
                             .position = {256, 0, 0},
                             .rotation = {0, 0, 1.57079632679F},
                             .scale = 2,
-                            .baseRecordType = "STAT"},
+                            .baseRecordType = "STAT",
+                            .navigationObstacle = true},
                            {.id = 4,
                             .recordType = "REFR",
                             .modelPath = "clutter/common/sack.nif",
@@ -1151,7 +1253,7 @@ namespace
             cell.references.resize(2);
             cell.references[1].baseRecordType = type;
             const auto geometry = skyrim::ExtractGeometry(root, cell, root, {}, {}, nullptr, &cache, true);
-            assert(geometry.scene.geometrySources[1].navigationObstacle);
+            assert(geometry.scene.geometrySources[1].navigationObstacle == (std::string_view(type) != "STAT"));
         }
         cell.references[1].modelPath = "effects/DecorativeGlow.nif";
         cell.references[1].baseRecordType = "STAT";
@@ -1501,6 +1603,7 @@ void TestNativeBsaGeometry()
     assert(architecture.modelsLoaded == 1 && !architecture.scene.geometrySources[0].navigationObstacle);
     CheckFurnitureAndFire(root);
     CheckFixedClutter(root);
+    CheckStaticFloorEligibility(root);
     CheckStripCollisionUnits(root);
     CheckCollisionShapes(root);
     CheckPlacedModelTransforms(root);

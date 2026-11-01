@@ -44,6 +44,8 @@ namespace navmesh::core
         bool deleted{};
         /// Base record supplies an editor-only marker model rather than runtime navigation geometry.
         bool editorMarker{};
+        /// Winning base record explicitly marks its collision as an obstacle, never walkable floor support.
+        bool navigationObstacle{};
         /// Winning placement has a teleport destination (XTEL), including non-physical cave exits.
         bool teleportExit{};
         /// Base DOOR activates by entering its trigger volume; its OBND does not describe a solid threshold.

@@ -77,6 +77,7 @@ namespace
         std::optional<navmesh::core::AABB> localBounds;
         bool automaticDoor{};
         bool editorMarker{};
+        bool navigationObstacle{};
     };
 
     struct ParsedReference
@@ -273,6 +274,14 @@ namespace navmesh::skyrim
                (recordType == "STAT" || recordType == "ACTI" || recordType == "FURN" || recordType == "DOOR");
     }
 
+    bool IsNavigationObstacle(std::string_view recordType, std::uint32_t flags)
+    {
+        // Supported flag definitions: https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsTES5.pas
+        return (flags & (1U << 25)) != 0 && (recordType == "STAT" || recordType == "ACTI" || recordType == "MSTT" ||
+                                             recordType == "CONT" || recordType == "FURN" || recordType == "DOOR" ||
+                                             recordType == "TREE" || recordType == "LIGH" || recordType == "SCOL");
+    }
+
     std::vector<core::Cell> ListCells(const std::filesystem::path &pluginPath)
     {
         if (!std::filesystem::exists(pluginPath))
@@ -422,7 +431,9 @@ namespace navmesh::skyrim
                 }
                 else
                 {
-                    BaseRecord record{.type = type, .editorMarker = IsEditorMarker(type, header->flags)};
+                    BaseRecord record{.type = type,
+                                      .editorMarker = IsEditorMarker(type, header->flags),
+                                      .navigationObstacle = IsNavigationObstacle(type, header->flags)};
                     std::string femaleArmorModel;
                     const auto payload = DecompressNavMesh(buffer, dataStart, dataEnd, header->flags);
                     if (payload)
@@ -515,6 +526,7 @@ namespace navmesh::skyrim
                     parsed.reference.localBounds = base->second.localBounds;
                     parsed.reference.automaticDoor = base->second.automaticDoor;
                     parsed.reference.editorMarker = base->second.editorMarker;
+                    parsed.reference.navigationObstacle = base->second.navigationObstacle;
                 }
                 const auto partner = teleportReferences.find(parsed.teleportDestinationId);
                 if (partner != teleportReferences.end() &&

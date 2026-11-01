@@ -956,6 +956,7 @@ namespace navmesh::skyrim
                     record.winning.deleted = (record.raw->flags & (1U << 5)) != 0;
                     record.winning.initiallyDisabled = (record.raw->flags & (1U << 11)) != 0;
                     record.winning.editorMarker = IsEditorMarker(record.type, record.raw->flags);
+                    record.winning.navigationObstacle = IsNavigationObstacle(record.type, record.raw->flags);
                     for (const auto &sub : record.raw->subrecords)
                     {
                         if (record.type == "LAND" && sub.type == "VHGT")
@@ -1263,6 +1264,7 @@ namespace navmesh::skyrim
                 reference.localBounds = base->winning.localBounds;
                 reference.automaticDoor = base->winning.automaticDoor;
                 reference.editorMarker = base->winning.editorMarker;
+                reference.navigationObstacle = base->winning.navigationObstacle;
             }
             if (record.winning.teleportDestinationId)
             {

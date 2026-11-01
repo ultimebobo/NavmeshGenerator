@@ -957,6 +957,7 @@ namespace navmesh::skyrim
                                 reference.modelPath = base->modelPath.value_or("");
                                 reference.automaticDoor = base->winning.automaticDoor;
                                 reference.editorMarker = base->winning.editorMarker;
+                                reference.navigationObstacle = base->winning.navigationObstacle;
                             }
                             reference.localBounds.reset();
                             reference.inputConfig = swap->evidence;
