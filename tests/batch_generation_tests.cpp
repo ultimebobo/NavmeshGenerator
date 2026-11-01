@@ -847,7 +847,8 @@ void TestBatchGenerationFailurePolicy()
     std::filesystem::create_directories(directory);
     app::Options options;
     options.batchOutput = "plugin_only";
-    options.tagTriangles = false;
+    options.tagWater = false;
+    options.tagPreferredPaths = false;
     core::Cell badCell{.id = 10};
     core::Scene floor;
     floor.geometrySources.push_back({.sourceType = core::GeometrySourceType::Collision, .confidence = 1});
@@ -893,8 +894,9 @@ void TestBatchGenerationFailurePolicy()
     assert(reused.status == "generated" && reused.reused);
 
     // Cell and Repair reuse the same bounded authored-neighbor border adjustments under either error policy.
-    const auto floorKey = app::detail::CandidateFingerprint(floor, options.navigationProfile, {}, {}, {}, "watershed",
-                                                            options.recastSettings, {}, {}, options.tagTriangles);
+    const auto floorKey =
+        app::detail::CandidateFingerprint(floor, options.navigationProfile, {}, {}, {}, "watershed",
+                                          options.recastSettings, {}, {}, options.tagWater, options.tagPreferredPaths);
     const auto floorCache = directory / "cache" / "candidates" / (floorKey + ".gz");
     auto movingNeighbor = successful.candidate;
     movingNeighbor.authoredBorderVertexEdits.push_back({201, 0, {0, 0, 0}, {0, 0, 1}});
@@ -943,8 +945,9 @@ void TestBatchGenerationFailurePolicy()
     }
 
     // Cached candidates must not hide a scene whose solids exceed raster height storage.
-    const auto key = app::detail::CandidateFingerprint(oversized, options.navigationProfile, {}, {}, {}, "watershed",
-                                                       options.recastSettings, {}, {}, options.tagTriangles);
+    const auto key =
+        app::detail::CandidateFingerprint(oversized, options.navigationProfile, {}, {}, {}, "watershed",
+                                          options.recastSettings, {}, {}, options.tagWater, options.tagPreferredPaths);
     assert(
         app::detail::StoreCandidate(directory / "cache" / "candidates" / (key + ".gz"), successful.candidate, floor));
     skipped = app::detail::BuildBatchCandidate(input(oversized, badCell), options);

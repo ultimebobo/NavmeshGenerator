@@ -45,7 +45,14 @@ void TestPerformanceCaches()
     profile.minimumRegionArea = 0;
     const auto key = app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed");
     assert(!key.empty());
-    assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {}, {}, false) != key);
+    const auto waterOnlyKey =
+        app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {}, {}, true, false);
+    const auto preferredOnlyKey =
+        app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {}, {}, false, true);
+    const auto untaggedKey =
+        app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {}, {}, false, false);
+    assert(waterOnlyKey != key && preferredOnlyKey != key && untaggedKey != key);
+    assert(waterOnlyKey != preferredOnlyKey && waterOnlyKey != untaggedKey && preferredOnlyKey != untaggedKey);
     assert(app::detail::CandidateFingerprint(scene, profile, {}, {}, {}, "watershed", {}, {}, 10.0F) != key);
     core::NavMesh authored{.vertices = {{0, 0, 0}, {256, 0, 0}, {0, 256, 0}},
                            .polygons = {{.vertices = {0, 1, 2}, .flags = core::PreferredPathFlag}}};
@@ -76,7 +83,8 @@ void TestPerformanceCaches()
 
     auto candidate = core::GenerateCandidate(scene, profile);
     assert(candidate.topology.valid && candidate.mesh.polygons.size() == 2);
-    candidate.triangleTagging = true;
+    candidate.waterTagging = true;
+    candidate.preferredPathTagging = false;
     candidate.mesh.polygons.front().flags = core::WaterFlag | core::PreferredPathFlag;
     candidate.mesh.polygons.front().coverFlags = 0x4008;
     candidate.coverGeometry = scene.mesh;
@@ -92,6 +100,7 @@ void TestPerformanceCaches()
     core::CandidateNavMesh loaded;
     core::Scene evidence;
     assert(app::detail::LoadCandidate(path, loaded, evidence));
+    assert(loaded.waterTagging && !loaded.preferredPathTagging);
     assert(loaded.mesh.polygons.front().coverFlags == candidate.mesh.polygons.front().coverFlags);
     assert(loaded.coverGeometry.vertices.size() == candidate.coverGeometry.vertices.size());
     assert(loaded.coverGeometry.triangles.size() == candidate.coverGeometry.triangles.size());

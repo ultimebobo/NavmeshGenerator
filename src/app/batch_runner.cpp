@@ -1379,7 +1379,7 @@ namespace navmesh::app::detail
             if (result.status == "generated")
             {
                 core::TagCandidateTriangles(result.candidate, result.cell->navMeshes, result.cell->waterHeight,
-                                            options.tagTriangles);
+                                            options.tagWater, options.tagPreferredPaths);
                 generatedByCell.emplace(result.cell->id, &result);
                 generatedPolygons += result.candidate.mesh.polygons.size();
             }

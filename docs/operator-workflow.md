@@ -150,11 +150,12 @@ evidence; plugin writing requires valid navigation.
 
 ## Advanced generation settings
 
-**Tag water and preferred path triangles** enables generated classification and
-is saved with the other desktop choices. Water uses supported CELL/WRLD water
-levels independently of authored water markings. Preferred paths follow
-nearby winning authored markings on a matching floor. Disable the checkbox to
-omit both tags; the CLI equivalent is `--no-triangle-tagging`.
+**Tag water triangles** and **Tag preferred path triangles** independently enable
+generated classification and are saved with the other desktop choices. Water uses
+supported physical water surfaces independently of authored water markings.
+Preferred paths follow nearby winning authored markings on a matching floor.
+The corresponding CLI switches are `--no-water-tagging` and
+`--no-preferred-path-tagging`; `--no-triangle-tagging` disables both.
 
 
 The UI and CLI pass the same navigation profile and Recast settings to Cell,

@@ -68,8 +68,10 @@ namespace navmesh::app
         /// Partition oversized navigation patches after reducing masters; source copies remain single-file.
         /// Splitting exports containing newly allocated NAVMs is unsupported and fails without publishing plugins.
         bool autoSplitPlugins{true};
-        /// Detect generated water and preferred-route triangles; disable to export unclassified geometry.
-        bool tagTriangles{true};
+        /// Classify generated submerged triangles using supported physical water surfaces.
+        bool tagWater{true};
+        /// Preserve nearby authored preferred-route markings on matching generated floors.
+        bool tagPreferredPaths{true};
         /// Copy the named source plugin with finalized navigation instead of writing a separate navigation patch.
         /// Requires Cell or Plugin scope, its copy source filename and generatePlugin;
         /// keeps the source filename and master indices.

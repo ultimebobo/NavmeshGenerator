@@ -165,9 +165,10 @@ namespace navmesh::app::detail
                 options.partitioningAlgorithm == core::RegionPartitioningAlgorithm::Monotone ? "monotone"
                 : options.partitioningAlgorithm == core::RegionPartitioningAlgorithm::Layers ? "layers"
                                                                                              : "watershed";
-            const auto key = CandidateFingerprint(
-                input.geometry.scene, options.navigationProfile, input.bounds, input.exits, input.adjacent, algorithm,
-                options.recastSettings, result.cell->navMeshes, result.cell->waterHeight, options.tagTriangles);
+            const auto key =
+                CandidateFingerprint(input.geometry.scene, options.navigationProfile, input.bounds, input.exits,
+                                     input.adjacent, algorithm, options.recastSettings, result.cell->navMeshes,
+                                     result.cell->waterHeight, options.tagWater, options.tagPreferredPaths);
             result.auditPath = key.empty() ? input.stagingDirectory / std::format("{:08X}.gz", result.cell->id)
                                            : input.cacheDirectory / "candidates" / (key + ".gz");
             core::Scene evidence;
@@ -202,7 +203,7 @@ namespace navmesh::app::detail
                     (void)core::BuildCandidateLedgeLinks(result.candidate);
                     (void)core::SimplifyCandidateSurface(result.candidate, input.bounds);
                     core::TagCandidateTriangles(result.candidate, result.cell->navMeshes, result.cell->waterHeight,
-                                                options.tagTriangles);
+                                                options.tagWater, options.tagPreferredPaths);
                     if (!result.candidate.topology.valid)
                     {
                         result.diagnostics = result.candidate.topology.findings;

@@ -149,7 +149,8 @@ namespace
                         "filename> | --rebuild-load-order | --repair-load-order] [--generate-plugin] [--no-auto-split] "
                         "[--copy-plugin] "
                         "[--skip-existing-navmesh] "
-                        "[--no-triangle-tagging] [--cell-error-policy <continue|stop>] "
+                        "[--no-water-tagging] [--no-preferred-path-tagging] [--no-triangle-tagging] "
+                        "[--cell-error-policy <continue|stop>] "
                         "[--batch-output <auto|full|compact|plugin_only>] [--asset-cache <dir>] "
                         "[--cache-budget-mib <MiB>] [--working-memory-mib <MiB>] [--workers <count>] [--estimate-only] "
                         "--output "
@@ -1227,8 +1228,8 @@ static int RunWithDiagnostics(const navmesh::app::Options &input, const navmesh:
                     (void)navmesh::core::RemoveCandidateIslands(reachability);
                     (void)navmesh::core::SimplifyCandidateSurface(*candidate, candidateBounds);
                 }
-                navmesh::core::TagCandidateTriangles(*candidate, cell->navMeshes, cell->waterHeight,
-                                                     options.tagTriangles);
+                navmesh::core::TagCandidateTriangles(*candidate, cell->navMeshes, cell->waterHeight, options.tagWater,
+                                                     options.tagPreferredPaths);
                 navmesh::core::CaptureCoverGeometry(*candidate, geometry.scene);
             }
             catch (const std::bad_alloc &)

@@ -15,11 +15,13 @@ namespace navmesh::core
      * @param authored Winning selected-cell NAVMs, including unmarked floors that constrain matches.
      * @param waterHeight Effective finite water-surface Z in Skyrim world units. Submerged
      * centroids are water; absent height still permits captured placed water coverage.
-     * @param enabled False clears only the two classification bits, preserving every other flag.
+     * @param tagWater Enable physical water classification; false clears water flags.
+     * @param tagPreferredPaths Enable authored route transfer; false clears preferred-path flags.
+     * Both settings preserve geometry, connection indices and every other flag.
      * @throws std::invalid_argument If a supplied water height is nonfinite.
      */
     void TagCandidateTriangles(CandidateNavMesh &candidate, std::span<const NavMesh> authored,
-                               std::optional<float> waterHeight, bool enabled = true);
+                               std::optional<float> waterHeight, bool tagWater = true, bool tagPreferredPaths = true);
 
     /** Retain authored large-creature exclusions on corresponding generated floors.
      * @param mesh Generated Skyrim-world geometry; only its creature-restriction flag may be added.

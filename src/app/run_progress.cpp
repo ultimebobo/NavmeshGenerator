@@ -99,13 +99,13 @@ namespace navmesh::app::detail
             options.cellFormId ? std::format("{:08X}", *options.cellFormId) : "unset",
             ReportText(options.worldspace, 100), options.cellX ? std::to_string(*options.cellX) : "unset",
             options.cellY ? std::to_string(*options.cellY) : "unset");
-        report += std::format("write={} copy={} auto_split={} skip_existing={} tag_triangles={} terrain_only={} "
-                              "cell_errors={} neighbors={} partition={} scene={} estimate={} output={}\n",
-                              options.generatePlugin, options.copyPlugin, options.autoSplitPlugins,
-                              options.skipExistingNavmesh, options.tagTriangles, options.terrainOnly,
-                              ReportText(options.cellErrorPolicy, 40), options.neighboringCellRadius,
-                              static_cast<int>(options.partitioningAlgorithm), options.makeScene, options.estimateOnly,
-                              ReportText(options.batchOutput, 40));
+        report += std::format(
+            "write={} copy={} auto_split={} skip_existing={} tag_water={} tag_preferred_paths={} terrain_only={} "
+            "cell_errors={} neighbors={} partition={} scene={} estimate={} output={}\n",
+            options.generatePlugin, options.copyPlugin, options.autoSplitPlugins, options.skipExistingNavmesh,
+            options.tagWater, options.tagPreferredPaths, options.terrainOnly, ReportText(options.cellErrorPolicy, 40),
+            options.neighboringCellRadius, static_cast<int>(options.partitioningAlgorithm), options.makeScene,
+            options.estimateOnly, ReportText(options.batchOutput, 40));
         report +=
             std::format("profile='{}' radius={} height={} slope_deg={} step={} clearance={} weld={} "
                         "min_area={} contour_tolerance={} border='{}'\n",

@@ -31,7 +31,8 @@ void TestDesktopOptionsAndRecastSettings()
     draft.copyPlugin = true;
     draft.estimateOnly = true;
     draft.skipExistingNavmesh = true;
-    draft.tagTriangles = false;
+    draft.tagWater = false;
+    draft.tagPreferredPaths = true;
     assert(draft.autoSplitPlugins);
     draft.autoSplitPlugins = false;
     draft.makeScene = true;
@@ -40,7 +41,11 @@ void TestDesktopOptionsAndRecastSettings()
     draft.rebuildScope = app::RebuildScope::Plugin;
     const auto plugin = ui::PrepareDesktopOptions(draft, false);
     assert(plugin.copyPlugin && plugin.generatePlugin && plugin.generateCandidate && !plugin.estimateOnly);
-    assert(!plugin.tagTriangles);
+    assert(!plugin.tagWater && plugin.tagPreferredPaths);
+    draft.tagWater = true;
+    draft.tagPreferredPaths = false;
+    const auto waterOnly = ui::PrepareDesktopOptions(draft, false);
+    assert(waterOnly.tagWater && !waterOnly.tagPreferredPaths);
     assert(!plugin.autoSplitPlugins);
     assert(plugin.makeScene);
     assert(!plugin.cellFormId && plugin.editorId.empty() && !plugin.cellX && !plugin.cellY);

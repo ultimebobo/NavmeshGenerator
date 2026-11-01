@@ -105,19 +105,20 @@ namespace navmesh::core
     } // namespace
 
     void TagCandidateTriangles(CandidateNavMesh &candidate, std::span<const NavMesh> authored,
-                               std::optional<float> waterHeight, bool enabled)
+                               std::optional<float> waterHeight, bool tagWater, bool tagPreferredPaths)
     {
         if (waterHeight && !std::isfinite(*waterHeight))
         {
             throw std::invalid_argument("Triangle tagging requires a finite water height");
         }
-        candidate.triangleTagging = enabled;
-        const auto surfaces = enabled ? CollectSurfaces(authored) : std::vector<AuthoredSurface>{};
+        candidate.waterTagging = tagWater;
+        candidate.preferredPathTagging = tagPreferredPaths;
+        const auto surfaces = tagPreferredPaths ? CollectSurfaces(authored) : std::vector<AuthoredSurface>{};
         const auto heightTolerance = std::max(candidate.profile.stepHeight, candidate.recastSettings.cellHeight * 2);
         for (auto &polygon : candidate.mesh.polygons)
         {
             polygon.flags &= static_cast<std::uint16_t>(~(WaterFlag | PreferredPathFlag));
-            if (!enabled)
+            if (!tagWater && !tagPreferredPaths)
             {
                 continue;
             }
@@ -125,12 +126,17 @@ namespace navmesh::core
                 (candidate.mesh.vertices.at(polygon.vertices[0]) + candidate.mesh.vertices.at(polygon.vertices[1]) +
                  candidate.mesh.vertices.at(polygon.vertices[2])) /
                 3.0F;
-            const auto matched = MatchedFlags(centroid, surfaces, heightTolerance);
-            polygon.flags |= matched & PreferredPathFlag;
-            const auto placedWater = CandidateWaterHeight(candidate, centroid);
-            if ((waterHeight && centroid.z < *waterHeight) || (placedWater && centroid.z < *placedWater))
+            if (tagPreferredPaths)
             {
-                polygon.flags |= WaterFlag;
+                polygon.flags |= MatchedFlags(centroid, surfaces, heightTolerance) & PreferredPathFlag;
+            }
+            if (tagWater)
+            {
+                const auto placedWater = CandidateWaterHeight(candidate, centroid);
+                if ((waterHeight && centroid.z < *waterHeight) || (placedWater && centroid.z < *placedWater))
+                {
+                    polygon.flags |= WaterFlag;
+                }
             }
         }
     }

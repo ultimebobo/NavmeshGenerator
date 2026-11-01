@@ -19,7 +19,7 @@ void TestTriangleTagging()
     candidate.mesh.polygons.push_back({.vertices = {3, 4, 5}});
     const std::vector<NavMesh> originals{authored};
     TagCandidateTriangles(candidate, originals, std::nullopt);
-    assert(candidate.triangleTagging);
+    assert(candidate.waterTagging && candidate.preferredPathTagging);
     assert(candidate.mesh.polygons[0].flags == (PreferredPathFlag | 1U));
     assert(candidate.mesh.polygons[1].flags == 0);
 
@@ -43,8 +43,14 @@ void TestTriangleTagging()
     withoutAuthoredWater.mesh.vertices[0].z = -30;
     TagCandidateTriangles(withoutAuthoredWater, {}, 0.0F);
     assert(withoutAuthoredWater.mesh.polygons[0].flags == (WaterFlag | 1U));
-    TagCandidateTriangles(candidate, originals, 10.0F, false);
-    assert(!candidate.triangleTagging && candidate.mesh.polygons[0].flags == 1U);
+    TagCandidateTriangles(candidate, originals, 10.0F, false, true);
+    assert(!candidate.waterTagging && candidate.preferredPathTagging);
+    assert(candidate.mesh.polygons[0].flags == (PreferredPathFlag | 1U));
+    TagCandidateTriangles(candidate, originals, 10.0F, true, false);
+    assert(candidate.waterTagging && !candidate.preferredPathTagging);
+    assert(candidate.mesh.polygons[0].flags == (WaterFlag | 1U));
+    TagCandidateTriangles(candidate, originals, 10.0F, false, false);
+    assert(!candidate.waterTagging && !candidate.preferredPathTagging && candidate.mesh.polygons[0].flags == 1U);
 
     // Closest unmarked floors constrain transfer even within the allowed climb tolerance.
     auto stacked = authored;

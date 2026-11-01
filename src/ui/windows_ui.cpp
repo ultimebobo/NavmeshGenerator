@@ -168,7 +168,8 @@ namespace
                           std::pair{"make_scene", &options.makeScene},
                           std::pair{"generate_plugin", &options.generatePlugin},
                           std::pair{"skip_existing_navmesh", &options.skipExistingNavmesh},
-                          std::pair{"triangle_tagging", &options.tagTriangles},
+                          std::pair{"water_tagging", &options.tagWater},
+                          std::pair{"preferred_path_tagging", &options.tagPreferredPaths},
                           std::pair{"copy_plugin", &options.copyPlugin},
                           std::pair{"auto_split_plugins", &options.autoSplitPlugins},
                           std::pair{"estimate_only", &options.estimateOnly}};
@@ -240,6 +241,13 @@ namespace
                                       : options.cellSelection;
         workspace.text["selected_cells"] = ReadConfig(workspace.config, "selected_cells", cellFallback);
         std::replace(workspace.text.at("selected_cells").begin(), workspace.text.at("selected_cells").end(), ';', '\n');
+        // Missing per-tag preferences inherit the shared classification preference.
+        const auto taggingFallback = ReadConfig(workspace.config, "triangle_tagging", "1");
+        if (taggingFallback == "0" || taggingFallback == "1")
+        {
+            options.tagWater = taggingFallback == "1";
+            options.tagPreferredPaths = taggingFallback == "1";
+        }
         for (const auto &field : BooleanFields(options))
         {
             const auto value = ReadConfig(workspace.config, field.first, *field.second ? "1" : "0");
@@ -696,9 +704,10 @@ namespace
                  "preserves both endpoint cells for manual review. Input, memory, storage, graph ownership and "
                  "export-validation failures stop export.");
             ImGui::SeparatorText("Recast generation");
-            ImGui::Checkbox("Tag water and preferred path triangles (experimental)", &options.tagTriangles);
-            Help("Classify submerged floors using CELL and worldspace water levels and preserve nearby authored "
-                 "preferred routes on the same floor. Water tagging requires a supported water plane.");
+            ImGui::Checkbox("Tag water triangles", &options.tagWater);
+            Help("Classify submerged floors using supported CELL, worldspace and placed water surfaces.");
+            ImGui::Checkbox("Tag preferred path triangles (experimental)", &options.tagPreferredPaths);
+            Help("Preserve nearby authored preferred routes on the same floor.");
             int algorithm = static_cast<int>(options.partitioningAlgorithm);
             ImGui::TextUnformatted("Region partitioning");
             ImGui::SetNextItemWidth(-1);

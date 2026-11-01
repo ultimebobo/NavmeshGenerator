@@ -162,8 +162,10 @@ namespace navmesh::core
         RecastSettings recastSettings;
         /// Recast region partition strategy used to build this candidate.
         std::string partitioningAlgorithm{"watershed"};
-        /// Whether water/preferred-route detection was applied to this generated candidate.
-        bool triangleTagging{};
+        /// Whether physical water classification was applied to this generated candidate.
+        bool waterTagging{};
+        /// Whether authored preferred-route classification was applied to this generated candidate.
+        bool preferredPathTagging{};
         NavMesh mesh;
         /// Filtered world-space collision walls retained for cover queries after final batch seam refinement.
         Mesh coverGeometry;

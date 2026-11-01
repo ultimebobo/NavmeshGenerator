@@ -327,9 +327,18 @@ namespace navmesh::app
             {
                 options.generateCandidate = true;
             }
+            else if (argument == "--no-water-tagging")
+            {
+                options.tagWater = false;
+            }
+            else if (argument == "--no-preferred-path-tagging")
+            {
+                options.tagPreferredPaths = false;
+            }
             else if (argument == "--no-triangle-tagging")
             {
-                options.tagTriangles = false;
+                options.tagWater = false;
+                options.tagPreferredPaths = false;
             }
             else if (argument == "--generate-plugin")
             {

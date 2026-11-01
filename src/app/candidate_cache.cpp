@@ -21,7 +21,7 @@ namespace navmesh::app::detail
         // This identity versions both storage and successful generation semantics.
         // Change its pipeline revision when successful output becomes incompatible;
         // executable rebuilds alone must not discard completed generation work.
-        constexpr std::string_view Schema = "navmesh-candidate-cache-12/recast-pipeline-62";
+        constexpr std::string_view Schema = "navmesh-candidate-cache-13/recast-pipeline-63";
         constexpr std::size_t MaximumBytes = 512ULL * 1024 * 1024;
 
         template <class Archive> void Fields(Archive &a, core::Vec3 &v)
@@ -119,11 +119,12 @@ namespace navmesh::app::detail
         }
         template <class Archive> void Fields(Archive &a, core::CandidateNavMesh &v)
         {
-            a(v.profile, v.recastSettings, v.partitioningAlgorithm, v.triangleTagging, v.mesh, v.polygonSourceTriangles,
-              v.polygonContributingTriangles, v.regions, v.exits, v.borderLinks, v.contours, v.topology, v.statistics,
-              v.warnings, v.authoredBorderVertexEdits, v.coverGeometry.vertices, v.coverGeometry.triangles,
-              v.closedAuthoredPortals, v.ledgeLinks, v.ledgeGeometry.vertices, v.ledgeGeometry.triangles,
-              v.ledgeWaterGeometry.vertices, v.ledgeWaterGeometry.triangles, v.ledgeWaterHeight);
+            a(v.profile, v.recastSettings, v.partitioningAlgorithm, v.waterTagging, v.preferredPathTagging, v.mesh,
+              v.polygonSourceTriangles, v.polygonContributingTriangles, v.regions, v.exits, v.borderLinks, v.contours,
+              v.topology, v.statistics, v.warnings, v.authoredBorderVertexEdits, v.coverGeometry.vertices,
+              v.coverGeometry.triangles, v.closedAuthoredPortals, v.ledgeLinks, v.ledgeGeometry.vertices,
+              v.ledgeGeometry.triangles, v.ledgeWaterGeometry.vertices, v.ledgeWaterGeometry.triangles,
+              v.ledgeWaterHeight);
         }
 
         /// One field visitor supplies deterministic hashing and private binary storage without copying whole candidates.
@@ -267,7 +268,7 @@ namespace navmesh::app::detail
                                      std::optional<core::AABB> bounds, const std::vector<core::CandidateExit> &exits,
                                      const std::vector<core::NavMesh> &neighbors, std::string_view partitioning,
                                      const core::RecastSettings &settings, const std::vector<core::NavMesh> &authored,
-                                     std::optional<float> waterHeight, bool tagTriangles)
+                                     std::optional<float> waterHeight, bool tagWater, bool tagPreferredPaths)
     {
         core::ContentHash hash;
         hash.Add(Schema);
@@ -275,7 +276,7 @@ namespace navmesh::app::detail
         Archive archive(hash);
         archive(Writable(scene.mesh.vertices), Writable(scene.mesh.triangles), Writable(scene.geometrySources),
                 Writable(scene.triangleProvenance), Writable(profile), Writable(settings), bounds, Writable(exits),
-                Writable(neighbors), Writable(authored), waterHeight, tagTriangles,
+                Writable(neighbors), Writable(authored), waterHeight, tagWater, tagPreferredPaths,
                 Writable(scene.waterSurfaces.vertices), Writable(scene.waterSurfaces.triangles));
         return archive.good ? hash.Hex() : std::string{};
     }

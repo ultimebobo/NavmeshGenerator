@@ -21,7 +21,8 @@ namespace navmesh::app::detail
      * @param authored Winning selected-cell meshes used for triangle classification and required
      * authored outer crossings. Changes invalidate both. Batch seam geometry depends on generated neighbors after cache reuse.
      * @param waterHeight Effective water-surface Z in Skyrim units, or no supported plane.
-     * @param tagTriangles Whether generated triangle classification is enabled.
+     * @param tagWater Whether generated water classification is enabled.
+     * @param tagPreferredPaths Whether authored preferred-route transfer is enabled.
      * @return Stable dependency hash, or empty if input serialization exceeds the cache limit.
      */
     [[nodiscard]] std::string CandidateFingerprint(
@@ -29,7 +30,7 @@ namespace navmesh::app::detail
         const std::vector<core::CandidateExit> &exits, const std::vector<core::NavMesh> &neighbors,
         std::string_view partitioning, const core::RecastSettings &settings = {},
         const std::vector<core::NavMesh> &authored = {}, std::optional<float> waterHeight = std::nullopt,
-        bool tagTriangles = true);
+        bool tagWater = true, bool tagPreferredPaths = true);
 
     /// Store compact candidate evidence as private gzip data; atomic rename, false on failure.
     [[nodiscard]] bool StoreCandidate(const std::filesystem::path &path, const core::CandidateNavMesh &candidate,

@@ -313,8 +313,11 @@ removes incoming links to closed edges; inspect candidate warnings during review
 ## Generated triangle tagging
 
 Generation enables water and preferred-path tagging by default in Cell, Plugin
-and Load order scopes. Use `--no-triangle-tagging` to disable both. The saved
-desktop setting is **Tag water and preferred path triangles** in Advanced settings.
+and Load order scopes. Use `--no-water-tagging` or `--no-preferred-path-tagging`
+to disable either classification independently; `--no-triangle-tagging` disables
+both. Advanced settings provides separate saved **Tag water triangles** and
+**Tag preferred path triangles** checkboxes. Missing per-tag desktop preferences
+inherit the saved combined tagging preference.
 
 Water detection compares each final triangle's centroid with the effective
 CELL water surface. The parser requires the CELL water flag and accepts explicit
@@ -335,10 +338,12 @@ This preserves authored route intent; it does not invent routes in areas without
 authored preference evidence. Centroid classification is approximate near shorelines
 and preference boundaries; it does not split generated triangles at those boundaries.
 
-Candidate JSON records `triangle_tagging` and per-polygon `flags`, `water`, and
-`preferred_path`. Plugins serialize both independent bits, which may coexist.
-Disabling tagging leaves geometry and connection flags intact. Cache fingerprints
-include the switch, effective water height, and winning selected-cell NAVMs.
+Candidate JSON records `water_tagging` and `preferred_path_tagging`;
+`triangle_tagging` indicates whether either classification is enabled. Per-polygon
+`flags`, `water`, and `preferred_path` record the results. Plugins serialize both
+independent bits, which may coexist. Disabling a classification clears only its
+tag while preserving geometry, connections and other flags. Cache fingerprints
+include both settings, effective water height, and winning selected-cell NAVMs.
 
 ## Reproducible fixtures and optional game checks
 

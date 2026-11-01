@@ -1216,12 +1216,16 @@ class BatchRebuild(unittest.TestCase):
     def test_triangle_tagging_and_disable(self):
         self.write_baseline(navmeshes={x: navm(x, flags=(0x40, 0)) for x in range(3)},
                             water={0: sub("DATA", b"\x02\x00") + sub("XCLW", struct.pack("<f", 10))})
-        def check(candidate, enabled):
-            self.assertEqual(candidate["triangle_tagging"], enabled)
+        def check(candidate, water, preferred=None):
+            if preferred is None:
+                preferred = water
+            self.assertEqual(candidate["triangle_tagging"], water or preferred)
+            self.assertEqual(candidate["water_tagging"], water)
+            self.assertEqual(candidate["preferred_path_tagging"], preferred)
             polygons = candidate["polygons"]
             self.assertTrue(polygons)
-            self.assertEqual(any(p["water"] for p in polygons), enabled)
-            self.assertEqual(any(p["preferred_path"] for p in polygons), enabled)
+            self.assertEqual(any(p["water"] for p in polygons), water)
+            self.assertEqual(any(p["preferred_path"] for p in polygons), preferred)
             for p in polygons:
                 self.assertEqual(p["water"], bool(p["flags"] & 0x200))
                 self.assertEqual(p["preferred_path"], bool(p["flags"] & 0x40))
@@ -1280,6 +1284,44 @@ class BatchRebuild(unittest.TestCase):
         check(json.loads((disabled_batch / "cells/00000100/candidate-navm.json").read_text()), False)
         report = json.loads((disabled_batch / "batch-report.json").read_text())
         self.assertFalse(any(cell["candidate_reused"] for cell in report["cells"]))
+
+        for scope, selection, relative in (
+                ("cell", ("--cell-formid", "100", "--generate-plugin"), "candidate-navm.json"),
+                ("batch", ("--rebuild-plugin", "Patch.esp", "--generate-plugin"),
+                 "cells/00000100/candidate-navm.json")):
+            baseline_output = self.run_cli(*selection, output=f"{scope}-both")
+            baseline = json.loads((baseline_output / relative).read_text())
+            check(baseline, True)
+            for name, switches, water, preferred in (
+                    ("water", ("--no-preferred-path-tagging",), True, False),
+                    ("preferred", ("--no-water-tagging",), False, True),
+                    ("neither", ("--no-water-tagging", "--no-preferred-path-tagging"), False, False)):
+                with self.subTest(scope=scope, tags=name):
+                    output = self.run_cli(*selection, *switches, output=f"{scope}-{name}")
+                    candidate = json.loads((output / relative).read_text())
+                    check(candidate, water, preferred)
+                    self.assertEqual(candidate["vertices"], baseline["vertices"])
+                    self.assertEqual(len(candidate["polygons"]), len(baseline["polygons"]))
+                    for actual, tagged in zip(candidate["polygons"], baseline["polygons"]):
+                        self.assertEqual(actual["vertices"], tagged["vertices"])
+                        self.assertEqual(actual["neighbors"], tagged["neighbors"])
+                    for kind, form, _, payload in read_records(output / "generated-navmesh.esp"):
+                        if kind == "NAVM" and form & 0xffffff == 0x200:
+                            body = payload[6:]
+                            triangle_at = 20 + struct.unpack_from("<I", body, 16)[0] * 12
+                            count = struct.unpack_from("<I", body, triangle_at)[0]
+                            flags = [struct.unpack_from("<H", body, triangle_at + 4 + i * 16 + 12)[0]
+                                     for i in range(count)]
+                            self.assertEqual(any(f & 0x200 for f in flags), water)
+                            self.assertEqual(any(f & 0x40 for f in flags), preferred)
+                            break
+                    else:
+                        self.fail("Expected generated primary NAVM")
+                    if scope == "batch":
+                        repeated = self.run_cli(*selection, *switches, output=f"{scope}-{name}-cached")
+                        check(json.loads((repeated / relative).read_text()), water, preferred)
+                        report = json.loads((repeated / "batch-report.json").read_text())
+                        self.assertTrue(any(cell["candidate_reused"] for cell in report["cells"]))
 
     def test_water_classification_ignores_authored_water(self):
         # An authored dry floor under water must be wet; an authored wet floor without water must be dry.

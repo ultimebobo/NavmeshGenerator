@@ -6117,7 +6117,9 @@ namespace navmesh::core
                "\"metadata\": "
             << metadataJson << ",\n";
         out << std::format("  \"partitioning_algorithm\": \"{}\",\n", candidate.partitioningAlgorithm);
-        out << std::format("  \"triangle_tagging\": {},\n", candidate.triangleTagging);
+        out << std::format("  \"triangle_tagging\": {},\n", candidate.waterTagging || candidate.preferredPathTagging);
+        out << std::format("  \"water_tagging\": {},\n", candidate.waterTagging);
+        out << std::format("  \"preferred_path_tagging\": {},\n", candidate.preferredPathTagging);
         const auto &recast = candidate.recastSettings;
         out << std::format("  \"recast_settings\": {{\"cell_size\":{},\"cell_height\":{},"
                            "\"max_simplification_error\":{},\"max_edge_length\":{},"

@@ -486,7 +486,8 @@ effective CELL/WRLD water plane for water tags, independently of authored water
 markings. Preferred-path tags use the closest overlapping authored floor;
 water and preferred-path bits are independent. Unmarked authored surfaces constrain nearest-height
 matching, preventing lower route markings from leaking onto upper surfaces.
-Classification changes flags only and is optional. It is approximate at boundaries
+Water and preferred-path classification each have an independent enable setting
+and change flags only. It is approximate at boundaries
 and does not infer preference where authored route intent is unavailable.
 
 
