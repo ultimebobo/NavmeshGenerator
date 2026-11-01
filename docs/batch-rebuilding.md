@@ -19,7 +19,8 @@ triangles, duplicate triangles, non-manifold indexed edges, invalid claimed inte
 adjacency, malformed connection tables, and broken external or door links. Regeneration uses the normal geometry,
 cache, estimation and verified patch writer as explicit Cell rebuilding, including
 bounded authored-neighbor border adjustments and reciprocal connection updates.
-Healthy cells are not regenerated. Source plugins remain unchanged.
+Healthy cells are not regenerated. The scan includes untouched vanilla navigation;
+structural findings do not imply that a mod introduced them. Source plugins remain unchanged.
 The scope is persisted by the desktop and cannot combine with
 skip-existing, source-copy or combined-scene options.
 
@@ -258,6 +259,15 @@ unattributable graph errors and writer validation failures always stop publicati
 complete only after the successful target set passes the usual global checks.
 `complete_with_skips`, `generation_failed_cells` and `extraction_failed_cells`
 identify incomplete coverage, including runs with no successful replacements.
+
+When writing a batch with the continue cell-error policy, cells at either end of
+an authored enable/disable or unknown traversal portal retain their navigation
+and receive `skipped_authored_traversal` in `batch-report.json`, with the blocking
+source, destination and reason. These cells require manual review; the batch can
+write other targets and finishes as `complete_with_skips`. This applies to explicit
+cell lists and automatic scopes, before geometry extraction. The stop policy and
+single-cell export retain the writer's rejection of unsafe traversal replacement.
+
 Per-cell generation warnings retain candidate diagnostics even in plugin-only output.
 `asset_failures` deduplicates model/provider/category evidence, stages, references
 and affected CELLs; per-cell `asset_failure_ids` refer to those entries. Physical

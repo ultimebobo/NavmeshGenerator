@@ -2,6 +2,8 @@
 
 #include "skyrim/parser/plugin_parser.h"
 
+#include <map>
+
 namespace navmesh::skyrim
 {
     /// First occurrence of one structural fault kind in a winning NAVM; identities are resolved FormIDs.
@@ -21,6 +23,16 @@ namespace navmesh::skyrim
         std::size_t scannedNavmeshes{}, unsupportedNavmeshes{};
         std::vector<NavigationAuditFinding> findings;
     };
+
+    /** Identify live CELLs whose authored conditional or unknown traversal cannot be regenerated safely.
+     * @param resolved Immutable winning records and world-space NAVMs, retained for this call.
+     * @param cancelled Optional query between meshes; cancellation returns partial evidence.
+     * @return Resolved CELL identities mapped to the first blocking portal diagnostic. Both source and destination
+     * cells are protected, including faults in other NAVMs of either cell. These are capability limits, not defects.
+     * Performs no I/O or mutations; undecodable connections remain subject to the writer's validation.
+     */
+    [[nodiscard]] std::map<std::uint32_t, std::string> FindNavigationRegenerationBlockers(
+        const ResolvedLoadOrder &resolved, const std::function<bool()> &cancelled = {});
 
     /** Inspect live winning navigation without loading terrain, models or archives.
      * @param resolved Immutable resolved records and decoded world-space NAVMs, retained for this call.

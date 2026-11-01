@@ -265,6 +265,57 @@ class BatchRebuild(unittest.TestCase):
             with self.subTest(arguments=arguments):
                 self.run_cli("--repair-load-order", *arguments, output="invalid-repair", code=1)
 
+    def test_batch_preserves_conditional_portal_cells_and_continues(self):
+        for scope, arguments in (("repair", ("--repair-load-order",)),
+                                 ("cell", ("--cells", "100,101,104")),
+                                 ("plugin", ("--rebuild-plugin", "Patch.esp")),
+                                 ("load_order", ("--rebuild-load-order",))):
+            for portal_type in (3, 99):
+                with self.subTest(scope=scope, portal_type=portal_type):
+                    # A healthy source retains its conditional link when only the destination needs repair.
+                    source = navm_with_traversal(0, [(0, 0, portal_type, 0x201, 0)])
+                    broken = bytearray(navm_with_traversal(1, [(0, 0, portal_type, 0x200, 0)])[6:])
+                    struct.pack_into("<H", broken, 24 + 4 * 12 + 8, 99)
+                    independent = bytearray(navm(4)[6:])
+                    struct.pack_into("<H", independent, 24 + 4 * 12 + 6, 99)
+                    self.write_baseline({0: source, 1: sub("NVNM", broken), 4: sub("NVNM", independent)}, cell_count=5)
+                    baseline = (self.root / "Baseline.esm").read_bytes()
+                    output = self.run_cli(*arguments, "--generate-plugin", "--cell-error-policy", "continue",
+                                          output=f"conditional-{scope}-{portal_type}")
+                    report = json.loads((output / "batch-report.json").read_text())
+                    self.assertEqual(report["status"], "complete_with_skips")
+                    cells = {item["form_id"]: item for item in report["cells"]}
+                    protected = ("00000100", "00000101")
+                    if scope == "repair" and portal_type == 3:
+                        self.assertNotIn("00000100", cells)
+                        protected = ("00000101",)
+                    for cell in protected:
+                        self.assertEqual(cells[cell]["status"], "skipped_authored_traversal")
+                        self.assertEqual(cells[cell]["supplier_cells"], 0)
+                        self.assertIn("type=" + str(portal_type), cells[cell]["error"])
+                        self.assertIn("target_NAVM=00000201", cells[cell]["error"])
+                    # The fixture plugin changes only the first two cells.
+                    if scope in ("repair", "cell"):
+                        self.assertEqual(cells["00000104"]["status"], "generated")
+                        self.assertTrue((output / "generated-navmesh.esp").exists())
+                        emitted = {form for kind, form, _, _ in read_records(output / "generated-navmesh.esp")
+                                   if kind == "NAVM"}
+                        self.assertNotIn(0x200, emitted)
+                        self.assertNotIn(0x201, emitted)
+                    else:
+                        self.assertFalse((output / "generated-navmesh.esp").exists())
+                    self.assertFalse((output / "bug-report.txt").exists())
+                    self.assertEqual((self.root / "Baseline.esm").read_bytes(), baseline)
+
+    def test_repair_conditional_portal_stop_policy_keeps_export_guard(self):
+        source = navm_with_traversal(0, [(0, 0, 3, 0x200, 1)])
+        self.write_baseline({0: source, 1: navm(1), 2: navm(2)})
+        output = self.run_cli("--repair-load-order", "--generate-plugin", "--cell-error-policy", "stop", code=2)
+        report = json.loads((output / "batch-report.json").read_text())
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("enable_disable_portal_requires_authored_semantics", report["error"])
+        self.assertFalse((output / "generated-navmesh.esp").exists())
+
     def test_mo2_configured_mod_storage(self):
         instance = self.root / "Instance"
         storage = self.root / "Storage"
@@ -580,7 +631,7 @@ class BatchRebuild(unittest.TestCase):
                     body[door_at:door_at + 4] = struct.pack("<IHII", 1, 0, 0xE48B73F3, 0)
                 self.write_baseline(navmeshes={0: sub("NVNM", body), 1: navm(1), 2: navm(2)})
                 dropped_ledge = portal_type in (1, 2) and not unresolved_door
-                output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin",
+                output = self.run_cli("--rebuild-plugin", "Patch.esp", "--generate-plugin", "--cell-error-policy", "stop",
                                       output=f"{reason}-{target:08X}-{target_triangle}", code=0 if dropped_ledge else 2)
                 report = json.loads((output / "batch-report.json").read_text())
                 if dropped_ledge:

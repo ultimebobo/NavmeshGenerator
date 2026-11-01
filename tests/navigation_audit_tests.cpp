@@ -95,6 +95,25 @@ void TestNavigationAudit()
     other.polygons.front().neighbors[0] = 0;
     other.externalLinks = {{0, 0, 0x200, 0, 2}};
     assert(audit().findings.empty());
+    assert(skyrim::FindNavigationRegenerationBlockers(input).empty());
+
+    // Conditional traversal protects whole endpoint cells, including an incoming-only destination.
+    mesh.externalLinks.front().type = 3;
+    other.externalLinks.front().type = 3;
+    assert(audit().findings.empty());
+    other.externalLinks.clear();
+    const auto conditional = skyrim::FindNavigationRegenerationBlockers(input);
+    assert(conditional.size() == 2 && conditional.contains(0x100) && conditional.contains(0x101));
+    assert(conditional.at(0x101).contains("enable_disable_portal_requires_authored_semantics"));
+    assert(conditional.at(0x101).contains("NAVM 00000200"));
+    assert(conditional.at(0x101).contains("target_NAVM=00000201"));
+    assert(skyrim::FindNavigationRegenerationBlockers(input, [] { return true; }).empty());
+    mesh.externalLinks.front().type = 99;
+    assert(skyrim::FindNavigationRegenerationBlockers(input).at(0x100).contains("unsupported_portal_type"));
+    input.records = {{.type = "NAVM", .formId = 0x200, .winning = {.deleted = true}}};
+    assert(skyrim::FindNavigationRegenerationBlockers(input).empty());
+    input.records.clear();
+    mesh.externalLinks.front().type = 1;
     other.externalLinks.clear();
     assert(Has(audit(), "invalid_external_link"));
     other.externalLinks = {{0, 0, 0x200, 0, 2}};

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -129,6 +130,66 @@ namespace
 
 namespace navmesh::skyrim
 {
+    std::map<std::uint32_t, std::string> FindNavigationRegenerationBlockers(const ResolvedLoadOrder &resolved,
+                                                                            const std::function<bool()> &cancelled)
+    {
+        std::map<std::uint32_t, std::string> blockers;
+        std::map<std::uint32_t, std::uint32_t> meshCells;
+        for (const auto &cell : resolved.cells)
+        {
+            if (!Live(resolved.FindWinning(cell.id)))
+            {
+                continue;
+            }
+            for (const auto &mesh : cell.navMeshes)
+            {
+                if (Live(resolved.FindWinning(mesh.id)))
+                {
+                    meshCells.emplace(mesh.id, cell.id);
+                }
+            }
+        }
+        // Replacing either endpoint changes authored triangle identities. Conditional portals cannot
+        // be reconstructed from collision, and unknown types supply no safe replacement contract.
+        for (const auto &cell : resolved.cells)
+        {
+            for (const auto &mesh : cell.navMeshes)
+            {
+                if (cancelled && cancelled())
+                {
+                    return blockers;
+                }
+                if (!meshCells.contains(mesh.id))
+                {
+                    continue;
+                }
+                for (const auto &link : mesh.externalLinks)
+                {
+                    if (link.type < 3)
+                    {
+                        continue;
+                    }
+                    const auto *source = resolved.FindWinning(mesh.id);
+                    const auto *destination = resolved.FindWinning(link.navmeshId);
+                    const auto details = std::format(
+                        "Authored traversal requires manual review; reason={} type={} CELL {:08X} NAVM {:08X} "
+                        "winner='{}' triangle={} edge={} target_NAVM={:08X} target_triangle={} target_winner='{}'",
+                        link.type == 3 ? "enable_disable_portal_requires_authored_semantics"
+                                       : "unsupported_portal_type",
+                        link.type, cell.id, mesh.id, source ? source->winning.plugin : "unresolved", link.polygon,
+                        link.edge, link.navmeshId, link.targetPolygon,
+                        destination ? destination->winning.plugin : "unresolved");
+                    blockers.try_emplace(cell.id, details);
+                    if (const auto target = meshCells.find(link.navmeshId); target != meshCells.end())
+                    {
+                        blockers.try_emplace(target->second, details);
+                    }
+                }
+            }
+        }
+        return blockers;
+    }
+
     NavigationAudit AuditNavigation(const ResolvedLoadOrder &resolved, float stepHeight,
                                     const std::function<bool()> &cancelled)
     {

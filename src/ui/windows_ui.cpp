@@ -692,9 +692,9 @@ namespace
             Help("Continue skips targets whose required geometry is unavailable and preserves their authored navmesh. "
                  "Unknown selection footprints exclude their worldspace or interior. Stop aborts generation on a "
                  "recoverable failure. Continue also retries cell-local border and reachability failures after "
-                 "restoring the remaining candidates. Input, memory, storage, graph ownership and export-validation "
-                 "failures stop "
-                 "export.");
+                 "restoring the remaining candidates. When writing a batch, conditional or unknown traversal "
+                 "preserves both endpoint cells for manual review. Input, memory, storage, graph ownership and "
+                 "export-validation failures stop export.");
             ImGui::SeparatorText("Recast generation");
             ImGui::Checkbox("Tag water and preferred path triangles (experimental)", &options.tagTriangles);
             Help("Classify submerged floors using CELL and worldspace water levels and preserve nearby authored "
@@ -762,6 +762,7 @@ namespace
             Help("Checks invalid vertices, degenerate/inverted/duplicate triangles, non-manifold edges, "
                  "invalid adjacency and malformed or broken external/door links. "
                  "Empty navigation and intentional islands are preserved. "
+                 "Findings can include untouched vanilla navigation. "
                  "Unsupported layouts are reported; existing export safety checks still apply.");
         }
         else

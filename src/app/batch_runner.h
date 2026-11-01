@@ -28,6 +28,8 @@ namespace navmesh::app::detail
      * @param events Optional activity sink for completion counts and diagnostics, on the orchestration thread.
      * Explicit identifiers must all resolve uniquely; aliases deduplicate by CELL Form ID.
      * Repair scope audits winning navigation without collision-impact selection and reports its selection evidence.
+     * With writing and continue policy, conditional/unknown traversal preserves both endpoint cells before extraction;
+     * their report entries require manual review while other targets can generate. Stop policy retains export guards.
      * @return Process-style status: success (including logged cell-generation skips),
      * input/export/global-linking failure, or cancellation. Skips preserve authored geometry.
      * @warning Writes batch reports and candidate exports, and a verified ESP when requested.

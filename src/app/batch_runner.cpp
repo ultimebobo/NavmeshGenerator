@@ -501,6 +501,11 @@ namespace navmesh::app::detail
                                                                    right->exteriorCoordinates, right->id};
                       });
         }
+        // Preflight traversal semantics before spending geometry work. Continue mode preserves entire
+        // endpoint cells so no generated replacement can invalidate a conditional incoming connection.
+        const auto traversalBlockers = options.generatePlugin && options.cellErrorPolicy == "continue"
+                                           ? skyrim::FindNavigationRegenerationBlockers(resolved, cancelled)
+                                           : std::map<std::uint32_t, std::string>{};
         const auto selectedCells = targets.size();
         std::map<std::optional<std::uint32_t>, std::size_t> selectedWorlds;
         for (const auto *cell : targets)
@@ -511,7 +516,7 @@ namespace navmesh::app::detail
         const auto eligible = [&](const core::Cell *cell)
         {
             const auto *record = resolved.FindWinning(cell->id);
-            return !selectionFailures.contains(cell->id) &&
+            return !selectionFailures.contains(cell->id) && !traversalBlockers.contains(cell->id) &&
                    (!options.skipExistingNavmesh || !existingNavmeshCells.contains(cell->id)) &&
                    !(record && record->raw && (record->raw->flags & 0x20U)) && !IsPersistentExteriorCell(*cell, record);
         };
@@ -559,8 +564,12 @@ namespace navmesh::app::detail
                 sampled.insert(cells[cells.size() / 2]->id);
                 sampled.insert(cells.back()->id);
             }
-            std::erase_if(targets, [&](const auto *cell)
-                          { return !sampled.contains(cell->id) && !selectionFailures.contains(cell->id); });
+            std::erase_if(targets,
+                          [&](const auto *cell)
+                          {
+                              return !sampled.contains(cell->id) && !selectionFailures.contains(cell->id) &&
+                                     !traversalBlockers.contains(cell->id);
+                          });
         }
         // Retain compact candidate evidence and status for every target, including skips and failures.
         using Result = BatchCellResult;
@@ -1082,6 +1091,18 @@ namespace navmesh::app::detail
                     app::RunEventKind::CellCompleted);
                 continue;
             }
+            if (const auto blocker = traversalBlockers.find(cell.id); blocker != traversalBlockers.end())
+            {
+                result.status = "skipped_authored_traversal";
+                result.error = std::format("CELL {:08X}: {}; authored NAVM retained", cell.id, blocker->second);
+                ++observedSkipped;
+                batchActivity(result.error, app::RunEventKind::CellCompleted);
+                if (!summary("running"))
+                {
+                    return fail("Cannot checkpoint authored traversal skip");
+                }
+                continue;
+            }
             const auto update = [&](std::string_view status)
             {
                 if (progress)
@@ -1443,18 +1464,22 @@ namespace navmesh::app::detail
                                                       { return result.status == "skipped_generation_failed"; });
         const auto extractionFailures = std::count_if(results.begin(), results.end(), [](const auto &result)
                                                       { return result.status == "skipped_extraction_failed"; });
-        if (!summary(generationFailures || extractionFailures ? "complete_with_skips" : "complete"))
+        const auto traversalSkips = std::count_if(results.begin(), results.end(), [](const auto &result)
+                                                  { return result.status == "skipped_authored_traversal"; });
+        if (!summary(generationFailures || extractionFailures || traversalSkips ? "complete_with_skips" : "complete"))
         {
             return fail("Cannot finalize batch-report.json");
         }
-        const auto status = std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; "
-                                        "generated polygons: {}; generation failures: {}; extraction failures: {}",
-                                        targets.size(), generatedByCell.size(), targets.size() - generatedByCell.size(),
-                                        originalPolygons, generatedPolygons, generationFailures, extractionFailures) +
-                            (missingModelWarning.empty() ? "" : "; " + missingModelWarning) +
-                            (exportWarnings.empty()
-                                 ? ""
-                                 : std::format("; export warnings: {} (see batch-report.json)", exportWarnings.size()));
+        const auto status =
+            std::format("Affected cells: {}; rebuilt: {}; skipped: {}; original polygons: {}; "
+                        "generated polygons: {}; generation failures: {}; extraction failures: {}; "
+                        "authored traversal skips: {}",
+                        targets.size(), generatedByCell.size(), targets.size() - generatedByCell.size(),
+                        originalPolygons, generatedPolygons, generationFailures, extractionFailures, traversalSkips) +
+            (missingModelWarning.empty() ? "" : "; " + missingModelWarning) +
+            (exportWarnings.empty()
+                 ? ""
+                 : std::format("; export warnings: {} (see batch-report.json)", exportWarnings.size()));
         std::cout << status << '\n';
         if (progress)
         {
